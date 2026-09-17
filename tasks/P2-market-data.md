@@ -1,6 +1,6 @@
 ---
 task: P2
-status: in_review
+status: done
 depends_on: ["tasks/P1-foundation.md"]
 agents: ["agents/rin/AGENT.md","agents/architect/AGENT.md","agents/developer/AGENT.md","agents/tester/AGENT.md","agents/reviewer/AGENT.md","agents/security/AGENT.md"]
 skills: ["skills/market-data/SKILL.md","skills/postgres/SKILL.md","skills/testing/SKILL.md","skills/security/SKILL.md"]
@@ -33,12 +33,12 @@ Phase 1 เท่านั้น: ห้าม live auto-trading/broker order, s
 5. เพิ่ม reconnect/backfill, validation และ replay reader; failure ต้องไม่ทำ raw data หายหรือ rewrite
 
 ## Acceptance / validation
-- [ ] fixtures ครอบคลุม bid/ask/close mapping, timezone, precision, missing/invalid prices, duplicate และ out-of-order
-- [ ] disconnect/reconnect/backfill ให้ event identities/order ที่คาดไว้; duplicate ไม่เพิ่ม derived processing
-- [ ] persist -> reload/replay ให้ normalized semantic events เท่ากัน; rollback/restart ไม่สร้าง record ซ้ำ
-- [ ] fake adapter tests รัน offline ได้; MT5 smoke ต้อง read-only และไม่มี secrets ใน output; unavailable integration ระบุ gap
-- [ ] ไม่มี broker order calls และ PostgreSQL private; P3 รับ event contract ที่มีตัวอย่าง synthetic แล้ว
-- [ ] ผ่าน root Definition of Done และ handoff/review flow; ไม่ mark done เพียงเพราะ checklist ถูกสร้าง
+- [x] fixtures ครอบคลุม bid/ask/close mapping, timezone, precision, missing/invalid prices, duplicate และ out-of-order
+- [x] disconnect/reconnect/backfill ให้ event identities/order ที่คาดไว้; duplicate ไม่เพิ่ม derived processing
+- [x] persist -> reload/replay ให้ normalized semantic events เท่ากัน; rollback/restart ไม่สร้าง record ซ้ำ
+- [x] fake adapter tests รัน offline ได้; MT5 smoke ต้อง read-only และไม่มี secrets ใน output; unavailable integration ระบุ gap
+- [x] ไม่มี broker order calls และ PostgreSQL private; P3 รับ event contract ที่มีตัวอย่าง synthetic แล้ว
+- [x] ผ่าน root Definition of Done และ handoff/review flow; ไม่ mark done เพียงเพราะ checklist ถูกสร้าง
 
 ใช้ commands ที่ P1 จัดทำและตรวจว่าใช้งานได้กับ checkout ปัจจุบัน; บันทึก exact command/result ด้านล่าง ห้ามอ้าง pass จากคำสั่งตัวอย่าง
 Documentation-only change ใช้ path/link/metadata checks และ git diff --check; behavior changes ต้อง relevant tests
@@ -59,6 +59,6 @@ Architect contract -> Developer -> Tester -> Reviewer + Security -> Rin
   - `& .venv/Scripts/python.exe -m ruff check packages/nexora/market_data tests/test_market_data.py`: PASS
   - `& .venv/Scripts/python.exe -m mypy packages/nexora/market_data tests/test_market_data.py`: PASS
   - `git diff --check`: PASS
-- Review: self-review complete; independent review pending
+- Review: completed via merged [PR #3](https://github.com/Knerubon/NEXORA/pull/3)
 - Blockers: none; MT5 runtime remains optional and not required for offline tests
-- Next action: independent review / PR handoff, then P3 can consume the normalized event contract
+- Next action: P3 consumes the normalized event contract from ADR-004 and repository implementation
