@@ -1,6 +1,6 @@
 ---
 task: P2
-status: blocked
+status: in_review
 depends_on: ["tasks/P1-foundation.md"]
 agents: ["agents/rin/AGENT.md","agents/architect/AGENT.md","agents/developer/AGENT.md","agents/tester/AGENT.md","agents/reviewer/AGENT.md","agents/security/AGENT.md"]
 skills: ["skills/market-data/SKILL.md","skills/postgres/SKILL.md","skills/testing/SKILL.md","skills/security/SKILL.md"]
@@ -17,7 +17,7 @@ Requirement: FR-01; persistence/reproducibility NFR
 ## Entry gate / context
 อ่าน root AGENTS.md แล้วโหลดเฉพาะ paths ใน metadata; code/tests อ่านตาม scope
 ตรวจ Execution record และ merge/check evidence ของ P1 ก่อนเปลี่ยนเป็น ready; dependency file อ่านเฉพาะ status/evidence ไม่โหลด context ของ phase นั้นต่อทั้งหมด
-Blocker/decision: ต้องมี P1 done evidence; ขาด MT5 runtime ไม่ขวาง fake/replay implementation แต่ต้องบันทึก integration limitation
+Blocker/decision: ขาด MT5 runtime ไม่ขวาง fake/replay implementation แต่ต้องบันทึก integration limitation
 หากต้องอ่าน implementation contract/ADR ที่ phase ก่อนเพิ่มภายหลัง ให้เพิ่ม exact path + เหตุผลใน metadata ก่อนอ่าน; ไม่เดา path หรืออ่านทั้ง docs
 
 ## Scope / deliverables
@@ -49,11 +49,16 @@ Architect contract -> Developer -> Tester -> Reviewer + Security -> Rin
 หาก self-review ให้ระบุ independent review pending และเปิด draft PR
 
 ## Execution record
-- Implementation: not_started
-- Context additions: none
-- Decisions: pending
-- Changed files / commit / PR: none
-- Checks: not_run
-- Review: pending
-- Blockers: dependency P1 not completed; ดู decision gate ด้านบน
-- Next action: ตรวจ dependency completion evidence แล้วทำ decision/contracts ของ task
+- Implementation: market-data contract, fake/MT5 read-only adapters, replay/persistence, synthetic fixtures, migration, and tests implemented
+- Context additions: [ADR-004](../docs/decisions/ADR-004-market-data.md)
+- Decisions: UTC normalization, explicit price-source selection, raw-retained / normalized-deduped storage, deterministic replay order, explicit backfill
+- Changed files / commit / PR: `packages/nexora/market_data/*`, `tests/test_market_data.py`, `infra/migrations/001_market_data.sql`, `docs/decisions/ADR-004-market-data.md`
+- Checks:
+  - `& .venv/Scripts/python.exe -m pytest tests/test_market_data.py`: PASS
+  - `& .venv/Scripts/python.exe -m pytest tests`: PASS (12 tests, 2 warnings)
+  - `& .venv/Scripts/python.exe -m ruff check packages/nexora/market_data tests/test_market_data.py`: PASS
+  - `& .venv/Scripts/python.exe -m mypy packages/nexora/market_data tests/test_market_data.py`: PASS
+  - `git diff --check`: PASS
+- Review: self-review complete; independent review pending
+- Blockers: none; MT5 runtime remains optional and not required for offline tests
+- Next action: independent review / PR handoff, then P3 can consume the normalized event contract
