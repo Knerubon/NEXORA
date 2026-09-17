@@ -1,10 +1,10 @@
 ---
 task: P1
-status: ready
+status: in_review
 depends_on: []
 agents: ["agents/rin/AGENT.md","agents/architect/AGENT.md","agents/developer/AGENT.md","agents/tester/AGENT.md","agents/reviewer/AGENT.md","agents/security/AGENT.md","agents/lingo/AGENT.md"]
 skills: ["skills/testing/SKILL.md","skills/documentation/SKILL.md","skills/security/SKILL.md"]
-docs: ["docs/requirements.md","docs/architecture.md"]
+docs: ["docs/requirements.md","docs/architecture.md","docs/development.md","docs/decisions/ADR-002-foundation.md"]
 translation_needed: false
 ---
 
@@ -34,11 +34,11 @@ Phase 1 เท่านั้น: ห้าม live auto-trading/broker order, s
 6. เพิ่ม setup/run/test/lint/type/build commands ที่ทดลองจริงใน development doc และเพิ่ม path ลง task docs ก่อนใช้; กำหนด Windows home PC workflow
 
 ## Acceptance / validation
-- [ ] clean checkout ทำตาม documented setup แล้วรัน API health + web shell ได้; บันทึก prerequisite และ commands จริง
-- [ ] unit smoke/import tests ผ่านโดยไม่มี network/DB/MT5; ไม่มี UI/API imports ใน core
-- [ ] lint/type checks และ frontend build ผ่านตาม selected toolchain; local DB smoke บันทึกผลจริงหรือ blocker
-- [ ] ตรวจ config examples, ignore rules, binding defaults และไม่มี broker order path; ไม่สร้าง credentials
-- [ ] handoff มี package map, commands และ decision references ให้ P2 เริ่มได้
+- [x] clean checkout ทำตาม documented setup แล้วรัน API health + web shell ได้; บันทึก prerequisite และ commands จริง
+- [x] unit smoke/import tests ผ่านโดยไม่มี network/DB/MT5; ไม่มี UI/API imports ใน core
+- [x] lint/type checks และ frontend build ผ่านตาม selected toolchain; local DB smoke บันทึกผลจริงหรือ blocker
+- [x] ตรวจ config examples, ignore rules, binding defaults และไม่มี broker order path; ไม่สร้าง credentials
+- [x] handoff มี package map, commands และ decision references ให้ P2 เริ่มได้
 - [ ] ผ่าน root Definition of Done และ handoff/review flow; ไม่ mark done เพียงเพราะ checklist ถูกสร้าง
 
 ใน P1 ให้กำหนดและทดลอง commands ตาม toolchain ที่เลือกก่อน; บันทึก exact command/result ด้านล่างให้ phase ถัดไปใช้ ห้ามอ้าง pass จากคำสั่งตัวอย่าง
@@ -50,11 +50,36 @@ Architect contract -> Developer -> Tester -> Reviewer + Security -> Rin
 หาก self-review ให้ระบุ independent review pending และเปิด draft PR
 
 ## Execution record
-- Implementation: not_started
-- Context additions: none
-- Decisions: pending
-- Changed files / commit / PR: none
-- Checks: not_run
-- Review: pending
-- Blockers: none; toolchain decision เป็นขั้นแรกของงาน
-- Next action: ตรวจ current tree และกำหนด toolchain/layout
+- Implementation: scaffold implemented and validated; in_review, not done
+- Context additions: docs/development.md (setup/validation); docs/decisions/ADR-002-foundation.md (toolchain/layout contract).
+- Decisions: [ADR-002](../docs/decisions/ADR-002-foundation.md); setup/package map in [development guide](../docs/development.md)
+- Changed files: apps/api, apps/web, packages/nexora, tests, scripts/smoke_api.py, infra, pyproject.toml, uv.lock, .python-version, .env.example, .gitignore, task/development/ADR docs
+- Base commit: ece7b5e; implementation commit: 980a4c2; validation handoff commit: a0012a8; branch: codex/p1-foundation; [draft PR #2](https://github.com/Knerubon/NEXORA/pull/2)
+- Checks (Windows, Python 3.13.3, Node 24.19.0, npm 11.17.0, uv 0.12.15):
+  - `.tools/Scripts/uv sync --locked --extra api`: PASS; 28 locked packages
+  - `.venv/Scripts/python -m pytest`: PASS, 4 tests; 2 upstream deprecation warnings (Starlette httpx/AnyIO APIs)
+  - `.venv/Scripts/ruff check .`, `.venv/Scripts/ruff format --check .`: PASS
+  - `.venv/Scripts/mypy`: PASS, 14 source files
+  - `.venv/Scripts/python scripts/smoke_api.py`: PASS; actual loopback HTTP health response matched contract
+  - `.tools/Scripts/uv lock --check`, `.tools/Scripts/uv build`: PASS; sdist + wheel produced
+  - `.tools/Scripts/uv venv .tools/core-check`; `.tools/Scripts/uv pip install --python .tools/core-check/Scripts/python.exe --no-deps dist/nexora-0.1.0-py3-none-any.whl`; `.tools/core-check/Scripts/python -I -c "import nexora.pnf, nexora.market_data, nexora.backtest; print('PASS: installed wheel core imports without API dependencies')"`: PASS
+  - `npm --prefix apps/web run lint`, `npm --prefix apps/web run typecheck`, `npm --prefix apps/web run build`: PASS; final ESLint 9 lint and typegen checks PASS
+  - `npm --prefix apps/web run start`: PASS; Chrome screenshot/AX inspection at default desktop viewport and 390x844: all four status cards and footer readable, no observed horizontal overflow; viewport restored
+  - ESLint 10.10.0 experiment: FAIL (`react/display-name` incompatible API + peer conflicts); reverted to 9.39.5, compatibility exception documented in ADR
+  - P1 context paths/local Markdown links: PASS via Python path existence check; requirements/architecture diff empty
+  - `git diff --check`: PASS
+  - Staged scope/credential-pattern scan: PASS, 31 files; no credential values/private keys/token patterns/credential URLs or ignored dependency trees staged
+  - Fresh checkout: `git worktree add --detach .tools/clean-checkout HEAD` at 980a4c2; `.tools/Scripts/uv sync --directory .tools/clean-checkout --locked --extra api` and `npm --prefix .tools/clean-checkout/apps/web ci`: PASS, npm audit 0 vulnerabilities
+  - From `.tools/clean-checkout`: `.venv/Scripts/python -m pytest` (4 PASS, same 2 warnings), `.venv/Scripts/python scripts/smoke_api.py`, `.venv/Scripts/ruff check .`, `.venv/Scripts/mypy`: PASS
+  - From `.tools/clean-checkout/apps/web`: `npm run lint`, `npm run typecheck`, `npm run build`: PASS; `git status --short` empty after build
+  - Fresh web runtime: `node node_modules/next/dist/bin/next start --hostname 127.0.0.1 --port 13000` from fresh web directory; Python urllib HTTP check returned 200 and all expected status text; child process stopped after smoke
+  - PostgreSQL smoke: NOT_RUN; no psql/PostgreSQL/Docker executable on host; run documented SELECT/binding checks on a provisioned local instance
+- Self-review: core placeholders contain no formulas/API/DB imports; local binding commands, honest status values, no broker adapter/order implementation; ignore rules verified for env/secrets/dependencies. Independent review pending.
+- Risks: ESLint 9 upstream EOL compatibility exception; dependency deprecation warnings; no remote authentication implementation (local-only); DB smoke unavailable
+- Next action: independent reviewer ตรวจ draft PR/ADR compatibility exception; provision local PostgreSQL แล้วบันทึก DB smoke; required review + merge evidence ก่อน done/P2
+
+### Handoff
+- task: tasks/P1-foundation.md; status: in_review; from: developer (self-review); to: independent tester/reviewer
+- commit: 980a4c2 (implementation); changed_files/decisions/checks/risks: ตาม record ด้านบน
+- review: self-review; independent review pending; ไม่มี independent approval หรือ merge evidence
+- blockers: DB smoke ต้องมี local PostgreSQL/psql; final done ต้องผ่าน required review/merge gate

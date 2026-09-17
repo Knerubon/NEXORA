@@ -1,0 +1,4 @@
+# Apply to a local PostgreSQL 18 installation; restart after changes.
+listen_addresses = 'localhost'
+port = 5432
+password_encryption = 'scram-sha-256'
