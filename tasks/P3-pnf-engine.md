@@ -1,6 +1,6 @@
 ---
 task: P3
-status: in_review
+status: done
 depends_on: ["tasks/P2-market-data.md"]
 agents: ["agents/rin/AGENT.md","agents/quant/AGENT.md","agents/architect/AGENT.md","agents/developer/AGENT.md","agents/tester/AGENT.md","agents/reviewer/AGENT.md"]
 skills: ["skills/pnf/SKILL.md","skills/testing/SKILL.md"]
@@ -38,7 +38,7 @@ Phase 1 เท่านั้น: ห้าม live auto-trading/broker order, s
 - [x] snapshot/restart กับ continuous replay ได้ state/transitions เดียวกัน; ไม่มี wall-clock effect
 - [x] symbols แยก state; input/config/version เดิม deterministic; core import ไม่ดึง transport/persistence
 - [x] ไม่มีค่าจาก OX 10/20/30 หรือ undocumented formula/default
-- [ ] ผ่าน root Definition of Done และ handoff/review flow; ไม่ mark done เพียงเพราะ checklist ถูกสร้าง
+- [x] ผ่าน root Definition of Done และ handoff/review flow; ไม่ mark done เพียงเพราะ checklist ถูกสร้าง
 
 ใช้ commands ที่ P1 จัดทำและตรวจว่าใช้งานได้กับ checkout ปัจจุบัน; บันทึก exact command/result ด้านล่าง ห้ามอ้าง pass จากคำสั่งตัวอย่าง
 Documentation-only change ใช้ path/link/metadata checks และ git diff --check; behavior changes ต้อง relevant tests
@@ -58,6 +58,6 @@ Quant/Architect decision -> Developer -> Tester -> Reviewer -> Rin
   - `& .venv/Scripts/python.exe -m ruff check packages/nexora/pnf tests/test_pnf.py`: PASS
   - `& .venv/Scripts/python.exe -m mypy packages/nexora/pnf tests/test_pnf.py`: PASS
   - `& .venv/Scripts/python.exe -m pytest tests`: PASS (23 tests, 2 warnings)
-- Review: self-review complete; independent review pending
+- Review: completed via merged [PR #4](https://github.com/Knerubon/NEXORA/pull/4)
 - Blockers: none
-- Next action: open PR for P3 and request independent review
+- Next action: P4 adaptive sizing consumes P3 transition contracts

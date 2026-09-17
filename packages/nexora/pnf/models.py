@@ -72,6 +72,8 @@ class PnfTransition:
     source_event_id: str
     identity_key: str
     config_version: str
+    effective_box_size: Decimal
+    sizing_rule_version: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,4 +138,3 @@ def ensure_event_for_config(event: NormalizedPriceEvent, config: PnfConfig) -> N
         raise PnfInputError("precision_mismatch")
     if event.is_out_of_order:
         raise PnfInputError("out_of_order_event")
-
