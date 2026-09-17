@@ -54,7 +54,7 @@ Architect contract -> Developer -> Tester -> Reviewer + Security -> Rin
 - Context additions: docs/development.md (setup/validation); docs/decisions/ADR-002-foundation.md (toolchain/layout contract).
 - Decisions: [ADR-002](../docs/decisions/ADR-002-foundation.md); setup/package map in [development guide](../docs/development.md)
 - Changed files: apps/api, apps/web, packages/nexora, tests, scripts/smoke_api.py, infra, pyproject.toml, uv.lock, .python-version, .env.example, .gitignore, task/development/ADR docs
-- Base commit: ece7b5e; implementation commit: 980a4c2; branch: codex/p1-foundation; draft PR pending publication
+- Base commit: ece7b5e; implementation commit: 980a4c2; validation handoff commit: a0012a8; branch: codex/p1-foundation; [draft PR #2](https://github.com/Knerubon/NEXORA/pull/2)
 - Checks (Windows, Python 3.13.3, Node 24.19.0, npm 11.17.0, uv 0.12.15):
   - `.tools/Scripts/uv sync --locked --extra api`: PASS; 28 locked packages
   - `.venv/Scripts/python -m pytest`: PASS, 4 tests; 2 upstream deprecation warnings (Starlette httpx/AnyIO APIs)
@@ -68,7 +68,7 @@ Architect contract -> Developer -> Tester -> Reviewer + Security -> Rin
   - ESLint 10.10.0 experiment: FAIL (`react/display-name` incompatible API + peer conflicts); reverted to 9.39.5, compatibility exception documented in ADR
   - P1 context paths/local Markdown links: PASS via Python path existence check; requirements/architecture diff empty
   - `git diff --check`: PASS
-  - Staged scope/credential-pattern scan: PASS, 31 files; no env values/private keys/token patterns/credential URLs or ignored dependency trees staged
+  - Staged scope/credential-pattern scan: PASS, 31 files; no credential values/private keys/token patterns/credential URLs or ignored dependency trees staged
   - Fresh checkout: `git worktree add --detach .tools/clean-checkout HEAD` at 980a4c2; `.tools/Scripts/uv sync --directory .tools/clean-checkout --locked --extra api` and `npm --prefix .tools/clean-checkout/apps/web ci`: PASS, npm audit 0 vulnerabilities
   - From `.tools/clean-checkout`: `.venv/Scripts/python -m pytest` (4 PASS, same 2 warnings), `.venv/Scripts/python scripts/smoke_api.py`, `.venv/Scripts/ruff check .`, `.venv/Scripts/mypy`: PASS
   - From `.tools/clean-checkout/apps/web`: `npm run lint`, `npm run typecheck`, `npm run build`: PASS; `git status --short` empty after build
