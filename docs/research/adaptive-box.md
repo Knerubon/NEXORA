@@ -17,3 +17,18 @@ ATR-derived sizing เป็น candidate; ยังไม่ยืนยัน 
 6. บันทึก ADR, golden fixtures และข้อจำกัดก่อนเปิด adaptive mode
 
 P7 เปรียบเทียบ fixed/adaptive ด้วย protocol เดียวกัน; research result ไม่เป็นอนุญาต live execution
+
+## P4 implementation experiment note
+
+- Candidate implemented in [ADR-006](../decisions/ADR-006-adaptive-box-sizing.md):
+  - fixed baseline parity mode
+  - ATR-derived proxy from past-only absolute price deltas
+  - warm-up hold-last policy
+  - clamp + quantization policy with explicit rule version
+- Evidence scope:
+  - fixed parity against P3 golden fixtures
+  - causal prefix invariance under append-future events
+  - snapshot/restart parity and per-transition effective box tracing
+- Limitations:
+  - true range currently uses tick delta proxy (not bar high/low ordering)
+  - no profitability validation; research-only behavioral evidence
