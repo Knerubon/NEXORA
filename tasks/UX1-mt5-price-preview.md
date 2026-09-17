@@ -37,3 +37,8 @@ Conflict ที่คงไว้: P&F/Matrix/structure/live research state ต�
 - Discovery: running terminal found; read-only MT5 probe succeeded; XAUUSD-STD is visible, digits=2
 - Unknown/untracked files preserved: apps/web/AGENTS.md, apps/web/CLAUDE.md
 - Checks/review/commit: pending
+
+## Roadmap reference clarification
+ข้อความ P6/P2–P5 และ context additions ด้านบนเป็น historical preview record ก่อน roadmap refactor; ไม่อัปเดต execution evidence ย้อนหลัง
+Current full dashboard คือ [P9](P9-web-dashboard.md); current structure/Matrix/regime/signals คือ P5–P8 ตาม [ADR-007](../docs/decisions/ADR-007-task-roadmap.md)
+Paths ของ generated/untracked AGENTS/CLAUDE และ node_modules ด้านบนเป็น historical local context ไม่ใช่ required checkout links; การทำงานต่อใช้ tracked context ใน metadata และตรวจ scoped instructions ที่มีจริง

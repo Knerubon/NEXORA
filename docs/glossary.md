@@ -2,7 +2,7 @@
 
 | Term | ความหมายใน NEXORA |
 |---|---|
-| Phase 1 | research/observation/backtest/paper scope P1–P8; ห้าม live auto-trading |
+| Phase 1 | research/observation/backtest/paper scope P1–P13 + DQ1 ตาม [ADR-007](decisions/ADR-007-task-roadmap.md); ห้าม live auto-trading |
 | P1 | Foundation task เท่านั้น |
 | P&F | Point & Figure; price structure เป็น X/O columns |
 | X / O | ขาขึ้น / ขาลงของ column ไม่ใช่คำสั่ง buy/sell |

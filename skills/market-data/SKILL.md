@@ -1,6 +1,6 @@
 ---
 name: market-data
-description: พัฒนา read-only MT5/broker adapter, normalization และ replay ingestion ใน P2
+description: พัฒนา read-only MT5/broker adapter, normalization และ replay ingestion ใน P2 และ additive DQ1
 ---
 
 # market-data

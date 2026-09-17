@@ -1,6 +1,6 @@
 ---
 name: market-structure
-description: สร้าง Matrix, confirmed pivots, S/R, regimes และ explainable research signals ใน P5
+description: สร้าง Matrix, confirmed pivots, S/R, regimes และ explainable research signals ใน P5–P8 ตาม task scope
 ---
 
 # market-structure
