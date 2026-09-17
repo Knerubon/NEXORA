@@ -1,10 +1,10 @@
 ---
 task: P1
-status: ready
+status: in_progress
 depends_on: []
 agents: ["agents/rin/AGENT.md","agents/architect/AGENT.md","agents/developer/AGENT.md","agents/tester/AGENT.md","agents/reviewer/AGENT.md","agents/security/AGENT.md","agents/lingo/AGENT.md"]
 skills: ["skills/testing/SKILL.md","skills/documentation/SKILL.md","skills/security/SKILL.md"]
-docs: ["docs/requirements.md","docs/architecture.md"]
+docs: ["docs/requirements.md","docs/architecture.md","docs/development.md","docs/decisions/ADR-002-foundation.md"]
 translation_needed: false
 ---
 
@@ -50,11 +50,25 @@ Architect contract -> Developer -> Tester -> Reviewer + Security -> Rin
 หาก self-review ให้ระบุ independent review pending และเปิด draft PR
 
 ## Execution record
-- Implementation: not_started
-- Context additions: none
-- Decisions: pending
-- Changed files / commit / PR: none
-- Checks: not_run
-- Review: pending
-- Blockers: none; toolchain decision เป็นขั้นแรกของงาน
-- Next action: ตรวจ current tree และกำหนด toolchain/layout
+- Implementation: scaffold implemented; final clean-checkout validation in progress
+- Context additions: docs/development.md (setup/validation); docs/decisions/ADR-002-foundation.md (toolchain/layout contract).
+- Decisions: [ADR-002](../docs/decisions/ADR-002-foundation.md); setup/package map in [development guide](../docs/development.md)
+- Changed files: apps/api, apps/web, packages/nexora, tests, scripts/smoke_api.py, infra, pyproject.toml, uv.lock, .python-version, .env.example, .gitignore, task/development/ADR docs
+- Base commit: ece7b5e; branch: codex/p1-foundation; commit/PR: pending final validation
+- Checks (Windows, Python 3.13.3, Node 24.19.0, npm 11.17.0, uv 0.12.15):
+  - `.tools/Scripts/uv sync --locked --extra api`: PASS; 28 locked packages
+  - `.venv/Scripts/python -m pytest`: PASS, 4 tests; 2 upstream deprecation warnings (Starlette httpx/AnyIO APIs)
+  - `.venv/Scripts/ruff check .`, `.venv/Scripts/ruff format --check .`: PASS
+  - `.venv/Scripts/mypy`: PASS, 14 source files
+  - `.venv/Scripts/python scripts/smoke_api.py`: PASS; actual loopback HTTP health response matched contract
+  - `.tools/Scripts/uv lock --check`, `.tools/Scripts/uv build`: PASS; sdist + wheel produced
+  - `.tools/Scripts/uv venv .tools/core-check`; `.tools/Scripts/uv pip install --python .tools/core-check/Scripts/python.exe --no-deps dist/nexora-0.1.0-py3-none-any.whl`; `.tools/core-check/Scripts/python -I -c "import nexora.pnf, nexora.market_data, nexora.backtest; print('PASS: installed wheel core imports without API dependencies')"`: PASS
+  - `npm --prefix apps/web run lint`, `npm --prefix apps/web run typecheck`, `npm --prefix apps/web run build`: initial PASS; final lock/typegen recheck pending
+  - `npm --prefix apps/web run start`: PASS; Chrome screenshot/AX inspection at default desktop viewport and 390x844: all four status cards and footer readable, no observed horizontal overflow; viewport restored
+  - ESLint 10.10.0 experiment: FAIL (`react/display-name` incompatible API + peer conflicts); reverted to 9.39.5, compatibility exception documented in ADR
+  - P1 context paths/local Markdown links: PASS via Python path existence check; requirements/architecture diff empty
+  - `git diff --check`: PASS
+  - PostgreSQL smoke: NOT_RUN; no psql/PostgreSQL/Docker executable on host; run documented SELECT/binding checks on a provisioned local instance
+- Self-review: core placeholders contain no formulas/API/DB imports; local binding commands, honest status values, no broker adapter/order implementation; ignore rules verified for env/secrets/dependencies. Independent review pending.
+- Risks: ESLint 9 upstream EOL compatibility exception; dependency deprecation warnings; no remote authentication implementation (local-only); DB smoke unavailable
+- Next action: finish fresh-checkout checks, open draft PR; independent review + merge evidence required before done/P2

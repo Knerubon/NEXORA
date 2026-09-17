@@ -35,3 +35,12 @@ data/
 *.db
 *.sqlite
 *.sqlite3
+
+# Tooling/build artifacts
+.tools/
+.ruff_cache/
+.mypy_cache/
+dist/
+*.egg-info/
+*.tsbuildinfo
+next-env.d.ts
