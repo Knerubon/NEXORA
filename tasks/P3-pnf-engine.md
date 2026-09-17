@@ -1,6 +1,6 @@
 ---
 task: P3
-status: blocked
+status: in_review
 depends_on: ["tasks/P2-market-data.md"]
 agents: ["agents/rin/AGENT.md","agents/quant/AGENT.md","agents/architect/AGENT.md","agents/developer/AGENT.md","agents/tester/AGENT.md","agents/reviewer/AGENT.md"]
 skills: ["skills/pnf/SKILL.md","skills/testing/SKILL.md"]
@@ -33,11 +33,11 @@ Phase 1 เท่านั้น: ห้าม live auto-trading/broker order, s
 5. เพิ่ม golden sequences และ streaming/replay/snapshot parity; config เปลี่ยนใช้ run/version policy ที่ตัดสินแล้ว
 
 ## Acceptance / validation
-- [ ] flat, monotonic rise/fall, below/exact threshold, reversal boundary และ multi-box gap ตรง golden fixtures
-- [ ] invalid box/reversal/precision, duplicate และ out-of-order ทำตาม documented policy
-- [ ] snapshot/restart กับ continuous replay ได้ state/transitions เดียวกัน; ไม่มี wall-clock effect
-- [ ] symbols แยก state; input/config/version เดิม deterministic; core import ไม่ดึง transport/persistence
-- [ ] ไม่มีค่าจาก OX 10/20/30 หรือ undocumented formula/default
+- [x] flat, monotonic rise/fall, below/exact threshold, reversal boundary และ multi-box gap ตรง golden fixtures
+- [x] invalid box/reversal/precision, duplicate และ out-of-order ทำตาม documented policy
+- [x] snapshot/restart กับ continuous replay ได้ state/transitions เดียวกัน; ไม่มี wall-clock effect
+- [x] symbols แยก state; input/config/version เดิม deterministic; core import ไม่ดึง transport/persistence
+- [x] ไม่มีค่าจาก OX 10/20/30 หรือ undocumented formula/default
 - [ ] ผ่าน root Definition of Done และ handoff/review flow; ไม่ mark done เพียงเพราะ checklist ถูกสร้าง
 
 ใช้ commands ที่ P1 จัดทำและตรวจว่าใช้งานได้กับ checkout ปัจจุบัน; บันทึก exact command/result ด้านล่าง ห้ามอ้าง pass จากคำสั่งตัวอย่าง
@@ -49,11 +49,15 @@ Quant/Architect decision -> Developer -> Tester -> Reviewer -> Rin
 หาก self-review ให้ระบุ independent review pending และเปิด draft PR
 
 ## Execution record
-- Implementation: not_started
-- Context additions: none
-- Decisions: pending
-- Changed files / commit / PR: none
-- Checks: not_run
-- Review: pending
-- Blockers: dependency P2 not completed; ดู decision gate ด้านบน
-- Next action: ตรวจ dependency completion evidence แล้วทำ decision/contracts ของ task
+- Implementation: fixed-box deterministic P&F engine, symbol-isolated state, transitions, snapshot/restart, and golden fixtures implemented
+- Context additions: [ADR-005](../docs/decisions/ADR-005-pnf-fixed-box-rules.md)
+- Decisions: seed confirmation without assumed direction, inclusive threshold/reversal, multi-box transition handling, explicit duplicate/out-of-order policy
+- Changed files / commit / PR: `packages/nexora/pnf/*`, `tests/test_pnf.py`, `docs/decisions/ADR-005-pnf-fixed-box-rules.md`
+- Checks:
+  - `& .venv/Scripts/python.exe -m pytest tests/test_pnf.py`: PASS
+  - `& .venv/Scripts/python.exe -m ruff check packages/nexora/pnf tests/test_pnf.py`: PASS
+  - `& .venv/Scripts/python.exe -m mypy packages/nexora/pnf tests/test_pnf.py`: PASS
+  - `& .venv/Scripts/python.exe -m pytest tests`: PASS (23 tests, 2 warnings)
+- Review: self-review complete; independent review pending
+- Blockers: none
+- Next action: open PR for P3 and request independent review
