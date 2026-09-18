@@ -50,6 +50,12 @@ Invoke-RestMethod http://127.0.0.1:8000/risk/replay
 ```
 Expected: API returns policy-governed allow/reject decisions over replayed signals with deterministic counters/state.
 
+### Paper replay contracts (P12)
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/paper/replay
+```
+Expected: API returns local-only paper order/fill/ledger trace from `RiskDecision` outputs with checkpointed idempotency state.
+
 ## Validation
 ```powershell
 .tools/Scripts/uv lock --check

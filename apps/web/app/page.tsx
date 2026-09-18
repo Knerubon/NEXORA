@@ -40,6 +40,7 @@ type DashboardState = {
   regime_status: string;
   signals_status: string;
   backtest_lab_status: string;
+  paper_trading_status: string;
 };
 
 type BacktestRunsResponse = {
@@ -54,6 +55,18 @@ type BacktestRunsResponse = {
   }>;
 };
 
+type PaperReplayResponse = {
+  orders: Array<{
+    status: string;
+  }>;
+  fills: Array<{
+    fill_id: string;
+  }>;
+  state: {
+    status: string;
+  };
+};
+
 const apiBase = process.env.NEXT_PUBLIC_NEXORA_API_URL ?? "http://127.0.0.1:8000";
 
 function statusLabel(status: string): string {
@@ -63,6 +76,9 @@ function statusLabel(status: string): string {
   if (status === "disconnected") return "Disconnected";
   if (status === "error") return "Error";
   if (status === "pending_p10") return "Pending P10";
+  if (status === "running") return "Running";
+  if (status === "paused") return "Paused";
+  if (status === "kill_switch") return "Kill switch";
   if (status === "unavailable") return "Unavailable";
   return status;
 }
@@ -70,6 +86,8 @@ function statusLabel(status: string): string {
 export default function Home() {
   const [state, setState] = useState<DashboardState | null>(null);
   const [backtestRuns, setBacktestRuns] = useState<BacktestRunsResponse["runs"]>([]);
+  const [paperReplay, setPaperReplay] = useState<PaperReplayResponse | null>(null);
+  const [paperStatus, setPaperStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -77,9 +95,10 @@ export default function Home() {
 
     const pullState = async () => {
       try {
-        const [stateResponse, runsResponse] = await Promise.all([
+        const [stateResponse, runsResponse, paperResponse] = await Promise.all([
           fetch(`${apiBase}/state`, { cache: "no-store" }),
           fetch(`${apiBase}/backtest/runs`, { cache: "no-store" }),
+          fetch(`${apiBase}/paper/replay`, { cache: "no-store" }),
         ]);
         if (!stateResponse.ok) {
           throw new Error(`state_fetch_failed_${stateResponse.status}`);
@@ -87,11 +106,17 @@ export default function Home() {
         if (!runsResponse.ok) {
           throw new Error(`backtest_runs_fetch_failed_${runsResponse.status}`);
         }
+        if (!paperResponse.ok) {
+          throw new Error(`paper_replay_fetch_failed_${paperResponse.status}`);
+        }
         const data = (await stateResponse.json()) as DashboardState;
         const runs = (await runsResponse.json()) as BacktestRunsResponse;
+        const paper = (await paperResponse.json()) as PaperReplayResponse;
         if (active) {
           setState(data);
           setBacktestRuns(runs.runs);
+          setPaperReplay(paper);
+          setPaperStatus(paper.state.status);
           setError(null);
         }
       } catch (fetchError) {
@@ -119,6 +144,10 @@ export default function Home() {
             if (!previous) return previous;
             return { ...previous, quality: parsed.payload as QualitySnapshot };
           });
+        }
+        if (parsed.event_type === "paper_snapshot") {
+          const payload = parsed.payload as { status: string };
+          setPaperStatus(payload.status);
         }
       } catch {
         setError("invalid_ws_payload");
@@ -167,8 +196,15 @@ export default function Home() {
           ? `Obs ${state.quality.counters.observed}, gap ${state.quality.counters.gaps}, reconnect ${state.quality.counters.reconnects}`
           : "No health snapshot yet",
       },
+      {
+        title: "Paper Trading",
+        status: statusLabel(paperStatus ?? state?.paper_trading_status ?? "unavailable"),
+        detail: paperReplay
+          ? `${paperReplay.fills.length} fills / ${paperReplay.orders.filter((item) => item.status === "rejected").length} rejected`
+          : "No replay snapshot yet",
+      },
     ],
-    [backtestRuns.length, state],
+    [backtestRuns.length, paperReplay, paperStatus, state],
   );
 
   return (

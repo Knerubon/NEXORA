@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import asdict
-from typing import Literal
+from typing import Literal, cast
 
 from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -48,6 +48,7 @@ class DashboardState(BaseModel):
     regime_status: Literal["ready", "unavailable"] = "ready"
     signals_status: Literal["ready", "unavailable"] = "ready"
     backtest_lab_status: Literal["ready", "pending_p10"] = "pending_p10"
+    paper_trading_status: Literal["running", "paused", "kill_switch", "unavailable"] = "unavailable"
 
 
 class DashboardHistory(BaseModel):
@@ -59,7 +60,7 @@ class DashboardHistory(BaseModel):
 class EventEnvelope(BaseModel):
     schema_version: Literal[1] = 1
     sequence: int
-    event_type: Literal["quote_snapshot", "quality_snapshot"]
+    event_type: Literal["quote_snapshot", "quality_snapshot", "paper_snapshot"]
     payload: dict[str, object]
 
 
@@ -125,12 +126,18 @@ def create_app(service: QuoteService | None = None, *, start_worker: bool = True
         _assert_local_http(request)
         response.headers["Cache-Control"] = "no-store"
         feed: QuoteService = request.app.state.quotes
+        backtest: BacktestLabService = request.app.state.backtest
         snapshot = feed.snapshot()
+        paper_snapshot = backtest.paper_snapshot()
         return DashboardState(
             sequence=snapshot.sequence,
             quote=snapshot,
             quality=feed.quality_snapshot(),
             backtest_lab_status="ready",
+            paper_trading_status=cast(
+                Literal["running", "paused", "kill_switch", "unavailable"],
+                paper_snapshot["status"],
+            ),
         )
 
     @application.get("/history", response_model=DashboardHistory)
@@ -168,6 +175,13 @@ def create_app(service: QuoteService | None = None, *, start_worker: bool = True
         backtest: BacktestLabService = request.app.state.backtest
         return {"schema_version": 1, **backtest.risk_replay()}
 
+    @application.get("/paper/replay")
+    def paper_replay(request: Request, response: Response) -> dict[str, object]:
+        _assert_local_http(request)
+        response.headers["Cache-Control"] = "no-store"
+        backtest: BacktestLabService = request.app.state.backtest
+        return {"schema_version": 1, **backtest.paper_replay()}
+
     @application.websocket("/ws/quotes")
     async def stream_quotes(websocket: WebSocket) -> None:
         if not _is_local_ws(websocket):
@@ -204,6 +218,8 @@ def create_app(service: QuoteService | None = None, *, start_worker: bool = True
                 snapshot = feed.snapshot()
                 if snapshot.sequence != last_sequence:
                     quality_snapshot = feed.quality_snapshot()
+                    backtest: BacktestLabService = websocket.app.state.backtest
+                    paper_snapshot = backtest.paper_snapshot()
                     quote_event = EventEnvelope(
                         sequence=snapshot.sequence,
                         event_type="quote_snapshot",
@@ -214,8 +230,14 @@ def create_app(service: QuoteService | None = None, *, start_worker: bool = True
                         event_type="quality_snapshot",
                         payload=asdict(quality_snapshot),
                     )
+                    paper_event = EventEnvelope(
+                        sequence=snapshot.sequence,
+                        event_type="paper_snapshot",
+                        payload=paper_snapshot,
+                    )
                     await websocket.send_json(quote_event.model_dump(mode="json"))
                     await websocket.send_json(quality_event.model_dump(mode="json"))
+                    await websocket.send_json(paper_event.model_dump(mode="json"))
                     last_sequence = snapshot.sequence
                 try:
                     message = await asyncio.wait_for(websocket.receive(), timeout=0.25)
