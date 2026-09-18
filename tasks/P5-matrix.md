@@ -1,6 +1,6 @@
 ---
 task: "P5"
-status: "blocked"
+status: "in_review"
 depends_on: ["tasks/P4-adaptive-box.md"]
 agents: ["agents/rin/AGENT.md", "agents/quant/AGENT.md", "agents/architect/AGENT.md", "agents/developer/AGENT.md", "agents/tester/AGENT.md", "agents/reviewer/AGENT.md"]
 skills: ["skills/market-structure/SKILL.md", "skills/pnf/SKILL.md", "skills/adaptive-box/SKILL.md", "skills/postgres/SKILL.md", "skills/testing/SKILL.md"]
@@ -33,11 +33,11 @@ P1–P4 behavior/history คงเดิม; contract change ต้อง explic
 4. นิยาม snapshot persistence/restart และ configuration change เป็น explicit new version/run
 
 ## Acceptance / validation
-- [ ] สาม configs ไม่ share mutable state; interleaved symbols/resolutions ให้ผลเท่ากับ isolated replay
-- [ ] golden sequence ตรวจ direction/latest transition/watermark; empty/warm-up/conflicting directions แสดงตามข้อมูลจริง
-- [ ] duplicate/out-of-order เป็นไปตาม P2/P3 contracts; snapshot/restart/rebuild เท่ากับ continuous replay
-- [ ] append future events ไม่เปลี่ยน snapshot prefix; config change ไม่ rewrite historical snapshots
-- [ ] persisted snapshot trace ถึง event identities, P&F/sizing/config versions; ส่ง schema/examples รวม stale/error ให้ downstream
+- [x] สาม configs ไม่ share mutable state; interleaved symbols/resolutions ให้ผลเท่ากับ isolated replay
+- [x] golden sequence ตรวจ direction/latest transition/watermark; empty/warm-up/conflicting directions แสดงตามข้อมูลจริง
+- [x] duplicate/out-of-order เป็นไปตาม P2/P3 contracts; snapshot/restart/rebuild เท่ากับ continuous replay
+- [x] append future events ไม่เปลี่ยน snapshot prefix; config change ไม่ rewrite historical snapshots
+- [x] persisted snapshot trace ถึง event identities, P&F/sizing/config versions; ส่ง schema/examples รวม stale/error ให้ downstream
 - [ ] ผ่าน root Definition of Done; มี exact commands/results, handoff, review และ merge evidence ก่อน done
 
 ใช้ commands ใน docs/development.md ตาม changed scope; behavior ต้องมี synthetic golden/boundary/replay tests และ relevant lint/type/integration checks
@@ -48,11 +48,14 @@ Rin -> Architect/Quant decisions (ตาม scope) -> Developer -> Tester -> Rev
 FAIL ให้ expected/actual + minimal reproduction; self-review ระบุ independent review pending และเปิด draft PR
 
 ## Execution record
-- Implementation: not_started
-- Context additions: ADR-007 สำหรับ numbering, dependency policy และ preserved evidence; docs/development.md สำหรับ validation commands
-- Decisions: pending ตาม decision gates; ไม่มีสูตรหรือ numeric defaults ที่อนุมัติใน task นี้
-- Changed files / commit / PR: none (implementation)
-- Checks: not_run (implementation)
-- Review: pending
-- Blockers: dependency completion evidence และ decisions ด้านบน
-- Next action: ตรวจ dependencies แล้วเสนอ contracts/decisions พร้อม golden expectations ก่อน implementation
+- Implementation: matrix contracts/fan-out orchestration/state classification and snapshot persistence/rebuild implemented
+- Context additions: [ADR-008](../docs/decisions/ADR-008-multi-resolution-matrix.md), [migration 002](../infra/migrations/002_structure_regime_signals.sql)
+- Decisions: resolution isolation by independent runners, sequence watermarking, explicit warmup/stale/unavailable statuses, append-only snapshot policy
+- Changed files / commit / PR: `packages/nexora/matrix/*`, `tests/test_matrix.py`, `infra/migrations/002_structure_regime_signals.sql`, `docs/decisions/ADR-008-multi-resolution-matrix.md`
+- Checks:
+  - `& .venv/Scripts/python.exe -m pytest tests/test_matrix.py`: PASS
+  - `& .venv/Scripts/python.exe -m ruff check packages/nexora/matrix tests/test_matrix.py`: PASS
+  - `& .venv/Scripts/python.exe -m mypy packages/nexora/matrix tests/test_matrix.py`: PASS
+- Review: self-review complete; independent review pending
+- Blockers: none for implementation scope; dependency review evidence from prior tasks remains historical
+- Next action: package with P6-P8 changes for integrated review PR
