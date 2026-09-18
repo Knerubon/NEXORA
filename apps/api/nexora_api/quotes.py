@@ -8,9 +8,23 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Literal, Protocol
 from uuid import uuid4
 
+from nexora.market_data import (
+    MarketDataQualityMonitor,
+    QualityConfig,
+    QualitySnapshot,
+    QualityStatus,
+)
 from pydantic import BaseModel
 
-QuoteStatus = Literal["waiting", "live", "stale", "clock_skew", "unavailable", "disconnected", "error"]
+QuoteStatus = Literal[
+    "waiting",
+    "live",
+    "stale",
+    "clock_skew",
+    "unavailable",
+    "disconnected",
+    "error",
+]
 
 
 class Quote(BaseModel):
@@ -67,9 +81,13 @@ def make_quote(
     except (InvalidOperation, ValueError, OverflowError, OSError) as exc:
         raise FeedError("invalid_quote", "error") from exc
     return Quote(
-        symbol=symbol, bid=str(bid_price), ask=str(ask_price),
-        spread=str(ask_price - bid_price), digits=digits,
-        event_time=event_time, received_at=received_at,
+        symbol=symbol,
+        bid=str(bid_price),
+        ask=str(ask_price),
+        spread=str(ask_price - bid_price),
+        digits=digits,
+        event_time=event_time,
+        received_at=received_at,
     )
 
 
@@ -131,34 +149,60 @@ class QuoteService:
         self.lock = threading.Lock()
         self.stop_event = threading.Event()
         self.thread: threading.Thread | None = None
+        quality_symbol = symbol or "unconfigured"
+        self.quality_monitor = MarketDataQualityMonitor(QualityConfig(symbol=quality_symbol))
         self.current = Snapshot(
             stream_id=str(uuid4()), sequence=0, status="waiting", code="connecting", symbol=symbol
         )
+        self._history: list[Snapshot] = [self.current]
 
     def snapshot(self) -> Snapshot:
         with self.lock:
             return self.current.model_copy(deep=True)
 
+    def quality_snapshot(self) -> QualitySnapshot:
+        with self.lock:
+            return self.quality_monitor.snapshot()
+
+    def history(self, *, limit: int = 120) -> tuple[Snapshot, ...]:
+        with self.lock:
+            bounded = max(1, min(limit, len(self._history)))
+            return tuple(item.model_copy(deep=True) for item in self._history[-bounded:])
+
     def poll(self, now: datetime | None = None) -> None:
+        observed_at = now or datetime.now(UTC)
         try:
             quote = self.source.read()
-            age = ((now or datetime.now(UTC)) - quote.event_time).total_seconds()
+            age = (observed_at - quote.event_time).total_seconds()
             status: QuoteStatus = "live"
             if age > 10:
                 status = "stale"
             elif age < -5:
                 status = "clock_skew"
-            code = "ok" if status == "live" else status
+            code: str = "ok" if status == "live" else status
+            quality_status = _to_quality_status(status)
         except FeedError as exc:
             quote, status, code = None, exc.status, exc.code
+            quality_status = _to_quality_status(status)
         except Exception:
             # Do not log/serialize raw adapter exceptions (may contain local/account data).
             quote, status, code = None, "error", "adapter_error"
+            quality_status = "error"
         with self.lock:
-            self.current = Snapshot(
-                stream_id=self.current.stream_id, sequence=self.current.sequence + 1,
-                status=status, code=code, symbol=self.current.symbol, quote=quote,
+            self.quality_monitor.observe_transport(
+                status=quality_status,
+                code=code,
+                observed_at=observed_at,
             )
+            self.current = Snapshot(
+                stream_id=self.current.stream_id,
+                sequence=self.current.sequence + 1,
+                status=status,
+                code=code,
+                symbol=self.current.symbol,
+                quote=quote,
+            )
+            self._history.append(self.current)
 
     def start(self) -> None:
         self.thread = threading.Thread(target=self._run, name="nexora-quotes", daemon=True)
@@ -181,3 +225,9 @@ class QuoteService:
 def configured_service() -> QuoteService:
     symbol = os.environ.get("NEXORA_MT5_SYMBOL")
     return QuoteService(Mt5Source(os.environ.get("NEXORA_MT5_PATH"), symbol), symbol)
+
+
+def _to_quality_status(status: QuoteStatus) -> QualityStatus:
+    if status == "waiting":
+        return "unknown"
+    return status

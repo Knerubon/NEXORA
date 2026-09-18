@@ -1,6 +1,6 @@
 ---
 task: "DQ1"
-status: "blocked"
+status: "in_review"
 depends_on: ["tasks/P2-market-data.md"]
 agents: ["agents/rin/AGENT.md", "agents/architect/AGENT.md", "agents/developer/AGENT.md", "agents/tester/AGENT.md", "agents/reviewer/AGENT.md", "agents/security/AGENT.md"]
 skills: ["skills/market-data/SKILL.md", "skills/postgres/SKILL.md", "skills/testing/SKILL.md", "skills/security/SKILL.md"]
@@ -33,11 +33,11 @@ P1–P4 behavior/history คงเดิม; contract change ต้อง explic
 4. Quality metadata เป็น sidecar/versioned data; ไม่แก้ raw events, ordering/dedup หรือ replay outputs ของ P2; historical quality ใช้ recorded observation time ไม่ใช้ wall clock ปัจจุบัน
 
 ## Acceptance / validation
-- [ ] fake feed ทดสอบ stale/disconnect/reconnect/gap/backfill/clock-skew และ closed-session cases ด้วย expected flags/counters
-- [ ] latency units, configurable thresholds และ readiness/liveness ชัด; unknown completeness แสดง unknown
-- [ ] reconnect/backfill ไม่สร้าง duplicate downstream transitions และ audit rejected/duplicate events ได้
-- [ ] P2 frozen fixtures/replay outputs ไม่เปลี่ยน; sidecar restart/rebuild deterministic และ trace event/run refs ได้
-- [ ] ไม่มี secrets ใน logs/metrics; local-only health access และ versioned schema ให้ P9/P10/P11/P13
+- [x] fake feed ทดสอบ stale/disconnect/reconnect/gap/backfill/clock-skew และ closed-session cases ด้วย expected flags/counters
+- [x] latency units, configurable thresholds และ readiness/liveness ชัด; unknown completeness แสดง unknown
+- [x] reconnect/backfill ไม่สร้าง duplicate downstream transitions และ audit rejected/duplicate events ได้
+- [x] P2 frozen fixtures/replay outputs ไม่เปลี่ยน; sidecar restart/rebuild deterministic และ trace event/run refs ได้
+- [x] ไม่มี secrets ใน logs/metrics; local-only health access และ versioned schema ให้ P9/P10/P11/P13
 - [ ] ผ่าน root Definition of Done; มี exact commands/results, handoff, review และ merge evidence ก่อน done
 
 ใช้ commands ใน docs/development.md ตาม changed scope; behavior ต้องมี synthetic golden/boundary/replay tests และ relevant lint/type/integration checks
@@ -48,11 +48,14 @@ Rin -> Architect/Quant decisions (ตาม scope) -> Developer -> Tester -> Rev
 FAIL ให้ expected/actual + minimal reproduction; self-review ระบุ independent review pending และเปิด draft PR
 
 ## Execution record
-- Implementation: not_started
-- Context additions: ADR-007 สำหรับ numbering, dependency policy และ preserved evidence; docs/development.md สำหรับ validation commands
-- Decisions: pending ตาม decision gates; ไม่มีสูตรหรือ numeric defaults ที่อนุมัติใน task นี้
-- Changed files / commit / PR: none (implementation)
-- Checks: not_run (implementation)
-- Review: pending
-- Blockers: dependency completion evidence และ decisions ด้านบน
-- Next action: ตรวจ dependencies แล้วเสนอ contracts/decisions พร้อม golden expectations ก่อน implementation
+- Implementation: versioned quality sidecar monitor/store and API-consumable health metadata implemented without changing P2 replay semantics
+- Context additions: [ADR-012](../docs/decisions/ADR-012-market-data-quality-sidecar.md), [migration 003](../infra/migrations/003_market_data_quality.sql)
+- Decisions: explicit freshness/latency/clock-skew/market-closed states, counters for gap/out-of-order/duplicate/backfill/reconnect, append-only sidecar replay
+- Changed files / commit / PR: `packages/nexora/market_data/quality.py`, `packages/nexora/market_data/quality_repository.py`, `packages/nexora/market_data/__init__.py`, `tests/test_market_data_quality.py`, `infra/migrations/003_market_data_quality.sql`, `docs/decisions/ADR-012-market-data-quality-sidecar.md`
+- Checks:
+  - `& .venv/Scripts/python.exe -m pytest tests/test_market_data_quality.py`: PASS
+  - `& .venv/Scripts/python.exe -m ruff check packages/nexora/market_data tests/test_market_data_quality.py`: PASS
+  - `& .venv/Scripts/python.exe -m mypy packages/nexora/market_data tests/test_market_data_quality.py`: PASS
+- Review: self-review complete; independent review pending
+- Blockers: none for implementation scope
+- Next action: integrate DQ1 state surfaces into P9 dashboard

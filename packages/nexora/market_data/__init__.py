@@ -21,6 +21,14 @@ from nexora.market_data.models import (
     SchemaVersion,
 )
 from nexora.market_data.policy import MarketDataNormalizer, StreamState
+from nexora.market_data.quality import (
+    MarketDataQualityMonitor,
+    QualityConfig,
+    QualityCounters,
+    QualitySnapshot,
+    QualityStatus,
+)
+from nexora.market_data.quality_repository import QualitySnapshotStore
 from nexora.market_data.replay import ReplayReader, semantic_fingerprint
 from nexora.market_data.repository import SQLiteMarketDataRepository, StoreResult
 
@@ -35,11 +43,17 @@ __all__ = [
     "Mt5ReadOnlyMarketDataAdapter",
     "NormalizedPriceEvent",
     "PriceSource",
+    "QualityConfig",
+    "QualityCounters",
+    "QualitySnapshot",
+    "QualityStatus",
+    "QualitySnapshotStore",
     "ReplayReader",
     "SchemaVersion",
     "SQLiteMarketDataRepository",
     "StoreResult",
     "StreamState",
+    "MarketDataQualityMonitor",
     "canonical_bar_fixtures",
     "canonical_tick_fixtures",
     "gap_backfill_fixtures",

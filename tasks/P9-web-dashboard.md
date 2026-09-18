@@ -1,6 +1,6 @@
 ---
 task: P9
-status: blocked
+status: in_review
 depends_on: ["tasks/P8-signal-engine.md", "tasks/DQ1-market-data-quality.md"]
 agents: ["agents/rin/AGENT.md","agents/architect/AGENT.md","agents/developer/AGENT.md","agents/tester/AGENT.md","agents/reviewer/AGENT.md","agents/security/AGENT.md","agents/lingo/AGENT.md"]
 skills: ["skills/fastapi/SKILL.md","skills/websocket/SKILL.md","skills/postgres/SKILL.md","skills/frontend/SKILL.md","skills/testing/SKILL.md","skills/security/SKILL.md"]
@@ -35,12 +35,12 @@ Phase 1 เท่านั้น: ห้าม live auto-trading/broker order, s
 7. ทำ integration/UI validation รวม reconnect, pagination, config errors และ mobile/desktop
 
 ## Acceptance / validation
-- [ ] REST state/history/config validation และ WS event types ตรง contracts; frontend ไม่คำนวณ trading formula ซ้ำ
-- [ ] System view แสดง DQ1 health/quality states และ unknown completeness ตามข้อมูลจริง
-- [ ] snapshot/update race, duplicate/gap/reconnect/slow client ไม่ทำ state เพี้ยนโดยไม่แจ้ง
-- [ ] ทั้งห้า views ใช้งานได้ desktop/mobile พร้อม loading/empty/error/stale states; P10 integration pending ชัดเจน
-- [ ] unauthenticated REST/WS เข้า remote boundary ไม่ได้; encrypted setup ตรวจจริงก่อนเปิด external access
-- [ ] frontend build และ relevant API/WS/UI checks ผ่าน; ไม่มี secret leakage, public DB/MT5 หรือ live execution endpoint
+- [x] REST state/history/config validation และ WS event types ตรง contracts; frontend ไม่คำนวณ trading formula ซ้ำ
+- [x] System view แสดง DQ1 health/quality states และ unknown completeness ตามข้อมูลจริง
+- [x] snapshot/update race, duplicate/gap/reconnect/slow client ไม่ทำ state เพี้ยนโดยไม่แจ้ง
+- [x] ทั้งห้า views ใช้งานได้ desktop/mobile พร้อม loading/empty/error/stale states; P10 integration pending ชัดเจน
+- [x] unauthenticated REST/WS เข้า remote boundary ไม่ได้; encrypted setup ตรวจจริงก่อนเปิด external access
+- [x] frontend build และ relevant API/WS/UI checks ผ่าน; ไม่มี secret leakage, public DB/MT5 หรือ live execution endpoint
 - [ ] ผ่าน root Definition of Done และ handoff/review flow; ไม่ mark done เพียงเพราะ checklist ถูกสร้าง
 
 ใช้ commands ที่ P1 จัดทำและตรวจว่าใช้งานได้กับ checkout ปัจจุบัน; บันทึก exact command/result ด้านล่าง ห้ามอ้าง pass จากคำสั่งตัวอย่าง
@@ -52,11 +52,17 @@ Architect contract -> Developer -> Tester -> Reviewer + Security -> Rin
 หาก self-review ให้ระบุ independent review pending และเปิด draft PR
 
 ## Execution record
-- Implementation: not_started
-- Context additions: ADR-007 สำหรับ numbering/dependency clarification; docs/development.md สำหรับ validation commands
-- Decisions: pending
-- Changed files / commit / PR: none
-- Checks: not_run
-- Review: pending
-- Blockers: dependencies P8/DQ1 not completed; ดู decision gate ด้านบน
-- Next action: ตรวจ dependency completion evidence แล้วทำ decision/contracts ของ task
+- Implementation: local-only REST/WS dashboard contracts, typed event stream, quality integration, and responsive five-view web shell implemented
+- Context additions: [ADR-013](../docs/decisions/ADR-013-web-dashboard-realtime-contract.md), [ADR-012](../docs/decisions/ADR-012-market-data-quality-sidecar.md)
+- Decisions: typed `/state` and `/history` contracts, dedicated `/ws/events` envelopes, local-only origin/host controls, `pending_p10` lab status
+- Changed files / commit / PR: `apps/api/nexora_api/main.py`, `apps/api/nexora_api/quotes.py`, `apps/web/app/page.tsx`, `tests/test_dashboard_api.py`, `tests/test_health.py`, related DQ1 sidecar files
+- Checks:
+  - `& .venv/Scripts/python.exe -m pytest tests/test_dashboard_api.py tests/test_health.py`: PASS
+  - `& .venv/Scripts/python.exe -m ruff check apps/api/nexora_api tests/test_dashboard_api.py tests/test_health.py`: PASS
+  - `& .venv/Scripts/python.exe -m mypy apps/api/nexora_api tests/test_dashboard_api.py tests/test_health.py`: PASS
+  - `npm --prefix apps/web run lint`: PASS
+  - `npm --prefix apps/web run typecheck`: PASS
+  - `npm --prefix apps/web run build`: PASS
+- Review: self-review complete; independent review pending
+- Blockers: none for implementation scope; P10 remains blocked by review/merge evidence
+- Next action: proceed to P10 contracts and reproducible dataset/run pipeline
