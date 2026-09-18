@@ -20,3 +20,9 @@ Validation: lint/type/build; ตรวจ DOM geometry และภาพขอ�
 - Restarted only verified web process on 127.0.0.1:3000; API/feed untouched.
 - Running browser DOM: 294 glyphs at 100%, 296 at 120%, 300 at 80%/390px mobile; zero off-center glyphs against 30x26 grid (15px horizontal / 13px vertical midpoint). Counts vary with live feed. Actual live screenshots checked on desktop/mobile. Restored 100% and original viewport.
 - User subsequently requested commit. Stage only the cell-centering changes against HEAD plus this task; preserve pre-existing zoom/layout/FIX2 edits unstaged. Checks above describe the running working tree including those local edits. No push requested. Independent review pending.
+
+## Integration with main after user-requested push/merge
+- Resolve page.tsx conflict with PR #15 by preserving this branch's white live renderer and centered glyph/grid-origin fix. Retain PR #15 frontend tests/helpers and CI checks; those tests cover its standalone renderer, not this page's inline renderer.
+- Preserve live-feed timestamp provenance and status fields. No engine semantics changed by conflict resolution.
+- Existing uncommitted zoom/layout/FIX2 edits stay in the original checkout and are excluded from this PR.
+- Integration validation and CI are recorded in the PR. User explicitly requested push and merge; independent review remains unrecorded.
