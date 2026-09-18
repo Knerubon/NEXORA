@@ -42,6 +42,18 @@ type DashboardState = {
   backtest_lab_status: string;
 };
 
+type BacktestRunsResponse = {
+  runs: Array<{
+    run_id: string;
+    mode: string;
+    status: string;
+    metrics: {
+      trade_count: number;
+      expectancy: string;
+    };
+  }>;
+};
+
 const apiBase = process.env.NEXT_PUBLIC_NEXORA_API_URL ?? "http://127.0.0.1:8000";
 
 function statusLabel(status: string): string {
@@ -57,6 +69,7 @@ function statusLabel(status: string): string {
 
 export default function Home() {
   const [state, setState] = useState<DashboardState | null>(null);
+  const [backtestRuns, setBacktestRuns] = useState<BacktestRunsResponse["runs"]>([]);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -64,13 +77,21 @@ export default function Home() {
 
     const pullState = async () => {
       try {
-        const response = await fetch(`${apiBase}/state`, { cache: "no-store" });
-        if (!response.ok) {
-          throw new Error(`state_fetch_failed_${response.status}`);
+        const [stateResponse, runsResponse] = await Promise.all([
+          fetch(`${apiBase}/state`, { cache: "no-store" }),
+          fetch(`${apiBase}/backtest/runs`, { cache: "no-store" }),
+        ]);
+        if (!stateResponse.ok) {
+          throw new Error(`state_fetch_failed_${stateResponse.status}`);
         }
-        const data = (await response.json()) as DashboardState;
+        if (!runsResponse.ok) {
+          throw new Error(`backtest_runs_fetch_failed_${runsResponse.status}`);
+        }
+        const data = (await stateResponse.json()) as DashboardState;
+        const runs = (await runsResponse.json()) as BacktestRunsResponse;
         if (active) {
           setState(data);
+          setBacktestRuns(runs.runs);
           setError(null);
         }
       } catch (fetchError) {
@@ -134,7 +155,10 @@ export default function Home() {
       {
         title: "Backtest Lab",
         status: statusLabel(state?.backtest_lab_status ?? "pending_p10"),
-        detail: "Comparison views are enabled after P10 datasets are ready.",
+        detail:
+          backtestRuns.length > 0
+            ? `${backtestRuns.length} runs ready for comparison`
+            : "No stored runs yet",
       },
       {
         title: "System",
@@ -144,7 +168,7 @@ export default function Home() {
           : "No health snapshot yet",
       },
     ],
-    [state],
+    [backtestRuns.length, state],
   );
 
   return (

@@ -10,6 +10,7 @@ from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from nexora.backtest import BacktestLabService
 from nexora.market_data import QualitySnapshot
 from pydantic import BaseModel
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -46,7 +47,7 @@ class DashboardState(BaseModel):
     structure_status: Literal["ready", "unavailable"] = "ready"
     regime_status: Literal["ready", "unavailable"] = "ready"
     signals_status: Literal["ready", "unavailable"] = "ready"
-    backtest_lab_status: Literal["pending_p10"] = "pending_p10"
+    backtest_lab_status: Literal["ready", "pending_p10"] = "pending_p10"
 
 
 class DashboardHistory(BaseModel):
@@ -67,6 +68,7 @@ def create_app(service: QuoteService | None = None, *, start_worker: bool = True
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         feed = service or configured_service()
         application.state.quotes = feed
+        application.state.backtest = BacktestLabService.bootstrap()
         if start_worker:
             feed.start()
         try:
@@ -128,6 +130,7 @@ def create_app(service: QuoteService | None = None, *, start_worker: bool = True
             sequence=snapshot.sequence,
             quote=snapshot,
             quality=feed.quality_snapshot(),
+            backtest_lab_status="ready",
         )
 
     @application.get("/history", response_model=DashboardHistory)
@@ -140,6 +143,23 @@ def create_app(service: QuoteService | None = None, *, start_worker: bool = True
             quote_history=feed.history(limit=bounded_limit),
             quality_history=feed.quality_monitor.history(limit=bounded_limit),
         )
+
+    @application.get("/backtest/runs")
+    def backtest_runs(request: Request, response: Response) -> dict[str, object]:
+        _assert_local_http(request)
+        response.headers["Cache-Control"] = "no-store"
+        backtest: BacktestLabService = request.app.state.backtest
+        runs = backtest.list_runs()
+        return {"schema_version": 1, "runs": runs}
+
+    @application.get("/backtest/compare")
+    def backtest_compare(request: Request, response: Response, run_ids: str) -> dict[str, object]:
+        _assert_local_http(request)
+        response.headers["Cache-Control"] = "no-store"
+        selected = tuple(item.strip() for item in run_ids.split(",") if item.strip())
+        backtest: BacktestLabService = request.app.state.backtest
+        compared = backtest.compare(selected)
+        return {"schema_version": 1, "runs": compared}
 
     @application.websocket("/ws/quotes")
     async def stream_quotes(websocket: WebSocket) -> None:

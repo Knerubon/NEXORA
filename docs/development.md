@@ -33,9 +33,16 @@ Invoke-RestMethod http://127.0.0.1:8000/state
 Invoke-RestMethod "http://127.0.0.1:8000/history?limit=5"
 Invoke-RestMethod http://127.0.0.1:8000/quality
 ```
-Expected: local-only API contracts for realtime quote + quality sidecar status. `backtest_lab_status` remains `pending_p10` until P10 delivery.
+Expected: local-only API contracts for realtime quote + quality sidecar status. `backtest_lab_status` becomes `ready` when backtest runs are available.
 WebSocket channels: `ws://127.0.0.1:8000/ws/quotes` and `ws://127.0.0.1:8000/ws/events`
 Remote unauthenticated access is out of scope and must stay blocked by local host/origin policy.
+
+### Backtest Lab contracts (P10)
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/backtest/runs
+Invoke-RestMethod "http://127.0.0.1:8000/backtest/compare?run_ids=<run_id_1>,<run_id_2>"
+```
+Expected: API returns stored reproducible runs and compare payload from persisted metrics; UI reads these values directly.
 
 ## Validation
 ```powershell

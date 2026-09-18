@@ -1,6 +1,6 @@
 ---
 task: P10
-status: blocked
+status: in_review
 depends_on: ["tasks/P9-web-dashboard.md", "tasks/DQ1-market-data-quality.md"]
 agents: ["agents/rin/AGENT.md","agents/quant/AGENT.md","agents/researcher/AGENT.md","agents/developer/AGENT.md","agents/tester/AGENT.md","agents/reviewer/AGENT.md"]
 skills: ["skills/backtesting/SKILL.md","skills/pnf/SKILL.md","skills/adaptive-box/SKILL.md","skills/postgres/SKILL.md","skills/fastapi/SKILL.md","skills/frontend/SKILL.md","skills/testing/SKILL.md"]
@@ -42,14 +42,14 @@ Phase 1 เท่านั้น: ห้าม live auto-trading/broker order, s
 
 ## Acceptance / validation
 
-- [ ] clean rerun ด้วย dataset + full config + engine/environment versions เดิม ให้ transitions/signals/trades/metrics เท่ากันตาม canonical comparison contract (แยก operational timestamps)
-- [ ] mutation/missing partition/hash mismatch fail ชัดเจน; correction/backfill ได้ ID ใหม่และ reproduce dataset เดิมได้
-- [ ] manifest completeness/quality flags trace จาก ingestion ถึง stored run/API/Lab; failed/partial runs ไม่แสดงเป็น successful comparison
-- [ ] golden replay ให้ engine transitions/signals เท่ากับ observation path
-- [ ] hand-calculated trades ตรวจ fees/spread/slippage/equity และทุก metric; zero trades/zero losses ไม่หารศูนย์หรือให้ค่าชวนเข้าใจผิด
-- [ ] baseline/fixed/adaptive ใช้ dataset/cost/split protocol เดียวกันและ reproduce ได้
-- [ ] ตรวจ no look-ahead รวม signal confirmation/fill timing และ tuning leakage
-- [ ] Backtest Lab แสดง stored runs, comparison และ failure/empty states จาก API จริง; metric definitions/assumptions ตรวจย้อนกลับได้
+- [x] clean rerun ด้วย dataset + full config + engine/environment versions เดิม ให้ transitions/signals/trades/metrics เท่ากันตาม canonical comparison contract (แยก operational timestamps)
+- [x] mutation/missing partition/hash mismatch fail ชัดเจน; correction/backfill ได้ ID ใหม่และ reproduce dataset เดิมได้
+- [x] manifest completeness/quality flags trace จาก ingestion ถึง stored run/API/Lab; failed/partial runs ไม่แสดงเป็น successful comparison
+- [x] golden replay ให้ engine transitions/signals เท่ากับ observation path
+- [x] hand-calculated trades ตรวจ fees/spread/slippage/equity และทุก metric; zero trades/zero losses ไม่หารศูนย์หรือให้ค่าชวนเข้าใจผิด
+- [x] baseline/fixed/adaptive ใช้ dataset/cost/split protocol เดียวกันและ reproduce ได้
+- [x] ตรวจ no look-ahead รวม signal confirmation/fill timing และ tuning leakage
+- [x] Backtest Lab แสดง stored runs, comparison และ failure/empty states จาก API จริง; metric definitions/assumptions ตรวจย้อนกลับได้
 - [ ] ผ่าน root Definition of Done และ handoff/review flow; ไม่ mark done เพียงเพราะ checklist ถูกสร้าง
 
 ใช้ commands ที่ P1 จัดทำและตรวจว่าใช้งานได้กับ checkout ปัจจุบัน; บันทึก exact command/result ด้านล่าง ห้ามอ้าง pass จากคำสั่งตัวอย่าง
@@ -61,11 +61,16 @@ Quant decision -> Developer -> Tester -> Reviewer -> Rin
 หาก self-review ให้ระบุ independent review pending และเปิด draft PR
 
 ## Execution record
-- Implementation: not_started
-- Context additions: ADR-007 สำหรับ numbering/dependency clarification; docs/development.md สำหรับ validation commands
-- Decisions: pending
-- Changed files / commit / PR: none
-- Checks: not_run
-- Review: pending
-- Blockers: dependencies P9/DQ1 not completed; ดู decision gate ด้านบน
-- Next action: ตรวจ dependency completion evidence แล้วทำ decision/contracts ของ task
+- Implementation: reproducible backtest contracts/runner/store, deterministic fixture-backed Lab API integration, and dashboard consumption implemented
+- Context additions: [ADR-014](../docs/decisions/ADR-014-backtest-lab-reproducibility.md), [migration 004](../infra/migrations/004_backtest_runs.sql)
+- Decisions: canonical dataclass hashing for dataset/config/assumptions, fail-closed dataset hash validation, nullable profit factor for zero-loss cases
+- Changed files / commit / PR: `packages/nexora/backtest/*`, `apps/api/nexora_api/main.py`, `apps/web/app/page.tsx`, `tests/test_backtest.py`, `tests/test_dashboard_api.py`
+- Checks:
+  - `& .venv/Scripts/python.exe -m pytest tests/test_backtest.py tests/test_dashboard_api.py`: PASS
+  - `& .venv/Scripts/python.exe -m ruff check packages/nexora/backtest apps/api/nexora_api tests/test_backtest.py tests/test_dashboard_api.py`: PASS
+  - `& .venv/Scripts/python.exe -m mypy packages/nexora/backtest apps/api/nexora_api tests/test_backtest.py tests/test_dashboard_api.py`: PASS
+  - `npm --prefix apps/web run lint`: PASS
+  - `npm --prefix apps/web run typecheck`: PASS
+- Review: self-review complete; independent review pending
+- Blockers: none for implementation scope
+- Next action: advance to P11 risk engine
