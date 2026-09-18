@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -49,37 +50,38 @@ def test_dynamic_mt5_symbol_selection_uses_visible_symbol() -> None:
         digits = 2
 
     class FakeMT5:
-        def initialize(self, path, timeout=5000):
+        def initialize(self, path: str, timeout: int = 5000) -> bool:
             return True
 
-        def terminal_info(self):
-            class Terminal:
-                connected = True
-            return Terminal()
+        def terminal_info(self) -> SimpleNamespace:
+            return SimpleNamespace(connected=True)
 
-        def symbols_get(self):
-            return [type("Sym", (), {"name": "EURUSD"}), type("Sym", (), {"name": "XAUUSD"})]
+        def symbols_get(self) -> list[SimpleNamespace]:
+            return [SimpleNamespace(name="EURUSD"), SimpleNamespace(name="XAUUSD")]
 
-        def symbol_info(self, symbol):
+        def symbol_info(self, symbol: str) -> FakeInfo | None:
             if symbol == "XAUUSD":
                 return FakeInfo()
             return None
 
-        def symbol_info_tick(self, symbol):
+        def symbol_info_tick(self, symbol: str) -> FakeTick | None:
             return FakeTick() if symbol == "XAUUSD" else None
 
-        def shutdown(self):
+        def shutdown(self) -> None:
             return None
 
     class FakePsutil:
         @staticmethod
-        def process_iter(_):
-            return [type("P", (), {"info": {"exe": r"C:\Terminal\terminal64.exe"}})]
+        def process_iter(_: list[str]) -> list[SimpleNamespace]:
+            return [SimpleNamespace(info={"exe": r"C:\Terminal\terminal64.exe"})]
 
     fake_module = FakeMT5()
 
     source = Mt5Source(r"C:\Terminal\terminal64.exe", None)
-    with patch("nexora_api.quotes.importlib.import_module", side_effect=lambda name: FakePsutil if name == "psutil" else fake_module):
+    with patch(
+        "nexora_api.quotes.importlib.import_module",
+        side_effect=lambda name: FakePsutil if name == "psutil" else fake_module,
+    ):
         quote = source.read()
 
     assert quote.symbol == "XAUUSD"

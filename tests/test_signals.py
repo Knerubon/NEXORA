@@ -1,16 +1,17 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from typing import Literal
 
 from nexora.market_regime import RegimeSnapshot, RegimeState
 from nexora.matrix import MatrixAlignment, MatrixResolutionState, MatrixSnapshot
 from nexora.pnf import PnfTransition
 from nexora.signals import SignalConfig, SignalEngine, SignalWeights
 from nexora.structure import CandidateLevel, ConfirmedPivot, StructureSnapshot
-from tests.signal_pattern_golden import golden_cases
 
+from tests.signal_pattern_golden import golden_cases
 
 NOW = datetime(2026, 2, 3, 9, 0, tzinfo=UTC)
 
@@ -40,7 +41,9 @@ def _config() -> SignalConfig:
     )
 
 
-def _transition(*, direction: str, kind: str, price: str) -> PnfTransition:
+def _transition(
+    *, direction: Literal["X", "O"], kind: Literal["seed", "extension", "reversal"], price: str
+) -> PnfTransition:
     event_time = NOW + timedelta(minutes=2)
     return PnfTransition(
         type=kind,
@@ -60,7 +63,9 @@ def _transition(*, direction: str, kind: str, price: str) -> PnfTransition:
     )
 
 
-def _matrix(alignment: MatrixAlignment, *, direction: str = "X", price: str = "100.2") -> MatrixSnapshot:
+def _matrix(
+    alignment: MatrixAlignment, *, direction: Literal["X", "O"] = "X", price: str = "100.2"
+) -> MatrixSnapshot:
     transition = _transition(direction=direction, kind="reversal", price=price)
     return MatrixSnapshot(
         schema_version=1,
@@ -96,7 +101,7 @@ def _matrix(alignment: MatrixAlignment, *, direction: str = "X", price: str = "1
     )
 
 
-def _regime(label: str) -> RegimeSnapshot:
+def _regime(label: Literal["trend", "range", "high_volatility", "unknown"]) -> RegimeSnapshot:
     return RegimeSnapshot(
         schema_version=1,
         symbol="XAUUSD",
@@ -113,8 +118,15 @@ def _regime(label: str) -> RegimeSnapshot:
 
 def _structure(
     *,
-    pivots: tuple[tuple[str, str, str], ...],
-    levels: tuple[tuple[str, str, str], ...] = (("support", "99.0", "confirmed"),),
+    pivots: tuple[tuple[Literal["high", "low"], str, str], ...],
+    levels: tuple[
+        tuple[
+            Literal["support", "resistance"],
+            str,
+            Literal["candidate", "confirmed", "invalidated", "unavailable"],
+        ],
+        ...,
+    ] = (("support", "99.0", "confirmed"),),
 ) -> StructureSnapshot:
     pivot_items = tuple(
         ConfirmedPivot(
@@ -247,7 +259,10 @@ def test_wait_signal_occurs_on_matrix_disagreement_and_conflicting_pressure() ->
 
     assert snapshot.decision.action == "WAIT"
     assert snapshot.decision.score <= 49
-    assert any("Matrix disagreement detected." in evidence.reason for evidence in snapshot.decision.negative_evidence)
+    assert any(
+        "Matrix disagreement detected." in evidence.reason
+        for evidence in snapshot.decision.negative_evidence
+    )
 
 
 def test_pattern_conflict_detects_bearish_reversal_near_resistance() -> None:
@@ -279,7 +294,11 @@ def test_pattern_conflict_detects_bearish_reversal_near_resistance() -> None:
 def test_support_and_resistance_context_supports_bullish_and_bearish_tension() -> None:
     transition = _transition(direction="X", kind="reversal", price="99.8")
     structure = _structure(
-        pivots=(("low", "98.8", "confirmed"), ("high", "101.0", "confirmed"), ("low", "99.4", "confirmed")),
+        pivots=(
+            ("low", "98.8", "confirmed"),
+            ("high", "101.0", "confirmed"),
+            ("low", "99.4", "confirmed"),
+        ),
         levels=(("support", "99.0", "confirmed"), ("resistance", "102.0", "confirmed")),
     )
     matrix = _matrix("aligned_bullish", direction="X", price="99.8")
@@ -302,7 +321,11 @@ def test_support_and_resistance_context_supports_bullish_and_bearish_tension() -
     assert "support" in buy[1].lower()
 
     sell_structure = _structure(
-        pivots=(("high", "103.5", "confirmed"), ("low", "100.2", "confirmed"), ("high", "102.9", "confirmed")),
+        pivots=(
+            ("high", "103.5", "confirmed"),
+            ("low", "100.2", "confirmed"),
+            ("high", "102.9", "confirmed"),
+        ),
         levels=(("support", "100.0", "confirmed"), ("resistance", "102.0", "confirmed")),
     )
     sell_transition = _transition(direction="O", kind="reversal", price="102.4")
@@ -338,7 +361,11 @@ def test_signal_score_boundaries_and_entry_invalidation_are_deterministic() -> N
     assert engine._resolve_action_and_score(100, 0) == ("BUY", 100)
 
     structure = _structure(
-        pivots=(("low", "99.0", "confirmed"), ("high", "104.0", "confirmed"), ("low", "100.2", "confirmed")),
+        pivots=(
+            ("low", "99.0", "confirmed"),
+            ("high", "104.0", "confirmed"),
+            ("low", "100.2", "confirmed"),
+        ),
         levels=(("support", "99.0", "confirmed"), ("resistance", "108.0", "confirmed")),
     )
     setup = engine._build_trade_setup(
@@ -361,7 +388,11 @@ def test_signal_snapshot_replay_is_deterministic() -> None:
 
     engine = SignalEngine(_config())
     structure = _structure(
-        pivots=(("low", "99.0", "confirmed"), ("high", "104.0", "confirmed"), ("low", "99.8", "confirmed")),
+        pivots=(
+            ("low", "99.0", "confirmed"),
+            ("high", "104.0", "confirmed"),
+            ("low", "99.8", "confirmed"),
+        ),
         levels=(("support", "99.0", "confirmed"), ("resistance", "108.0", "confirmed")),
     )
     snapshot = engine.evaluate(
@@ -378,7 +409,11 @@ def test_signal_snapshot_replay_is_deterministic() -> None:
 
 def test_same_dataset_and_config_replay_produces_immutable_signal_history() -> None:
     base_structure = _structure(
-        pivots=(("low", "99.0", "confirmed"), ("high", "104.0", "confirmed"), ("low", "99.8", "confirmed")),
+        pivots=(
+            ("low", "99.0", "confirmed"),
+            ("high", "104.0", "confirmed"),
+            ("low", "99.8", "confirmed"),
+        ),
         levels=(("support", "99.0", "confirmed"), ("resistance", "108.0", "confirmed")),
     )
     engine = SignalEngine(_config())

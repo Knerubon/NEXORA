@@ -13,7 +13,11 @@ from nexora.pnf import ColumnDirection, PnfTransitionType
 class GoldenPatternCase:
     name: str
     pivot_shapes: tuple[
-        tuple[Literal["high", "low"], str, Literal["confirmed", "invalidated", "candidate", "unavailable"]],
+        tuple[
+            Literal["high", "low"],
+            str,
+            Literal["confirmed", "invalidated", "candidate", "unavailable"],
+        ],
         ...,
     ]
     levels: tuple[

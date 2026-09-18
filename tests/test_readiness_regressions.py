@@ -286,7 +286,17 @@ def test_journal_conflicting_identity_and_concurrent_writer(tmp_path: Path) -> N
 
 def test_causal_signal_prefix_and_baseline_close_contract() -> None:
     stream = events()
-    cfg = replace(fixture_config("fixed_pnf"), pipeline=pipeline_config())
+    pipeline = pipeline_config()
+    cfg = replace(fixture_config("fixed_pnf"), pipeline=pipeline)
+    # This wide-swing fixture now correctly waits under the high-volatility guard.
+    assert BacktestRunner.generate_signals(stream, cfg) == ()
+    # Exercise non-empty causal prefixes under an explicit test-only trend regime.
+    cfg = replace(
+        cfg,
+        pipeline=replace(
+            pipeline, regime=replace(pipeline.regime, high_volatility_min_width=D("20"))
+        ),
+    )
     full = BacktestRunner.generate_signals(stream, cfg)
     assert full
     for index in range(1, len(stream) + 1):
