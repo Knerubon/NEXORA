@@ -1,6 +1,6 @@
 ---
 task: P12
-status: blocked
+status: in_review
 depends_on: ["tasks/P11-risk-engine.md", "tasks/P10-backtest.md"]
 agents: ["agents/rin/AGENT.md","agents/quant/AGENT.md","agents/architect/AGENT.md","agents/developer/AGENT.md","agents/tester/AGENT.md","agents/reviewer/AGENT.md","agents/security/AGENT.md"]
 skills: ["skills/paper-trading/SKILL.md","skills/backtesting/SKILL.md","skills/postgres/SKILL.md","skills/fastapi/SKILL.md","skills/websocket/SKILL.md","skills/frontend/SKILL.md","skills/testing/SKILL.md","skills/security/SKILL.md"]
@@ -38,11 +38,11 @@ Proposed simulator package ต้องมี ADR ก่อนสร้าง; a
 
 ## Acceptance / validation
 
-- [ ] signal -> P11 RiskDecision -> simulated order/fill -> ledger trace ครบ; reject/expired decision, pause/kill switch และ stale account ไม่มี fill
-- [ ] boundary inspection + negative tests ยืนยันไม่มี broker order call หรือ live gateway ใน paper path
-- [ ] known sequence ตรวจ fills/costs/cash/positions/PnL/rejections และ ledger reconciliation
-- [ ] duplicate/restart/disconnect/stale data ไม่สร้าง fill ซ้ำ; risk limit/kill switch หยุด simulated execution ตาม contract
-- [ ] paper replay deterministic และ shared signal core ให้ผลสอดคล้อง P10; account namespace แยกชัด
+- [x] signal -> P11 RiskDecision -> simulated order/fill -> ledger trace ครบ; reject/expired decision, pause/kill switch และ stale account ไม่มี fill
+- [x] boundary inspection + negative tests ยืนยันไม่มี broker order call หรือ live gateway ใน paper path
+- [x] known sequence ตรวจ fills/costs/cash/positions/PnL/rejections และ ledger reconciliation
+- [x] duplicate/restart/disconnect/stale data ไม่สร้าง fill ซ้ำ; risk limit/kill switch หยุด simulated execution ตาม contract
+- [x] paper replay deterministic และ shared signal core ให้ผลสอดคล้อง P10; account namespace แยกชัด
 - [ ] API/WS/UI แสดง paper status/failures ถูกต้อง; Security review ผ่านและ runbook recover ทดลองแล้ว
 - [ ] ผ่าน root Definition of Done และ handoff/review flow; ไม่ mark done เพียงเพราะ checklist ถูกสร้าง
 
@@ -55,11 +55,17 @@ Quant/Architect decision -> Developer -> Tester -> Reviewer + Security -> Rin
 หาก self-review ให้ระบุ independent review pending และเปิด draft PR
 
 ## Execution record
-- Implementation: not_started
-- Context additions: ADR-007 สำหรับ numbering/dependency clarification; docs/development.md สำหรับ validation commands
-- Decisions: pending
-- Changed files / commit / PR: none
-- Checks: not_run
-- Review: pending
-- Blockers: dependencies P11/P10 not completed; ดู decision gate ด้านบน
-- Next action: ตรวจ dependency completion evidence แล้วทำ decision/contracts ของ task
+- Implementation: local paper simulator package, checkpoint persistence contract, risk-integrated replay flow, API/UI paper status surfaces, and deterministic idempotency tests implemented
+- Context additions: [ADR-016](../docs/decisions/ADR-016-paper-trading-simulator-boundary.md), [migration 006](../infra/migrations/006_paper_trading.sql)
+- Decisions: paper-only namespace enforcement, proposal-id idempotency, fail-closed runtime pause/kill-switch, and checkpoint restore contract
+- Changed files / commit / PR: `packages/nexora/paper/*`, `packages/nexora/backtest/service.py`, `apps/api/nexora_api/main.py`, `apps/web/app/page.tsx`, `tests/test_paper.py`, `tests/test_dashboard_api.py`, `docs/development.md`
+- Checks:
+  - `d:/NEXORA/NEXORA/.venv/Scripts/python.exe -m pytest tests/test_paper.py tests/test_dashboard_api.py tests/test_backtest.py`: PASS
+  - `d:/NEXORA/NEXORA/.venv/Scripts/python.exe -m ruff check packages/nexora/paper packages/nexora/backtest apps/api/nexora_api tests/test_paper.py tests/test_dashboard_api.py`: PASS
+  - `d:/NEXORA/NEXORA/.venv/Scripts/python.exe -m mypy packages/nexora/paper packages/nexora/backtest apps/api/nexora_api tests/test_paper.py tests/test_dashboard_api.py`: PASS
+  - `npm --prefix apps/web run lint`: PASS
+  - `npm --prefix apps/web run typecheck`: PASS
+  - `npm --prefix apps/web run build`: PASS
+- Review: self-review complete; independent review pending
+- Blockers: security review and independent review pending before done gate
+- Next action: open draft PR and request review evidence for completion
