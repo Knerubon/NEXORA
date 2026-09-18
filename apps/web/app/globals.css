@@ -34,6 +34,9 @@ button:disabled { opacity: .45; }
 button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid #a5e5d0; }
 fieldset { display: flex; flex-wrap: wrap; gap: 12px; border: 1px solid #29363e; margin: 16px 0; }
 .table-scroll { overflow-x: auto; }
+.pnf-chart { overflow-x: auto; }
+.pnf-chart svg { min-width: 700px; }
+.pnf-chart:focus-visible { outline: 2px solid #a5e5d0; }
 table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: 12px; border-bottom: 1px solid #29363e; font-size: 13px; }
 details { padding: 12px 0; overflow-wrap: anywhere; }
