@@ -1,6 +1,6 @@
 ---
 task: "P8"
-status: "blocked"
+status: "in_review"
 depends_on: ["tasks/P7-market-regime.md"]
 agents: ["agents/rin/AGENT.md", "agents/quant/AGENT.md", "agents/architect/AGENT.md", "agents/developer/AGENT.md", "agents/tester/AGENT.md", "agents/reviewer/AGENT.md"]
 skills: ["skills/market-structure/SKILL.md", "skills/postgres/SKILL.md", "skills/testing/SKILL.md"]
@@ -32,11 +32,11 @@ P1–P4 behavior/history คงเดิม; contract change ต้อง explic
 3. เก็บ human reasons, machine reason_codes/evidence, data refs, signal/config/engine versions; ไม่ออก order หรือกำหนด risk limits
 
 ## Acceptance / validation
-- [ ] golden sequences ตรวจ signal/no-signal, conflict, expired/stale/insufficient inputs และ repeat policy
-- [ ] future pivot/regime confirmation ไม่เปลี่ยน signal prefix; occurrence/confirmation/decision timestamps trace ได้
-- [ ] ทุก signal มี reasons + machine evidence + source/config/rule refs; persisted inputs rebuild ได้ผลเดิม
-- [ ] duplicate/restart ไม่สร้าง signal ซ้ำ; isolation และ rejection/error schema ตรวจได้
-- [ ] ไม่มี order calls, position sizing หรือ risk approval ใน Signal Engine; downstream ได้ versioned schema/examples
+- [x] golden sequences ตรวจ signal/no-signal, conflict, expired/stale/insufficient inputs และ repeat policy
+- [x] future pivot/regime confirmation ไม่เปลี่ยน signal prefix; occurrence/confirmation/decision timestamps trace ได้
+- [x] ทุก signal มี reasons + machine evidence + source/config/rule refs; persisted inputs rebuild ได้ผลเดิม
+- [x] duplicate/restart ไม่สร้าง signal ซ้ำ; isolation และ rejection/error schema ตรวจได้
+- [x] ไม่มี order calls, position sizing หรือ risk approval ใน Signal Engine; downstream ได้ versioned schema/examples
 - [ ] ผ่าน root Definition of Done; มี exact commands/results, handoff, review และ merge evidence ก่อน done
 
 ใช้ commands ใน docs/development.md ตาม changed scope; behavior ต้องมี synthetic golden/boundary/replay tests และ relevant lint/type/integration checks
@@ -47,11 +47,14 @@ Rin -> Architect/Quant decisions (ตาม scope) -> Developer -> Tester -> Rev
 FAIL ให้ expected/actual + minimal reproduction; self-review ระบุ independent review pending และเปิด draft PR
 
 ## Execution record
-- Implementation: not_started
-- Context additions: ADR-007 สำหรับ numbering, dependency policy และ preserved evidence; docs/development.md สำหรับ validation commands
-- Decisions: pending ตาม decision gates; ไม่มีสูตรหรือ numeric defaults ที่อนุมัติใน task นี้
-- Changed files / commit / PR: none (implementation)
-- Checks: not_run (implementation)
-- Review: pending
-- Blockers: dependency completion evidence และ decisions ด้านบน
-- Next action: ตรวจ dependencies แล้วเสนอ contracts/decisions พร้อม golden expectations ก่อน implementation
+- Implementation: explainable research signal contract, deterministic signal engine, dedup/cooldown/expiry policy, and persistence/rebuild contract implemented
+- Context additions: [ADR-011](../docs/decisions/ADR-011-signal-evidence-policy.md), [migration 002](../infra/migrations/002_structure_regime_signals.sql)
+- Decisions: decision-time-only inputs, human + machine evidence fields, active-signal dedup, event-window cooldown and expiry
+- Changed files / commit / PR: `packages/nexora/signals/*`, `tests/test_signals.py`, `docs/decisions/ADR-011-signal-evidence-policy.md`
+- Checks:
+  - `& .venv/Scripts/python.exe -m pytest tests/test_signals.py`: PASS
+  - `& .venv/Scripts/python.exe -m ruff check packages/nexora/signals tests/test_signals.py`: PASS
+  - `& .venv/Scripts/python.exe -m mypy packages/nexora/signals tests/test_signals.py`: PASS
+- Review: self-review complete; independent review pending
+- Blockers: none for implementation scope
+- Next action: open integrated review PR for P5-P8

@@ -1,6 +1,6 @@
 ---
 task: "P6"
-status: "blocked"
+status: "in_review"
 depends_on: ["tasks/P5-matrix.md"]
 agents: ["agents/rin/AGENT.md", "agents/quant/AGENT.md", "agents/architect/AGENT.md", "agents/developer/AGENT.md", "agents/tester/AGENT.md", "agents/reviewer/AGENT.md"]
 skills: ["skills/market-structure/SKILL.md", "skills/pnf/SKILL.md", "skills/postgres/SKILL.md", "skills/testing/SKILL.md"]
@@ -32,10 +32,10 @@ P1–P4 behavior/history คงเดิม; contract change ต้อง explic
 3. ระบุ candidate/confirmed/invalidated/unavailable states และ versioned lifecycle; levels เป็น candidate ไม่ใช่ certainty
 
 ## Acceptance / validation
-- [ ] golden flat/extension/reversal/equal-level/gap cases ตรวจ highs/lows และ S/R lifecycle
-- [ ] future confirmation ไม่เปลี่ยน previously published structure; consumers ใช้ confirmation time
-- [ ] symbol/resolution isolation, stale inputs และ insufficient history ให้ explicit unavailable state
-- [ ] persist/rebuild/restart deterministic; ทุก level มี source refs และ rule/config version
+- [x] golden flat/extension/reversal/equal-level/gap cases ตรวจ highs/lows และ S/R lifecycle
+- [x] future confirmation ไม่เปลี่ยน previously published structure; consumers ใช้ confirmation time
+- [x] symbol/resolution isolation, stale inputs และ insufficient history ให้ explicit unavailable state
+- [x] persist/rebuild/restart deterministic; ทุก level มี source refs และ rule/config version
 - [ ] ผ่าน root Definition of Done; มี exact commands/results, handoff, review และ merge evidence ก่อน done
 
 ใช้ commands ใน docs/development.md ตาม changed scope; behavior ต้องมี synthetic golden/boundary/replay tests และ relevant lint/type/integration checks
@@ -46,11 +46,14 @@ Rin -> Architect/Quant decisions (ตาม scope) -> Developer -> Tester -> Rev
 FAIL ให้ expected/actual + minimal reproduction; self-review ระบุ independent review pending และเปิด draft PR
 
 ## Execution record
-- Implementation: not_started
-- Context additions: ADR-007 สำหรับ numbering, dependency policy และ preserved evidence; docs/development.md สำหรับ validation commands
-- Decisions: pending ตาม decision gates; ไม่มีสูตรหรือ numeric defaults ที่อนุมัติใน task นี้
-- Changed files / commit / PR: none (implementation)
-- Checks: not_run (implementation)
-- Review: pending
-- Blockers: dependency completion evidence และ decisions ด้านบน
-- Next action: ตรวจ dependencies แล้วเสนอ contracts/decisions พร้อม golden expectations ก่อน implementation
+- Implementation: causal pivot confirmation, candidate level lifecycle, and invalidation policy implemented with deterministic persistence/rebuild
+- Context additions: [ADR-009](../docs/decisions/ADR-009-market-structure-lifecycle.md), [migration 002](../infra/migrations/002_structure_regime_signals.sql)
+- Decisions: 3-transition confirmation window, occurrence vs confirmation timestamp split, explicit confirmed/invalidated/unavailable lifecycle
+- Changed files / commit / PR: `packages/nexora/structure/*`, `tests/test_structure.py`, `docs/decisions/ADR-009-market-structure-lifecycle.md`
+- Checks:
+  - `& .venv/Scripts/python.exe -m pytest tests/test_structure.py`: PASS
+  - `& .venv/Scripts/python.exe -m ruff check packages/nexora/structure tests/test_structure.py`: PASS
+  - `& .venv/Scripts/python.exe -m mypy packages/nexora/structure tests/test_structure.py`: PASS
+- Review: self-review complete; independent review pending
+- Blockers: none for implementation scope
+- Next action: integrate with P7 regime classifier review
