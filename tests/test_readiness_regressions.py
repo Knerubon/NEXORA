@@ -407,3 +407,38 @@ def test_paused_paper_does_not_leak_risk_reservation(tmp_path: Path) -> None:
     assert session.risk.state().reserved_exposure == 0
     assert PaperSession(cfg, journal).snapshot() == session.snapshot()
     journal.close()
+
+
+def test_quote_time_provenance_survives_journal_restart(tmp_path: Path) -> None:
+    from nexora_api.quotes import make_quote
+    from nexora_api.research import observe_quote
+
+    cfg = pipeline_config()
+    cfg = replace(
+        cfg,
+        resolutions=tuple(
+            replace(r, pnf=replace(r.pnf, price_source="bid")) for r in cfg.resolutions
+        ),
+    )
+    journal = SQLiteJournal(tmp_path / "quote.sqlite")
+    config = RuntimeConfig(cfg, "USD/oz")
+    runtime = ResearchRuntime(config, journal)
+    now = datetime(2026, 9, 18, 10, tzinfo=UTC)
+    quote = make_quote(
+        "XAUUSD",
+        100,
+        101,
+        1,
+        int((now + timedelta(hours=3)).timestamp() * 1000),
+        now,
+        time_offset_seconds=10800,
+    )
+    observe_quote(runtime, quote)
+    observe_quote(runtime, quote)
+    assert len(runtime.events()) == 1
+    event = runtime.events()[0]
+    assert event.event_time == now
+    assert "offset=10800" in event.source_event_id
+    assert "13:00:00" in event.source_event_id
+    assert ResearchRuntime(config, journal).events() == runtime.events()
+    journal.close()

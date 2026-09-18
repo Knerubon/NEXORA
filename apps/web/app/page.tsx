@@ -13,7 +13,7 @@ type Output = {
 };
 type State = {
   sequence: number; research_mode: string; storage_backend: string;
-  quote: { stream_id: string; status: string; quote: { bid: string; ask: string; event_time: string } | null };
+  quote: { stream_id: string; status: string; quote: { bid: string; ask: string; event_time: string; raw_event_time?: string; time_offset_seconds?: number } | null };
   quality: { status: string; completeness: string; counters: { observed: number; gaps: number; reconnects: number } };
   research: { event_count: number; error: string | null; output: Output };
 };
@@ -111,7 +111,7 @@ export default function Home() {
       <p className="subtitle">{state?.research_mode === "live_observation" ? "Live observation" : "Recorded research / waiting for a configured feed"}. No broker orders.</p></section>
     {error && <p role="alert" className="warning">{error}</p>}
     <section><h2>Price Structure</h2><p>{state?.quote.quote ? `Bid ${state.quote.quote.bid} / Ask ${state.quote.quote.ask} · ${state.quote.quote.event_time}` : "No live quote available"}</p>
-      <article><StructureChart output={output} /></article></section>
+      <p>Feed: {state?.quote.status ?? "Unavailable"}{state?.quote.quote?.time_offset_seconds ? ` · Explicit feed time correction: −${state.quote.quote.time_offset_seconds}s · raw: ${state.quote.quote.raw_event_time}` : ""}</p><article><StructureChart output={output} /></article></section>
     <section><h2>Matrix &amp; Regime</h2><p>{state?.research_mode === "live_observation" ? "Current observation" : "Last recorded calculation; not a live readiness indicator"}</p><div className="grid">
       {(output.matrix?.resolutions ?? []).map((r) => <article key={r.name}><h3>{r.name}</h3><p className="status">{r.direction} · {r.status}</p></article>)}
       <article><h3>Regime</h3><p>{output.regime?.state.label ?? "Unavailable"}</p><p>{output.regime?.state.reason ?? "Waiting for confirmed structure"}</p></article>

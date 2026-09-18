@@ -5,7 +5,7 @@ import os
 import threading
 from collections import deque
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any, Literal, Protocol
 from uuid import uuid4
@@ -37,6 +37,8 @@ class Quote(BaseModel):
     digits: int
     event_time: datetime
     received_at: datetime
+    raw_event_time: datetime | None = None
+    time_offset_seconds: int = 0
 
 
 class Snapshot(BaseModel):
@@ -63,9 +65,18 @@ class QuoteSource(Protocol):
 
 
 def make_quote(
-    symbol: str, bid: float, ask: float, digits: int, time_msc: int, received_at: datetime
+    symbol: str,
+    bid: float,
+    ask: float,
+    digits: int,
+    time_msc: int,
+    received_at: datetime,
+    *,
+    time_offset_seconds: int = 0,
 ) -> Quote:
     """Validate the full quote before formatting; never turn invalid prices into live data."""
+    if type(time_offset_seconds) is not int or abs(time_offset_seconds) > 50400:
+        raise FeedError("invalid_time_offset", "error")
     if not 0 <= digits <= 10 or time_msc <= 0:
         raise FeedError("invalid_quote", "error")
     try:
@@ -81,7 +92,8 @@ def make_quote(
         bid_price, ask_price = bid_price.quantize(quantum), ask_price.quantize(quantum)
         if bid_price <= 0:
             raise FeedError("invalid_quote", "error")
-        event_time = datetime.fromtimestamp(time_msc / 1000, UTC)
+        raw_event_time = datetime.fromtimestamp(time_msc / 1000, UTC)
+        event_time = raw_event_time - timedelta(seconds=time_offset_seconds)
     except (InvalidOperation, ValueError, OverflowError, OSError) as exc:
         raise FeedError("invalid_quote", "error") from exc
     return Quote(
@@ -92,13 +104,20 @@ def make_quote(
         digits=digits,
         event_time=event_time,
         received_at=received_at,
+        raw_event_time=raw_event_time,
+        time_offset_seconds=time_offset_seconds,
     )
 
 
 class Mt5Source:
     """Use only the explicitly configured, already-running terminal and visible symbol."""
 
-    def __init__(self, path: str | None, symbol: str | None) -> None:
+    def __init__(
+        self, path: str | None, symbol: str | None, *, time_offset_seconds: int = 0
+    ) -> None:
+        if type(time_offset_seconds) is not int or abs(time_offset_seconds) > 50400:
+            raise ValueError("invalid_time_offset")
+        self.time_offset_seconds = time_offset_seconds
         self.path, self.symbol = path, symbol
         self.module: Any = None
         self.initialized = False
@@ -138,7 +157,13 @@ class Mt5Source:
         if tick is None:
             raise FeedError("quote_unavailable")
         return make_quote(
-            self.symbol, tick.bid, tick.ask, info.digits, tick.time_msc, datetime.now(UTC)
+            self.symbol,
+            tick.bid,
+            tick.ask,
+            info.digits,
+            tick.time_msc,
+            datetime.now(UTC),
+            time_offset_seconds=self.time_offset_seconds,
         )
 
     def close(self) -> None:
@@ -231,7 +256,10 @@ class QuoteService:
 
 def configured_service() -> QuoteService:
     symbol = os.environ.get("NEXORA_MT5_SYMBOL")
-    return QuoteService(Mt5Source(os.environ.get("NEXORA_MT5_PATH"), symbol), symbol)
+    offset = int(os.environ.get("NEXORA_MT5_TIME_OFFSET_SECONDS", "0"))
+    return QuoteService(
+        Mt5Source(os.environ.get("NEXORA_MT5_PATH"), symbol, time_offset_seconds=offset), symbol
+    )
 
 
 def _to_quality_status(status: QuoteStatus) -> QualityStatus:
