@@ -56,6 +56,19 @@ Invoke-RestMethod http://127.0.0.1:8000/paper/replay
 ```
 Expected: API returns local-only paper order/fill/ledger trace from `RiskDecision` outputs with checkpointed idempotency state.
 
+### Operations readiness and alerts (P13)
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/operations/readiness
+Invoke-RestMethod http://127.0.0.1:8000/operations/alerts
+```
+Expected: explicit `ready|degraded` readiness with reason codes plus observable alerts for quote/quality/paper status.
+
+### Local recovery drill (P13)
+```powershell
+.venv/Scripts/python scripts/recovery_drill.py
+```
+Expected: migration presence checks and deterministic paper replay hash with checkpoint evidence.
+
 ## Validation
 ```powershell
 .tools/Scripts/uv lock --check

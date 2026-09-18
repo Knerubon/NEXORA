@@ -64,6 +64,24 @@ class EventEnvelope(BaseModel):
     payload: dict[str, object]
 
 
+class OperationsReadiness(BaseModel):
+    schema_version: Literal[1] = 1
+    status: Literal["ready", "degraded"]
+    reasons: tuple[str, ...]
+    quote_status: str
+    quality_status: str
+    paper_status: str
+
+
+class OperationsAlert(BaseModel):
+    schema_version: Literal[1] = 1
+    code: str
+    severity: Literal["info", "warning", "critical"]
+    message: str
+    component: Literal["quote", "quality", "paper"]
+    observed_at: str
+
+
 def create_app(service: QuoteService | None = None, *, start_worker: bool = True) -> FastAPI:
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
@@ -181,6 +199,87 @@ def create_app(service: QuoteService | None = None, *, start_worker: bool = True
         response.headers["Cache-Control"] = "no-store"
         backtest: BacktestLabService = request.app.state.backtest
         return {"schema_version": 1, **backtest.paper_replay()}
+
+    @application.get("/operations/readiness", response_model=OperationsReadiness)
+    def operations_readiness(request: Request, response: Response) -> OperationsReadiness:
+        _assert_local_http(request)
+        response.headers["Cache-Control"] = "no-store"
+        feed: QuoteService = request.app.state.quotes
+        backtest: BacktestLabService = request.app.state.backtest
+        quote_snapshot = feed.snapshot()
+        quality_snapshot = feed.quality_snapshot()
+        paper_snapshot = backtest.paper_snapshot()
+        reasons: list[str] = []
+        if quote_snapshot.status != "live":
+            reasons.append(f"quote_{quote_snapshot.status}")
+        if quality_snapshot.status not in {"live", "partial", "complete"}:
+            reasons.append(f"quality_{quality_snapshot.status}")
+        if paper_snapshot["status"] != "running":
+            reasons.append(f"paper_{paper_snapshot['status']}")
+        return OperationsReadiness(
+            status="degraded" if reasons else "ready",
+            reasons=tuple(reasons),
+            quote_status=quote_snapshot.status,
+            quality_status=quality_snapshot.status,
+            paper_status=str(paper_snapshot["status"]),
+        )
+
+    @application.get("/operations/alerts")
+    def operations_alerts(request: Request, response: Response) -> dict[str, object]:
+        _assert_local_http(request)
+        response.headers["Cache-Control"] = "no-store"
+        feed: QuoteService = request.app.state.quotes
+        backtest: BacktestLabService = request.app.state.backtest
+        quote_snapshot = feed.snapshot()
+        quality_snapshot = feed.quality_snapshot()
+        paper_snapshot = backtest.paper_snapshot()
+        observed_at = (
+            quote_snapshot.quote.received_at.isoformat()
+            if quote_snapshot.quote is not None
+            else "unknown"
+        )
+        alerts: list[OperationsAlert] = []
+        if quote_snapshot.status != "live":
+            alerts.append(
+                OperationsAlert(
+                    code=f"quote_{quote_snapshot.status}",
+                    severity="warning",
+                    message=f"Quote stream status is {quote_snapshot.status}.",
+                    component="quote",
+                    observed_at=observed_at,
+                )
+            )
+        if quality_snapshot.status in {"disconnected", "error", "stale", "clock_skew"}:
+            alerts.append(
+                OperationsAlert(
+                    code=f"quality_{quality_snapshot.status}",
+                    severity="critical",
+                    message=f"Quality monitor reported {quality_snapshot.status}.",
+                    component="quality",
+                    observed_at=quality_snapshot.observed_at.isoformat(),
+                )
+            )
+        if paper_snapshot["status"] in {"paused", "kill_switch"}:
+            alerts.append(
+                OperationsAlert(
+                    code=f"paper_{paper_snapshot['status']}",
+                    severity="warning",
+                    message=f"Paper simulator is {paper_snapshot['status']}.",
+                    component="paper",
+                    observed_at=observed_at,
+                )
+            )
+        if not alerts:
+            alerts.append(
+                OperationsAlert(
+                    code="operations_nominal",
+                    severity="info",
+                    message="No active operational alerts.",
+                    component="quality",
+                    observed_at=observed_at,
+                )
+            )
+        return {"schema_version": 1, "alerts": [item.model_dump(mode="json") for item in alerts]}
 
     @application.websocket("/ws/quotes")
     async def stream_quotes(websocket: WebSocket) -> None:

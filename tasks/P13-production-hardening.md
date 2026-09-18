@@ -1,6 +1,6 @@
 ---
 task: "P13"
-status: "blocked"
+status: "in_review"
 depends_on: ["tasks/P12-paper-trading.md"]
 agents: ["agents/rin/AGENT.md", "agents/architect/AGENT.md", "agents/developer/AGENT.md", "agents/tester/AGENT.md", "agents/reviewer/AGENT.md", "agents/security/AGENT.md"]
 skills: ["skills/postgres/SKILL.md", "skills/fastapi/SKILL.md", "skills/websocket/SKILL.md", "skills/paper-trading/SKILL.md", "skills/testing/SKILL.md", "skills/security/SKILL.md"]
@@ -51,11 +51,19 @@ Rin -> Architect/Quant decisions (ตาม scope) -> Developer -> Tester -> Rev
 FAIL ให้ expected/actual + minimal reproduction; self-review ระบุ independent review pending และเปิด draft PR
 
 ## Execution record
-- Implementation: not_started
-- Context additions: ADR-007 สำหรับ numbering, dependency policy และ preserved evidence; docs/development.md สำหรับ validation commands
-- Decisions: pending ตาม decision gates; ไม่มีสูตรหรือ numeric defaults ที่อนุมัติใน task นี้
-- Changed files / commit / PR: none (implementation)
-- Checks: not_run (implementation)
-- Review: pending
-- Blockers: dependency completion evidence และ decisions ด้านบน
-- Next action: ตรวจ dependencies แล้วเสนอ contracts/decisions พร้อม golden expectations ก่อน implementation
+- Implementation: local operations readiness/alerts contracts, unauthorized REST+WS guards validation, deterministic recovery drill script, and dashboard system-readiness surface wired
+- Context additions: [ADR-017](../docs/decisions/ADR-017-production-hardening-local-operations.md), [docs/development.md](../docs/development.md) operations/recovery commands
+- Decisions: degraded-readiness fail-closed status with explicit reason codes, synthetic operations alerts, and migration-presence + deterministic replay checkpoint drill as local hardening evidence
+- Changed files / commit / PR: `apps/api/nexora_api/main.py`, `apps/web/app/page.tsx`, `tests/test_dashboard_api.py`, `scripts/recovery_drill.py`, `docs/decisions/ADR-017-production-hardening-local-operations.md`, `docs/development.md`
+- Checks:
+  - `d:/NEXORA/NEXORA/.venv/Scripts/python.exe -m pytest tests/test_dashboard_api.py tests/test_paper.py tests/test_backtest.py tests/test_health.py`: PASS
+  - `d:/NEXORA/NEXORA/.venv/Scripts/python.exe -m ruff check apps/api/nexora_api packages/nexora/backtest packages/nexora/paper tests/test_dashboard_api.py scripts/recovery_drill.py`: PASS
+  - `d:/NEXORA/NEXORA/.venv/Scripts/python.exe -m mypy apps/api/nexora_api packages/nexora/backtest packages/nexora/paper tests/test_dashboard_api.py scripts/recovery_drill.py`: PASS
+  - `d:/NEXORA/NEXORA/.venv/Scripts/python.exe scripts/recovery_drill.py`: PASS
+  - `npm --prefix apps/web run lint`: PASS
+  - `npm --prefix apps/web run typecheck`: PASS
+  - `npm --prefix apps/web run build`: PASS
+  - `d:/NEXORA/NEXORA/.venv/Scripts/python.exe -m pytest tests`: PASS
+- Review: self-review complete; independent review pending
+- Blockers: security review evidence and independent review pending before done gate
+- Next action: open draft PR for P13 and collect security/reviewer evidence
