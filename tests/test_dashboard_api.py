@@ -48,17 +48,20 @@ def test_dashboard_state_config_quality_and_history_endpoints() -> None:
         quality = client.get("/quality", headers={"origin": "http://localhost:3000"})
         history = client.get("/history?limit=2", headers={"origin": "http://localhost:3000"})
         backtest = client.get("/backtest/runs", headers={"origin": "http://localhost:3000"})
+        risk = client.get("/risk/replay", headers={"origin": "http://localhost:3000"})
 
     assert state.status_code == 200
     assert config.status_code == 200
     assert quality.status_code == 200
     assert history.status_code == 200
     assert backtest.status_code == 200
+    assert risk.status_code == 200
     assert state.json()["backtest_lab_status"] == "ready"
     assert config.json()["local_only"] is True
     assert len(history.json()["quote_history"]) == 2
     assert len(history.json()["quality_history"]) == 2
     assert len(backtest.json()["runs"]) == 3
+    assert "accepted" in risk.json()
 
 
 def test_dashboard_blocks_non_local_origin() -> None:
