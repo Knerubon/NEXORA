@@ -58,15 +58,17 @@ function StructureChart({ output }: { output: Output }) {
   const width = Math.max(1400, columns.length * 30 + 420), height = Math.max(600, rows * 26);
   const top = min + rows * rowStep;
   const y = (price: number) => 26 + (top - price) / rowStep * 26;
+  // Keep price coordinates for labels/overlays; glyphs occupy the cell above each boundary.
+  const glyphY = (price: number) => y(price) - 13;
   const levels = (output.structure?.levels ?? []).filter((l) => l.status === "confirmed").slice(-12);
   return <div className="pnf-workspace">
     <div className="pnf-scroll" tabIndex={0} aria-label="Scrollable point and figure chart">
       <svg width={width} height={height + 52} role="img" aria-label="Point and figure: green X rising boxes, red O falling boxes">
-        <defs><pattern id="pnf-grid" width="30" height="26" patternUnits="userSpaceOnUse"><path d="M 30 0 L 0 0 0 26" fill="none" stroke="#dfe3e7" strokeWidth="1" /></pattern></defs>
+        <defs><pattern id="pnf-grid" x="75" y="26" width="30" height="26" patternUnits="userSpaceOnUse"><path d="M 30 0 L 0 0 0 26" fill="none" stroke="#dfe3e7" strokeWidth="1" /></pattern></defs>
         <rect width="100%" height="100%" fill="white" /><rect x="75" y="13" width={width-75} height={height+26} fill="url(#pnf-grid)" />
         {levels.map((l,i) => <g key={i}><rect x="0" y={y(Number(l.price))-13} width={width} height="26" fill={l.side === "support" ? "#527dea" : "#ef5350"} opacity=".34" /><title>{l.side}: {l.price} · confirmed</title></g>)}
         {Array.from({length: rows+1},(_,i) => {const price = top-i*rowStep; return <g key={i}><line x1="0" x2={width} y1={y(price)} y2={y(price)} stroke="#e5e7eb" /><text x="8" y={y(price)+4} fontSize="11" fill="#707780">{price.toFixed(2)}</text></g>;})}
-        {cells.map((c,i) => {const x = 90 + columns.findIndex((col) => col.column_id === c.column)*30; return <g key={i}><title>{`Column ${c.column} · ${c.direction} · ${c.price.toFixed(2)}`}</title>{c.direction === "X" ? <path d={`M ${x-5} ${y(c.price)-5} l 10 10 m 0 -10 l -10 10`} stroke="#09a77a" strokeWidth="2" fill="none" /> : <circle cx={x} cy={y(c.price)} r="5" stroke="#f34b55" strokeWidth="2" fill="none" />}</g>;})}
+        {cells.map((c,i) => {const x = 90 + columns.findIndex((col) => col.column_id === c.column)*30; return <g key={i} data-pnf-glyph="" data-price={c.price}><title>{`Column ${c.column} · ${c.direction} · ${c.price.toFixed(2)}`}</title>{c.direction === "X" ? <path d={`M ${x-5} ${glyphY(c.price)-5} l 10 10 m 0 -10 l -10 10`} stroke="#09a77a" strokeWidth="2" fill="none" /> : <circle cx={x} cy={glyphY(c.price)} r="5" stroke="#f34b55" strokeWidth="2" fill="none" />}</g>;})}
         {prices.length > 0 && <g><line x1="75" x2={width} y1={y(latest)} y2={y(latest)} stroke="#64748b" strokeDasharray="4 5" /><title>Latest observed price: {latest}</title></g>}
       </svg>
     </div>
