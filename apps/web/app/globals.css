@@ -41,3 +41,31 @@ table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: 12px; border-bottom: 1px solid #29363e; font-size: 13px; }
 details { padding: 12px 0; overflow-wrap: anywhere; }
 .warning { color: #edac9e; border: 1px solid #754740; padding: 16px; }
+/* Chart-first observation workspace. */
+:root { color-scheme: light; background: #f5f7fa; color: #17212e; }
+main { max-width: none; padding: 18px 24px; }
+header { padding-bottom: 14px; border-color: #dce2e8; }
+.badge { color: #147b62; border-color: #a8d7c6; }
+.intro { padding: 12px 0 0; margin-bottom: 12px; }
+h1 { font-size: 25px; letter-spacing: -.5px; margin: 10px 0; font-weight: 600; }
+h1 span, .subtitle { color: #697586; }
+.subtitle { margin: 6px 0; font-size: 12px; }
+section { margin-bottom: 24px; }
+section > p { font-size: 12px; overflow-wrap: anywhere; }
+article { background: white; border-color: #dce2e8; }
+article p { color: #5d6979; }
+article .status { color: #167458; }
+button, select { background: white; color: #223248; border-color: #ccd5df; }
+th, td, fieldset, footer { border-color: #dce2e8; }
+.pnf-workspace { position: relative; border: 1px solid #dce2e8; background: white; }
+.pnf-scroll { overflow: auto; height: 67vh; min-height: 420px; }
+.pnf-scroll svg { width: auto; max-width: none; height: auto; min-height: 0; }
+.matrix-float { position: absolute; top: 12px; right: 14px; background: #ffffffed; border: 1px solid #e3e6eb; border-radius: 9px; box-shadow: 0 4px 16px #17212e16; padding: 14px; width: 260px; font-size: 13px; }
+.matrix-mini { display: flex; justify-content: space-between; border-bottom: 1px solid #dce2e8; padding: 12px 0; margin-bottom: 9px; }
+.matrix-mini > div { display: flex; flex-direction: column; gap: 10px; text-align: center; }
+.matrix-mini span { color: #6b7280; font-size: 11px; text-transform: uppercase; }
+.matrix-mini b { font-size: 20px; }
+.matrix-float small { color: #768292; font-size: 10px; }
+.up { color: #09a77a; } .down { color: #f34b55; }
+.chart-caption { padding: 9px 12px; font-size: 11px; color: #687587; border-top: 1px solid #e3e6eb; }
+@media(max-width:540px) { main { padding: 12px; } .intro { padding: 12px 0; } .matrix-float { position: static; width: auto; box-shadow: none; margin: 8px; } .brand { font-size: 12px; } .badge { font-size: 8px; letter-spacing: 0; } }

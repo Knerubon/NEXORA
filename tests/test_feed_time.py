@@ -1,0 +1,44 @@
+from datetime import UTC, datetime, timedelta
+
+import pytest
+from nexora_api.quotes import FeedError, Mt5Source, Quote, QuoteService, make_quote
+
+
+def test_explicit_offset_preserves_raw_time_and_default_utc() -> None:
+    now = datetime(2026, 9, 18, 10, tzinfo=UTC)
+    raw = now + timedelta(hours=3)
+    stamp = int(raw.timestamp() * 1000)
+    unchanged = make_quote("XAUUSD-STD", 100, 101, 2, stamp, now)
+    corrected = make_quote("XAUUSD-STD", 100, 101, 2, stamp, now, time_offset_seconds=10800)
+    assert unchanged.event_time == raw
+    assert corrected.event_time == now
+    assert corrected.raw_event_time == raw
+    assert corrected.time_offset_seconds == 10800
+
+
+@pytest.mark.parametrize("age,status", [(0, "live"), (20, "stale"), (-20, "clock_skew")])
+def test_corrected_feed_still_enforces_freshness(age: int, status: str) -> None:
+    now = datetime(2026, 9, 18, 10, tzinfo=UTC)
+    stamp = int((now + timedelta(hours=3, seconds=-age)).timestamp() * 1000)
+    quote = make_quote("XAUUSD-STD", 100, 101, 2, stamp, now, time_offset_seconds=10800)
+
+    class Source:
+        def read(self) -> Quote:
+            return quote
+
+        def close(self) -> None:
+            pass
+
+    service = QuoteService(Source(), "XAUUSD-STD")
+    delivered: list[Quote] = []
+    service.on_quote = delivered.append
+    service.poll(now)
+    assert service.snapshot().status == status
+    assert len(delivered) == (1 if status == "live" else 0)
+
+
+def test_invalid_offset_fails_closed() -> None:
+    with pytest.raises(ValueError, match="invalid_time_offset"):
+        Mt5Source(None, None, time_offset_seconds=999999)
+    with pytest.raises(FeedError, match="invalid_time_offset"):
+        make_quote("X", 1, 2, 2, 1000, datetime.now(UTC), time_offset_seconds=999999)

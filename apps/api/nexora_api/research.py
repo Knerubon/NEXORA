@@ -50,7 +50,16 @@ def observe_quote(runtime: ResearchRuntime, quote: Quote) -> None:
     """Quote polling is observation with unknown coverage, never full tick capture."""
     try:
         events = runtime.events()
-        identity = "quote:" + canonical_hash((quote.symbol, quote.event_time, quote.bid, quote.ask))
+        identity = "quote:" + canonical_hash(
+            (
+                quote.symbol,
+                quote.event_time,
+                quote.bid,
+                quote.ask,
+                quote.raw_event_time,
+                quote.time_offset_seconds,
+            )
+        )
         if any(event.identity_key == identity for event in events):
             return
         source = runtime.config.pipeline.resolutions[0].pnf.price_source
@@ -62,14 +71,17 @@ def observe_quote(runtime: ResearchRuntime, quote: Quote) -> None:
         event = NormalizedPriceEvent(
             schema_version=1,
             identity_key=identity,
-            source="MT5-quote-observation",
+            source=f"MT5-quote-observation:time-offset={quote.time_offset_seconds}",
             symbol=quote.symbol,
             kind="tick",
             event_time=quote.event_time,
             received_at=quote.received_at,
             source_sequence=sequence,
             source_order=sequence,
-            source_event_id=identity,
+            source_event_id=(
+                f"{identity}:raw-time={quote.raw_event_time or quote.event_time}"
+                f":offset={quote.time_offset_seconds}"
+            ),
             price_source=cast(PriceSource, source),
             units=runtime.config.units,
             precision=quote.digits,

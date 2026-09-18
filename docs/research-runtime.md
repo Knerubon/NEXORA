@@ -62,3 +62,7 @@ Default drill uses isolated synthetic data. Operator mode refuses an existing ba
 - Reviewed strategy parameters, held-out/walk-forward research, instrument units and portfolio/partial-close risk semantics before claiming realistic paper execution.
 
 These are open acceptance gates, not passes inferred from the existence of code or successful unit tests.
+
+## Feed timestamp correction
+
+`NEXORA_MT5_TIME_OFFSET_SECONDS` defaults to 0 (UTC contract). Set a nonzero value only as an explicit, verified local correction; positive values are subtracted. [ADR-019](decisions/ADR-019-explicit-feed-time-correction.md) documents the observed +3-hour feed exception, raw provenance, continued stale/future checks and revalidation requirement. This is not automatic timezone or DST detection. The dashboard shows the applied correction and raw time.
