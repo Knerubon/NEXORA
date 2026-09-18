@@ -74,6 +74,9 @@ class PaperSession:
             market_price=price,
             event_time=proposal.signal.decision_time,
         )
+        if execution.fill is None and decision.action == "allow":
+            # A paused simulator did not open a position; do not strand a reservation.
+            self.risk.release(proposal.proposal_id, realized_pnl=Decimal("0"))
         if execution.fill is not None:
             self._active.append(proposal.proposal_id)
             if not self.simulator.state().open_positions:

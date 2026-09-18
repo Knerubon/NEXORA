@@ -27,7 +27,7 @@ Read existing packages/nexora/{risk,paper,backtest,matrix,structure,market_regim
 - [x] Quality completeness, bounded retention and regime exit hysteresis corrected.
 - [x] Dashboard displays actual structure/evidence/results; reconnect resynchronizes authoritative snapshots.
 - [x] Existing relevant tests, new regression/integration tests, lint/type/build and diff checks pass.
-- [ ] Self-review and draft PR; independent review/security sign-off still required. No merge.
+- [x] Self-review and draft PR; independent review/security sign-off still required. No merge.
 
 ## Safety
 
@@ -38,7 +38,7 @@ Research/backtest/local paper only. No live/demo broker orders, credentials in t
 - Implementation: implemented; in_review, not production certified
 - Base: e16ef3411adba27eb4b9b917d71bfb467094985f
 - Environment: Windows/Python 3.13; lockfile-managed environment. PostgreSQL tools and Docker unavailable on PATH.
-- Checks: `.venv/Scripts/python -m pytest -q`: 79 passed, 1 skipped (isolated PostgreSQL unavailable locally), 2 dependency deprecation warnings.
+- Checks: `.venv/Scripts/python -m pytest -q`: 80 passed, 1 skipped (isolated PostgreSQL unavailable locally), 2 dependency deprecation warnings.
 - `.venv/Scripts/ruff check .`: PASS; `.venv/Scripts/mypy`: PASS (81 files); changed Python formatting: PASS.
 - `.venv/Scripts/python scripts/recovery_drill.py`: PASS, SQLite backup restored in a fresh process with matching paper/risk hash; PostgreSQL restore/host crash/RPO/RTO not verified.
 - `.venv/Scripts/python scripts/smoke_api.py`: PASS; `.tools/Scripts/uv lock --check` and `.tools/Scripts/uv build`: PASS.
@@ -46,5 +46,8 @@ Research/backtest/local paper only. No live/demo broker orders, credentials in t
 - Browser QA on isolated synthetic data: chart/levels/evidence/results render, paper pause/resume persists, configured research run appears; mobile 390px viewport has no page overflow (table scrolls locally).
 - Task graph/metadata/link audit: PASS, 16 manifests, 259 metadata paths, 150 local Markdown links. P1–P4, requirements/architecture and ADR-001–006 blobs preserved against e16ef34.
 - `git diff --check`: PASS. PostgreSQL integration is wired to an ephemeral CI service; its result must be recorded separately.
-- Review: pending; self-review only
+- Review: self-review complete; independent review/security sign-off pending. Draft [PR #13](https://github.com/Knerubon/NEXORA/pull/13); not merged.
 - Next action: independent review/security sign-off; close the explicit release gates in docs/research-runtime.md before claiming production readiness.
+
+- CI initial implementation 6fa30f8: [run 35308427199](https://github.com/Knerubon/NEXORA/actions/runs/35308427199) PASS, including real isolated PostgreSQL 18 transaction/durability/conflict integration and web checks. This is not target-host backup/restore evidence.
+- Follow-up self-review: release an approved reservation when paused paper execution produces no fill; restart regression passes.

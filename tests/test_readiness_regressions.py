@@ -386,3 +386,24 @@ def test_api_recorded_runs_reconnect_and_storage_failure(
         assert result.status_code == 200
         assert "storage_unavailable" in result.json()["reasons"]
     journal.close()
+
+
+def test_paused_paper_does_not_leak_risk_reservation(tmp_path: Path) -> None:
+    journal = SQLiteJournal(tmp_path / "paused.sqlite")
+    cfg = PaperSessionConfig(
+        "paper-paused",
+        "paper-account",
+        D("10000"),
+        D("0"),
+        D("0"),
+        risk_policy_fixture(),
+        D("1"),
+        D("1"),
+    )
+    session = PaperSession(cfg, journal)
+    session.control("pause")
+    session.submit(proposal_fixture().signal, price=D("100"), quality="complete")
+    assert not session.simulator.fills()
+    assert session.risk.state().reserved_exposure == 0
+    assert PaperSession(cfg, journal).snapshot() == session.snapshot()
+    journal.close()
