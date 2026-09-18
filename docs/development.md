@@ -26,6 +26,17 @@ Invoke-RestMethod http://127.0.0.1:8000/health
 Expected: status `ok`, mode `research`; database/broker `not_configured`, engine `not_implemented`
 หยุดด้วย Ctrl+C; remote access ต้องมี authentication/encryption ก่อน
 
+### Dashboard + quality contracts (P9/DQ1)
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/config
+Invoke-RestMethod http://127.0.0.1:8000/state
+Invoke-RestMethod "http://127.0.0.1:8000/history?limit=5"
+Invoke-RestMethod http://127.0.0.1:8000/quality
+```
+Expected: local-only API contracts for realtime quote + quality sidecar status. `backtest_lab_status` remains `pending_p10` until P10 delivery.
+WebSocket channels: `ws://127.0.0.1:8000/ws/quotes` and `ws://127.0.0.1:8000/ws/events`
+Remote unauthenticated access is out of scope and must stay blocked by local host/origin policy.
+
 ## Validation
 ```powershell
 .tools/Scripts/uv lock --check
