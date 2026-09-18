@@ -47,15 +47,18 @@ def test_dashboard_state_config_quality_and_history_endpoints() -> None:
         config = client.get("/config", headers={"origin": "http://localhost:3000"})
         quality = client.get("/quality", headers={"origin": "http://localhost:3000"})
         history = client.get("/history?limit=2", headers={"origin": "http://localhost:3000"})
+        backtest = client.get("/backtest/runs", headers={"origin": "http://localhost:3000"})
 
     assert state.status_code == 200
     assert config.status_code == 200
     assert quality.status_code == 200
     assert history.status_code == 200
-    assert state.json()["backtest_lab_status"] == "pending_p10"
+    assert backtest.status_code == 200
+    assert state.json()["backtest_lab_status"] == "ready"
     assert config.json()["local_only"] is True
     assert len(history.json()["quote_history"]) == 2
     assert len(history.json()["quality_history"]) == 2
+    assert len(backtest.json()["runs"]) == 3
 
 
 def test_dashboard_blocks_non_local_origin() -> None:
@@ -82,3 +85,21 @@ def test_dashboard_event_stream_emits_quote_and_quality_snapshots() -> None:
     assert quote_event["event_type"] == "quote_snapshot"
     assert quality_event["event_type"] == "quality_snapshot"
     assert quality_event["payload"]["status"] in {"disconnected", "error", "unavailable", "unknown"}
+
+
+def test_backtest_compare_returns_selected_runs_only() -> None:
+    service = QuoteService(_StaticSource(), "XAUUSD")
+    service.poll(now=datetime(2026, 3, 3, 10, 0, 1, tzinfo=UTC))
+    app = create_app(service, start_worker=False)
+
+    with TestClient(app, base_url="http://localhost") as client:
+        runs_response = client.get("/backtest/runs", headers={"origin": "http://localhost:3000"})
+        runs = runs_response.json()["runs"]
+        selected = ",".join(run["run_id"] for run in runs[:2])
+        compared = client.get(
+            f"/backtest/compare?run_ids={selected}",
+            headers={"origin": "http://localhost:3000"},
+        )
+
+    assert compared.status_code == 200
+    assert len(compared.json()["runs"]) == 2
