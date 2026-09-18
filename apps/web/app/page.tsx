@@ -67,6 +67,14 @@ type PaperReplayResponse = {
   };
 };
 
+type OperationsReadiness = {
+  status: string;
+  reasons: string[];
+  quote_status: string;
+  quality_status: string;
+  paper_status: string;
+};
+
 const apiBase = process.env.NEXT_PUBLIC_NEXORA_API_URL ?? "http://127.0.0.1:8000";
 
 function statusLabel(status: string): string {
@@ -77,6 +85,8 @@ function statusLabel(status: string): string {
   if (status === "error") return "Error";
   if (status === "pending_p10") return "Pending P10";
   if (status === "running") return "Running";
+  if (status === "ready") return "Ready";
+  if (status === "degraded") return "Degraded";
   if (status === "paused") return "Paused";
   if (status === "kill_switch") return "Kill switch";
   if (status === "unavailable") return "Unavailable";
@@ -88,6 +98,7 @@ export default function Home() {
   const [backtestRuns, setBacktestRuns] = useState<BacktestRunsResponse["runs"]>([]);
   const [paperReplay, setPaperReplay] = useState<PaperReplayResponse | null>(null);
   const [paperStatus, setPaperStatus] = useState<string | null>(null);
+  const [readiness, setReadiness] = useState<OperationsReadiness | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -95,10 +106,11 @@ export default function Home() {
 
     const pullState = async () => {
       try {
-        const [stateResponse, runsResponse, paperResponse] = await Promise.all([
+        const [stateResponse, runsResponse, paperResponse, readinessResponse] = await Promise.all([
           fetch(`${apiBase}/state`, { cache: "no-store" }),
           fetch(`${apiBase}/backtest/runs`, { cache: "no-store" }),
           fetch(`${apiBase}/paper/replay`, { cache: "no-store" }),
+          fetch(`${apiBase}/operations/readiness`, { cache: "no-store" }),
         ]);
         if (!stateResponse.ok) {
           throw new Error(`state_fetch_failed_${stateResponse.status}`);
@@ -109,14 +121,19 @@ export default function Home() {
         if (!paperResponse.ok) {
           throw new Error(`paper_replay_fetch_failed_${paperResponse.status}`);
         }
+        if (!readinessResponse.ok) {
+          throw new Error(`readiness_fetch_failed_${readinessResponse.status}`);
+        }
         const data = (await stateResponse.json()) as DashboardState;
         const runs = (await runsResponse.json()) as BacktestRunsResponse;
         const paper = (await paperResponse.json()) as PaperReplayResponse;
+        const readinessSnapshot = (await readinessResponse.json()) as OperationsReadiness;
         if (active) {
           setState(data);
           setBacktestRuns(runs.runs);
           setPaperReplay(paper);
           setPaperStatus(paper.state.status);
+          setReadiness(readinessSnapshot);
           setError(null);
         }
       } catch (fetchError) {
@@ -191,9 +208,11 @@ export default function Home() {
       },
       {
         title: "System",
-        status: state ? statusLabel(state.quality.status) : "Loading",
+        status: readiness ? statusLabel(readiness.status) : state ? statusLabel(state.quality.status) : "Loading",
         detail: state
-          ? `Obs ${state.quality.counters.observed}, gap ${state.quality.counters.gaps}, reconnect ${state.quality.counters.reconnects}`
+          ? readiness
+            ? `${readiness.reasons.length > 0 ? readiness.reasons.join(", ") : "no alerts"} | Obs ${state.quality.counters.observed}, gap ${state.quality.counters.gaps}, reconnect ${state.quality.counters.reconnects}`
+            : `Obs ${state.quality.counters.observed}, gap ${state.quality.counters.gaps}, reconnect ${state.quality.counters.reconnects}`
           : "No health snapshot yet",
       },
       {
@@ -204,7 +223,7 @@ export default function Home() {
           : "No replay snapshot yet",
       },
     ],
-    [backtestRuns.length, paperReplay, paperStatus, state],
+    [backtestRuns.length, paperReplay, paperStatus, readiness, state],
   );
 
   return (

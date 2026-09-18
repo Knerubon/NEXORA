@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
 from fastapi.testclient import TestClient
 from nexora_api.main import create_app
 from nexora_api.quotes import FeedError, Quote, QuoteService
+from starlette.websockets import WebSocketDisconnect
 
 
 class _StaticSource:
@@ -50,6 +52,8 @@ def test_dashboard_state_config_quality_and_history_endpoints() -> None:
         backtest = client.get("/backtest/runs", headers={"origin": "http://localhost:3000"})
         risk = client.get("/risk/replay", headers={"origin": "http://localhost:3000"})
         paper = client.get("/paper/replay", headers={"origin": "http://localhost:3000"})
+        readiness = client.get("/operations/readiness", headers={"origin": "http://localhost:3000"})
+        alerts = client.get("/operations/alerts", headers={"origin": "http://localhost:3000"})
 
     assert state.status_code == 200
     assert config.status_code == 200
@@ -58,6 +62,8 @@ def test_dashboard_state_config_quality_and_history_endpoints() -> None:
     assert backtest.status_code == 200
     assert risk.status_code == 200
     assert paper.status_code == 200
+    assert readiness.status_code == 200
+    assert alerts.status_code == 200
     assert state.json()["backtest_lab_status"] == "ready"
     assert config.json()["local_only"] is True
     assert len(history.json()["quote_history"]) == 2
@@ -65,6 +71,8 @@ def test_dashboard_state_config_quality_and_history_endpoints() -> None:
     assert len(backtest.json()["runs"]) == 3
     assert "accepted" in risk.json()
     assert "fills" in paper.json()
+    assert "status" in readiness.json()
+    assert len(alerts.json()["alerts"]) >= 1
 
 
 def test_dashboard_blocks_non_local_origin() -> None:
@@ -72,7 +80,9 @@ def test_dashboard_blocks_non_local_origin() -> None:
     app = create_app(service, start_worker=False)
     with TestClient(app, base_url="http://localhost") as client:
         response = client.get("/state", headers={"origin": "http://evil.example"})
+        readiness = client.get("/operations/readiness", headers={"origin": "http://evil.example"})
     assert response.status_code == 403
+    assert readiness.status_code == 403
 
 
 def test_dashboard_event_stream_emits_quote_and_quality_snapshots() -> None:
@@ -93,6 +103,19 @@ def test_dashboard_event_stream_emits_quote_and_quality_snapshots() -> None:
     assert quality_event["event_type"] == "quality_snapshot"
     assert paper_event["event_type"] == "paper_snapshot"
     assert quality_event["payload"]["status"] in {"disconnected", "error", "unavailable", "unknown"}
+
+
+def test_dashboard_event_stream_rejects_untrusted_origin() -> None:
+    service = QuoteService(_StaticSource(), "XAUUSD")
+    app = create_app(service, start_worker=False)
+    with TestClient(app, base_url="http://localhost") as client:
+        with pytest.raises(WebSocketDisconnect) as disconnected:
+            with client.websocket_connect(
+                "/ws/events",
+                headers={"origin": "http://evil.example"},
+            ):
+                pass
+    assert disconnected.value.code == 1008
 
 
 def test_backtest_compare_returns_selected_runs_only() -> None:
