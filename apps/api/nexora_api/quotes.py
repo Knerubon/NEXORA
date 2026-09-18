@@ -110,7 +110,7 @@ def make_quote(
 
 
 class Mt5Source:
-    """Use only the explicitly configured, already-running terminal and visible symbol."""
+    """Use the already-running terminal and the currently visible symbol when no fixed symbol is configured."""
 
     def __init__(
         self, path: str | None, symbol: str | None, *, time_offset_seconds: int = 0
@@ -122,8 +122,30 @@ class Mt5Source:
         self.module: Any = None
         self.initialized = False
 
+    def _select_symbol(self) -> str:
+        if self.module is None:
+            raise FeedError("adapter_not_installed")
+        candidates = []
+        symbols_get = getattr(self.module, "symbols_get", None)
+        if callable(symbols_get):
+            candidates.extend(symbols_get())
+        if not candidates and self.symbol:
+            candidates = [self.symbol]
+        for entry in candidates:
+            name = getattr(entry, "name", entry)
+            if not name:
+                continue
+            info = self.module.symbol_info(name)
+            if info is not None and getattr(info, "visible", False):
+                return name
+        if self.symbol:
+            info = self.module.symbol_info(self.symbol)
+            if info is not None and getattr(info, "visible", False):
+                return self.symbol
+        raise FeedError("symbol_not_visible")
+
     def read(self) -> Quote:
-        if not self.path or not self.symbol:
+        if not self.path:
             raise FeedError("not_configured")
         try:
             psutil = importlib.import_module("psutil")
@@ -148,14 +170,20 @@ class Mt5Source:
         if terminal is None or not terminal.connected:
             self.close()
             raise FeedError("terminal_disconnected", "disconnected")
-        info = self.module.symbol_info(self.symbol)
+        symbol = self.symbol or self._select_symbol()
+        info = self.module.symbol_info(symbol)
         if info is None:
             raise FeedError("symbol_not_found")
-        if not info.visible:
-            raise FeedError("symbol_not_visible")
-        tick = self.module.symbol_info_tick(self.symbol)
+        if not getattr(info, "visible", False):
+            try:
+                symbol = self._select_symbol()
+                info = self.module.symbol_info(symbol)
+            except FeedError:
+                raise FeedError("symbol_not_visible") from None
+        tick = self.module.symbol_info_tick(symbol)
         if tick is None:
             raise FeedError("quote_unavailable")
+        self.symbol = symbol
         return make_quote(
             self.symbol,
             tick.bid,
