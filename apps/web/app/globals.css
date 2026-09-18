@@ -69,3 +69,48 @@ th, td, fieldset, footer { border-color: #dce2e8; }
 .up { color: #09a77a; } .down { color: #f34b55; }
 .chart-caption { padding: 9px 12px; font-size: 11px; color: #687587; border-top: 1px solid #e3e6eb; }
 @media(max-width:540px) { main { padding: 12px; } .intro { padding: 12px 0; } .matrix-float { position: static; width: auto; box-shadow: none; margin: 8px; } .brand { font-size: 12px; } .badge { font-size: 8px; letter-spacing: 0; } }
+
+/* Match the compact, chart-first NEXORA observation reference. */
+main { padding: 10px; }
+header { min-height: 52px; }
+.intro { display: flex; align-items: center; gap: 20px; padding: 4px 0; margin-bottom: 10px; }
+h1 { font-size: 20px; letter-spacing: -.4px; white-space: nowrap; }
+.subtitle { font-size: 14px; max-width: none; }
+.price-structure > p { margin: 6px 0; color: #697586; }
+.chart-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 50px; padding: 8px 12px; border-bottom: 1px solid #dce2e8; }
+.chart-title, .chart-controls { display: flex; align-items: center; gap: 12px; }
+.chart-title { font-size: 14px; }
+.chart-title span { color: #707780; }
+.chart-controls { gap: 8px; flex-shrink: 0; }
+.chart-controls button { margin: 0; padding: 6px 12px; min-height: 32px; cursor: pointer; }
+.chart-controls output { font-size: 12px; color: #697586; min-width: 40px; text-align: center; }
+.chart-body { position: relative; }
+.pnf-scroll { height: calc(100dvh - 220px); min-height: 420px; }
+.pnf-scroll:focus-visible { outline: 2px solid #147b62; outline-offset: -2px; }
+.matrix-float { top: 20px; right: 18px; width: 300px; padding: 16px; font-size: 14px; }
+.matrix-mini { padding: 16px 0; }
+.matrix-mini span { font-size: 12px; }
+.matrix-mini b { font-size: 24px; }
+.matrix-float small { font-size: 12px; }
+.is-focused { position: fixed; inset: 0; z-index: 100; display: flex; flex-direction: column; }
+.is-focused .chart-body { flex: 1; min-height: 0; }
+.is-focused .pnf-scroll { height: 100%; min-height: 0; }
+@media (max-width: 760px) {
+  .intro { flex-wrap: wrap; gap: 0; }
+  .intro h1 { margin-bottom: 0; }
+  .chart-toolbar { flex-wrap: wrap; }
+  .chart-controls { flex-wrap: wrap; }
+  .chart-title { flex-wrap: wrap; gap: 8px; }
+}
+@media (max-width: 540px) {
+  main { padding: 10px; }
+  header { gap: 8px; }
+  .brand { letter-spacing: 1.5px; }
+  .badge { padding: 8px; }
+  .subtitle { font-size: 12px; }
+  .matrix-float { position: static; width: auto; margin: 8px; }
+  .pnf-scroll { min-height: 360px; height: 55dvh; }
+  .is-focused .chart-body { display: flex; flex-direction: column; }
+  .is-focused .pnf-scroll { flex: 1; }
+  .is-focused .matrix-float { flex-shrink: 0; }
+}

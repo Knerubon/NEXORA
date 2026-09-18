@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 type Column = { column_id: number; direction: string; open_price: string; close_price: string };
 type Signal = { signal_id: string; side: string; decision_time: string; reasons: string[]; source_refs: string[]; status: string };
@@ -30,7 +30,10 @@ const metric = (value: string | null) => value === null ? "Undefined" : Number(v
 
 const api = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
 
-function StructureChart({ output, liveQuote }: { output: Output; liveQuote?: { bid: string; ask: string } | null }) {
+function StructureChart({ output, liveQuote }: { output: Output; liveQuote?: { symbol: string; bid: string; ask: string } | null }) {
+  const [zoom, setZoom] = useState(120);
+  const [focused, setFocused] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const columns = (output.columns ?? []).slice(-60);
   const ids = new Set(columns.map((c) => c.column_id));
   const transitions = (output.transitions ?? []).filter((t) => ids.has(t.column_id));
@@ -68,18 +71,41 @@ function StructureChart({ output, liveQuote }: { output: Output; liveQuote?: { b
     return y(cellBoundary) - 13;
   };
   const levels = (output.structure?.levels ?? []).filter((l) => l.status === "confirmed").slice(-12);
-  return <div className="pnf-workspace">
-    <div className="pnf-scroll" tabIndex={0} aria-label="Scrollable point and figure chart">
-      <svg width={width} height={height + 52} role="img" aria-label="Point and figure: green X rising boxes, red O falling boxes">
+  const symbol = liveQuote?.symbol ?? output.event?.symbol ?? "Waiting for feed";
+  const scale = zoom / 100;
+  function latestPrice() {
+    const viewport = scrollRef.current;
+    if (!viewport) return;
+    viewport.scrollTo({
+      left: Math.max(0, (90 + (columns.length - 1) * 30) * scale - viewport.clientWidth / 2),
+      top: Math.max(0, y(latest) * scale - viewport.clientHeight / 2),
+      behavior: "smooth",
+    });
+  }
+  return <div className={`pnf-workspace${focused ? " is-focused" : ""}`} onKeyDown={(event) => { if (event.key === "Escape") setFocused(false); }}>
+    <div className="chart-toolbar">
+      <div className="chart-title"><strong>{symbol}</strong><span>Point &amp; Figure · box {transitions.length ? safeStep : "—"}</span></div>
+      <div className="chart-controls" role="group" aria-label="Chart controls">
+        <button aria-label="Zoom out" disabled={zoom <= 60} onClick={() => setZoom((value) => value - 20)}>−</button>
+        <output aria-label="Chart zoom">{zoom}%</output>
+        <button aria-label="Zoom in" disabled={zoom >= 200} onClick={() => setZoom((value) => value + 20)}>+</button>
+        <button disabled={!prices.length} onClick={latestPrice}>Latest price</button>
+        <button aria-pressed={focused} onClick={() => setFocused((value) => !value)}>{focused ? "Exit focus" : "Focus chart"}</button>
+      </div>
+    </div>
+    <div className="chart-body">
+    <div ref={scrollRef} className="pnf-scroll" tabIndex={0} aria-label="Scrollable point and figure chart">
+      <svg width={width * scale} height={(height + 52) * scale} viewBox={`0 0 ${width} ${height + 52}`} role="img" aria-label="Point and figure: green X rising boxes, red O falling boxes">
         <defs><pattern id="pnf-grid" x="75" y="26" width="30" height="26" patternUnits="userSpaceOnUse"><path d="M 30 0 L 0 0 0 26" fill="none" stroke="#dfe3e7" strokeWidth="1" /></pattern></defs>
         <rect width="100%" height="100%" fill="white" /><rect x="75" y="13" width={width-75} height={height+26} fill="url(#pnf-grid)" />
         {levels.map((l,i) => <g key={i}><rect x="0" y={y(Number(l.price))-13} width={width} height="26" fill={l.side === "support" ? "#527dea" : "#ef5350"} opacity=".34" /><title>{l.side}: {l.price} · confirmed</title></g>)}
-        {Array.from({length: rows+1},(_,i) => {const price = top-i*rowStep; return <g key={i}><line x1="0" x2={width} y1={y(price)} y2={y(price)} stroke="#e5e7eb" /><text x="8" y={y(price)+4} fontSize="11" fill="#707780">{price.toFixed(2)}</text></g>;})}
+        {Array.from({length: rows+1},(_,i) => {const price = top-i*rowStep; return <g key={i}><line x1="0" x2={width} y1={y(price)} y2={y(price)} stroke="#e5e7eb" />{Array.from({ length: Math.ceil(width / 240) }, (_, label) => <text key={label} x={8 + label * 240} y={y(price)+4} fontSize="11" fill="#707780">{price.toFixed(2)}</text>)}</g>;})}
         {cells.map((c,i) => {const x = 90 + columns.findIndex((col) => col.column_id === c.column)*30; return <g key={i} data-pnf-glyph="" data-price={c.price}><title>{`Column ${c.column} · ${c.direction} · ${c.price.toFixed(2)}`}</title>{c.direction === "X" ? <path d={`M ${x-5} ${glyphY(c.price)-5} l 10 10 m 0 -10 l -10 10`} stroke="#09a77a" strokeWidth="2" fill="none" /> : <circle cx={x} cy={glyphY(c.price)} r="5" stroke="#f34b55" strokeWidth="2" fill="none" />}</g>;})}
         {prices.length > 0 && <g><line x1="75" x2={width} y1={y(latest)} y2={y(latest)} stroke="#64748b" strokeDasharray="4 5" /><title>{liveQuote ? `Latest live quote: ${latest.toFixed(2)}` : `Latest observed price: ${latest}`}</title></g>}
       </svg>
     </div>
-    <aside className="matrix-float"><strong>Matrix: {output.event?.symbol ?? liveQuote ? (liveQuote ? "Live MT5 quote" : "Waiting for feed") : "Waiting for feed"}</strong><div className="matrix-mini">{(output.matrix?.resolutions ?? []).map((r) => <div key={r.name}><span>{r.name}</span><b className={r.direction === "X" ? "up" : "down"}>{r.direction === "X" || r.direction === "O" ? r.direction : "—"}</b><small>{r.status}</small></div>)}</div><small>Actual configured resolutions · observation</small></aside>
+    <aside className="matrix-float"><strong>Matrix: {symbol}</strong><div className="matrix-mini">{(output.matrix?.resolutions ?? []).map((r) => <div key={r.name}><span>{r.name}</span><b className={r.direction === "X" ? "up" : "down"}>{r.direction === "X" || r.direction === "O" ? r.direction : "—"}</b><small>{r.status}</small></div>)}</div><small>Actual configured resolutions · observation</small></aside>
+    </div>
     <div className="chart-caption">{liveQuote ? `Box ${safeStep} | ${columns.length} columns | ${cells.length} confirmed boxes | Latest live quote ${latest.toFixed(2)} · ${liveQuote.bid} / ${liveQuote.ask}` : cells.length ? `${columns.length} columns · ${cells.length} confirmed boxes · latest box ${safeStep}` : "Waiting for the first confirmed box — no sample data"} · {output.config_version ?? "Unconfigured"}</div>
   </div>;
 }
@@ -149,7 +175,7 @@ export default function Home() {
     <section className="intro"><h1>Point &amp; Figure <span> / X · O</span></h1>
       <p className="subtitle">{state?.research_mode === "live_observation" ? "Live observation" : "Recorded research / waiting for a configured feed"}. No broker orders.</p></section>
     {error && <p role="alert" className="warning">{error}</p>}
-    <section><h2>Price Structure</h2><p>{state?.quote.quote ? `${state.quote.quote.symbol} | Bid ${state.quote.quote.bid} / Ask ${state.quote.quote.ask} · ${state.quote.quote.event_time}` : "No live quote available"}</p>
+    <section className="price-structure" aria-label="Price Structure"><p>{state?.quote.quote ? `Bid ${state.quote.quote.bid} / Ask ${state.quote.quote.ask} · ${state.quote.quote.event_time}` : "No live quote available"}</p>
       <p>Feed: {state?.quote.status ?? "Unavailable"}{state?.quote.quote?.time_offset_seconds ? ` · Explicit feed time correction: −${state.quote.quote.time_offset_seconds}s · raw: ${state.quote.quote.raw_event_time}` : ""}</p><StructureChart output={output} liveQuote={state?.quote.quote ?? null} /></section>
     <section><h2>Matrix &amp; Regime</h2><p>{state?.research_mode === "live_observation" ? "Current observation" : "Last recorded calculation; not a live readiness indicator"}</p><div className="grid">
       {(output.matrix?.resolutions ?? []).map((r) => <article key={r.name}><h3>{r.name}</h3><p className="status">{r.direction} · {r.status}</p></article>)}
