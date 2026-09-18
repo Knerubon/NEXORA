@@ -77,3 +77,9 @@ scripts/             # development/runtime helpers
 6. Paper/research mode comes before any live order execution.
 
 See `docs/requirements.md` and `docs/architecture.md` as the project is built out.
+
+## Execution roadmap
+
+See [P1–P13 roadmap](docs/roadmap.md) and [ADR-007 numbering/boundary clarification](docs/decisions/ADR-007-task-roadmap.md).
+Includes additive market-data quality (DQ1), dataset versioning (P10), a separate Risk Engine (P11), local Paper Trading (P12) and Production Hardening (P13).
+Requirements/architecture remain the source of truth; no live/demo broker orders. Historical task records are preserved; merged implementation is not proof of completed independent review.

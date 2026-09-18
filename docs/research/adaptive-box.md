@@ -16,7 +16,7 @@ ATR-derived sizing เป็น candidate; ยังไม่ยืนยัน 
 5. Prefix replay ต้องให้ output prefix เดิมเมื่อ append future data; snapshot/restart ต้องเท่ากับ continuous run
 6. บันทึก ADR, golden fixtures และข้อจำกัดก่อนเปิด adaptive mode
 
-P7 เปรียบเทียบ fixed/adaptive ด้วย protocol เดียวกัน; research result ไม่เป็นอนุญาต live execution
+[P10](../../tasks/P10-backtest.md) เปรียบเทียบ fixed/adaptive ด้วย protocol เดียวกัน; research result ไม่เป็นอนุญาต live execution
 
 ## P4 implementation experiment note
 

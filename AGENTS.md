@@ -6,7 +6,7 @@ NEXORA เป็น price-structure research platform แยกจาก Quantor
 
 - [docs/requirements.md](docs/requirements.md) คือ product scope; [docs/architecture.md](docs/architecture.md) คือ system design
 - ไฟล์นี้กำหนด workflow; task/skill/research/ADR ห้าม override source of truth แบบเงียบ ๆ หากขัดกันให้บันทึก conflict และหยุดเฉพาะส่วนที่พึ่ง decision
-- Phase 1 ครอบคลุม P1–P8: research, observation, backtest และ paper simulation เท่านั้น ห้าม live auto-trading หรือส่ง broker order รวมถึง demo order
+- Phase 1 ครอบคลุม execution tasks P1–P13 และ DQ1 ตาม [ADR-007](docs/decisions/ADR-007-task-roadmap.md): research, observation, backtest และ paper simulation เท่านั้น ห้าม live auto-trading หรือส่ง broker order รวมถึง demo order
 - ห้าม secrets ใน code, docs, fixtures, logs, PR และ config examples; ใช้ runtime environment/local secret store เท่านั้น
 - ห้ามเปิด PostgreSQL/MT5 สู่ public Internet; remote web ต้อง authenticated + encrypted
 - OX screenshots เป็น observation เท่านั้น; BOX 10/20/30 ไม่ใช่ confirmed specification และห้าม copy proprietary implementation
@@ -17,7 +17,7 @@ NEXORA เป็น price-structure research platform แยกจาก Quantor
 ตัวอย่างคำสั่ง: `ทำ tasks/P1-foundation.md ตาม AGENTS.md`
 
 1. ตรวจ branch, working tree และไฟล์เดิม; อย่าทับงานผู้อื่น อ่าน root และ scoped AGENTS.md ที่เกี่ยวข้อง
-2. เปิด task ที่ผู้ใช้ระบุ; ถ้าระบุเพียง Pn ให้ resolve เป็นไฟล์ Pn ใน tasks ห้ามเริ่ม phase ถัดไปเอง
+2. ใช้ [roadmap](docs/roadmap.md) และ ADR-007 resolve historical P5–P8 references; P1–P4 records เป็น immutable history ใน refactor นี้ เปิด task ที่ผู้ใช้ระบุ; ถ้าระบุเพียง Pn ให้ resolve เป็นไฟล์ Pn ใน tasks ห้ามเริ่ม phase ถัดไปเอง
 3. อ่านเฉพาะ `docs`, `skills`, `agents` ที่ task ระบุ; ทุก task ต้องระบุ requirements และ architecture และต้องตรวจ dependency evidence ก่อนเริ่ม implementation
 4. `agents/*/AGENT.md` คือ role reference; `skills/*/SKILL.md` คือ repo-local instruction ที่เปิดตาม path ใน task ไม่ถือว่ามี runtime registration/auto-discovery
 5. อย่าโหลด docs/skills ทั้ง directory หรือแปลเอกสารซ้ำ อ่าน code/tests เฉพาะ scope และ dependency ที่จำเป็น
@@ -94,6 +94,6 @@ next_action: <specific action>
 
 ใช้ branch `codex/<scope>`; commit เป็น English แบบ `docs:`, `feat:`, `fix:`; ไม่ push ตรง main และไม่ auto-merge
 ก่อนแก้ตรวจ path collision; ก่อน commit ตรวจ staged diff, unintended files และ secrets
-ปัจจุบัน repo เริ่มจาก docs-only จึงยังไม่มี application test/lint/build commands; P1 ต้องกำหนดและทดลอง commands จริงก่อนบันทึก
+Repo มี runnable P1–P4 implementation แล้ว; commands อยู่ใน [development guide](docs/development.md) และ historical task evidence ต้องตรวจว่าใช้ได้กับ checkout ปัจจุบันก่อนอ้าง pass
 สำหรับ docs-only: ตรวจ links/context paths, metadata, dependency graph, source-of-truth diff และ `git diff --check`; อย่าอ้างว่า application tests ผ่าน
 PR ระบุ problem/outcome, changed scope, validation, decisions และ limitations โดยใช้ evidence จริง

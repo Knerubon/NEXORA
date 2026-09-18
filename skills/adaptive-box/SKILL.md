@@ -1,6 +1,6 @@
 ---
 name: adaptive-box
-description: ออกแบบหรือทดสอบ fixed/adaptive box sizing และ causal update policy ใน P4/P7
+description: ออกแบบหรือทดสอบ fixed/adaptive box sizing และ causal update policy ใน P4/P10
 ---
 
 # adaptive-box

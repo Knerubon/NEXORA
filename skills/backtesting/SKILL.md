@@ -1,6 +1,6 @@
 ---
 name: backtesting
-description: สร้าง deterministic replay, comparison และ metrics สำหรับ P7 หรือ paper replay validation
+description: สร้าง deterministic replay, comparison และ metrics สำหรับ P10/P11 หรือ paper replay validation
 ---
 
 # backtesting

@@ -1,17 +1,17 @@
 ---
-task: "P5"
+task: "P7"
 status: "blocked"
-depends_on: ["tasks/P4-adaptive-box.md"]
+depends_on: ["tasks/P6-market-structure.md"]
 agents: ["agents/rin/AGENT.md", "agents/quant/AGENT.md", "agents/architect/AGENT.md", "agents/developer/AGENT.md", "agents/tester/AGENT.md", "agents/reviewer/AGENT.md"]
-skills: ["skills/market-structure/SKILL.md", "skills/pnf/SKILL.md", "skills/adaptive-box/SKILL.md", "skills/postgres/SKILL.md", "skills/testing/SKILL.md"]
-docs: ["docs/requirements.md", "docs/architecture.md", "docs/decisions/ADR-007-task-roadmap.md", "docs/development.md", "docs/decisions/ADR-005-pnf-fixed-box-rules.md", "docs/decisions/ADR-006-adaptive-box-sizing.md"]
+skills: ["skills/market-structure/SKILL.md", "skills/adaptive-box/SKILL.md", "skills/postgres/SKILL.md", "skills/testing/SKILL.md"]
+docs: ["docs/requirements.md", "docs/architecture.md", "docs/decisions/ADR-007-task-roadmap.md", "docs/development.md"]
 translation_needed: false
 ---
 
-# P5 — Multi-Resolution Matrix
+# P7 — Market Regime
 
 ## เป้าหมาย / traceability
-FR-04: Fast/Medium/Slow อย่างน้อยสาม independent resolutions; แยก structure, regime และ signal rules ไป P6–P8
+FR-05 ส่วน trend/range/high-volatility metadata; ไม่เพิ่ม signal หรือ execution rules
 
 ## Entry gate / context
 อ่าน [AGENTS.md](../AGENTS.md) และ exact paths ใน metadata; ตรวจ status, execution, review และ merge evidence ของทุก dependency ก่อน ready
@@ -20,24 +20,22 @@ Blocker: ต้องยืนยัน dependency completion evidence และ
 หากเพิ่ม context ให้บันทึก exact path + เหตุผลก่อนอ่าน; scoped AGENTS.md และ dependency evidence เป็นข้อยกเว้น
 
 ## Scope / deliverables
-Paths: `packages/nexora/matrix`, P3/P4 public contracts, `tests`, `infra` เมื่อ persist snapshots; ไม่แก้ completed engine behavior
-Deliverables: versioned MatrixConfig/MatrixSnapshot, fan-out orchestration, persistence/rebuild contract และ schema/examples ให้ P6–P9
+Paths: `packages/nexora/market_regime`, `tests`, `infra`
+Deliverables: RegimeState/schema, causal decision table, persisted evidence และ rebuild
 
 Phase 1: research/backtest/local paper simulation เท่านั้น; ห้าม live/demo broker orders, secrets, public DB/MT5 และ unverified OX semantics
 P1–P4 behavior/history คงเดิม; contract change ต้อง explicit ADR/version/migration ไม่ rewrite output ของ run เดิม
 
 ## Decision gates / ขั้นตอน
-1. ล็อก resolution identity, config/version/effective boundary และ event watermark ของ snapshot
-2. แต่ละ resolution ใช้ P3/P4 public contract พร้อม isolated state; Fast/Medium/Slow ไม่ใช่ OX 10/20/30 mapping
-3. ระบุ current X/O direction/latest transition, warm-up/unavailable/stale/conflicting states; ไม่สร้าง pivot/regime/signal สูตรใน task นี้
-4. นิยาม snapshot persistence/restart และ configuration change เป็น explicit new version/run
+1. Quant กำหนด inputs/lookback/threshold units, warm-up, transition/hysteresis policy และ overlap/precedence ระหว่าง trend/range/high-volatility ใน ADR
+2. ระบุ confirmation/effective time, source structure/Matrix refs และ unknown/stale states
+3. Version rules/config; ห้ามตั้ง thresholds จาก OX screenshot หรือข้อมูลอนาคต
 
 ## Acceptance / validation
-- [ ] สาม configs ไม่ share mutable state; interleaved symbols/resolutions ให้ผลเท่ากับ isolated replay
-- [ ] golden sequence ตรวจ direction/latest transition/watermark; empty/warm-up/conflicting directions แสดงตามข้อมูลจริง
-- [ ] duplicate/out-of-order เป็นไปตาม P2/P3 contracts; snapshot/restart/rebuild เท่ากับ continuous replay
-- [ ] append future events ไม่เปลี่ยน snapshot prefix; config change ไม่ rewrite historical snapshots
-- [ ] persisted snapshot trace ถึง event identities, P&F/sizing/config versions; ส่ง schema/examples รวม stale/error ให้ downstream
+- [ ] golden trend/range/high-volatility และ threshold/overlap transitions ตรง decision table
+- [ ] warm-up, flat/zero-volatility, gaps และ stale data ไม่สร้าง regime certainty ปลอม
+- [ ] prefix invariance, replay/restart และ interleaved symbols/resolutions ผ่าน
+- [ ] ทุก classification มี reasons, input refs, effective time, rule/config versions และ persist/rebuild evidence
 - [ ] ผ่าน root Definition of Done; มี exact commands/results, handoff, review และ merge evidence ก่อน done
 
 ใช้ commands ใน docs/development.md ตาม changed scope; behavior ต้องมี synthetic golden/boundary/replay tests และ relevant lint/type/integration checks
