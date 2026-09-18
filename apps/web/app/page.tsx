@@ -2,10 +2,11 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-type Column = { column_id: number; direction: string; open_price: string; close_price: string };
+import { StructureChart } from "./structure-chart";
+import type { Column, Transition } from "./pnf-layout";
 type Signal = { signal_id: string; side: string; decision_time: string; reasons: string[]; source_refs: string[]; status: string };
 type Output = {
-  columns?: Column[];
+  columns?: Column[]; transitions?: Transition[];
   matrix?: { alignment: string; resolutions: { name: string; direction: string; status: string }[] };
   structure?: { levels: { side: string; price: string; status: string }[] };
   regime?: { state: { label: string; reason: string } };
@@ -26,24 +27,6 @@ type Paper = { status: string; accepted: number; rejected: number; fills: unknow
 const metric = (value: string | null) => value === null ? "Undefined" : Number(value).toLocaleString("en", { maximumFractionDigits: 4 });
 
 const api = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
-
-function StructureChart({ output }: { output: Output }) {
-  const columns = (output.columns ?? []).slice(-60);
-  if (!columns.length) return <p>No calculated P&amp;F columns yet. Configure research and ingest recorded data or observe the local feed.</p>;
-  const levels = (output.structure?.levels ?? []).filter((l) => l.status === "confirmed").slice(-12);
-  const prices = [...columns.flatMap((c) => [Number(c.open_price), Number(c.close_price)]), ...levels.map((l) => Number(l.price))];
-  const min = Math.min(...prices), max = Math.max(...prices);
-  const y = (price: number) => 240 - ((price-min)/(max-min || 1))*210;
-  return <svg viewBox="0 0 900 280" role="img" aria-label="Calculated P&F columns and confirmed support/resistance">
-    {levels.map((l, i) => <g key={`${l.side}-${i}`}><line x1="35" x2="820" y1={y(Number(l.price))} y2={y(Number(l.price))} stroke="#7998ac" strokeDasharray="4 6" />
-      <text x="825" y={y(Number(l.price))} fill="#afc3d0" fontSize="11">{l.price}</text></g>)}
-    {columns.map((c, i) => { const x = 45 + i*(760/Math.max(columns.length, 1)); const color = c.direction === "X" ? "#a5e5d0" : "#edac9e";
-      return <g key={c.column_id}><title>{`${c.direction}: ${c.open_price} → ${c.close_price}`}</title>
-        <line x1={x} x2={x} y1={y(Number(c.open_price))} y2={y(Number(c.close_price))} stroke={color} strokeWidth="3" />
-        <text x={x-4} y={y(Number(c.close_price))-7} fill={color} fontSize="12">{c.direction}</text></g>; })}
-    <text x="35" y="272" fill="#91a5b0" fontSize="11">Last {columns.length} P&amp;F columns · open → close · dashed lines: confirmed S/R</text>
-  </svg>;
-}
 
 export default function Home() {
   const [state, setState] = useState<State | null>(null);
