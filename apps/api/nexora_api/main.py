@@ -161,6 +161,13 @@ def create_app(service: QuoteService | None = None, *, start_worker: bool = True
         compared = backtest.compare(selected)
         return {"schema_version": 1, "runs": compared}
 
+    @application.get("/risk/replay")
+    def risk_replay(request: Request, response: Response) -> dict[str, object]:
+        _assert_local_http(request)
+        response.headers["Cache-Control"] = "no-store"
+        backtest: BacktestLabService = request.app.state.backtest
+        return {"schema_version": 1, **backtest.risk_replay()}
+
     @application.websocket("/ws/quotes")
     async def stream_quotes(websocket: WebSocket) -> None:
         if not _is_local_ws(websocket):

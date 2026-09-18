@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from decimal import Decimal
 
 from nexora.backtest.fixtures import fixture_config, fixture_dataset_manifest, fixture_signals
 from nexora.backtest.hashing import canonical_hash
 from nexora.backtest.repository import BacktestRunStore
 from nexora.backtest.runner import BacktestRunner
+from nexora.risk import RiskEngine, replay_signals_with_risk, risk_policy_fixture
 
 
 @dataclass(slots=True)
@@ -42,3 +44,18 @@ class BacktestLabService:
 
     def compare(self, run_ids: tuple[str, ...]) -> tuple[dict[str, object], ...]:
         return self.store.compare(run_ids)
+
+    def risk_replay(self) -> dict[str, object]:
+        engine = RiskEngine(risk_policy_fixture())
+        result = replay_signals_with_risk(
+            engine=engine,
+            signals=fixture_signals(),
+            quality_status="complete",
+            starting_equity=Decimal("10000"),
+        )
+        return {
+            "accepted": result.accepted,
+            "rejected": result.rejected,
+            "decisions": [asdict(decision) for decision in result.decisions],
+            "state": asdict(engine.state()),
+        }

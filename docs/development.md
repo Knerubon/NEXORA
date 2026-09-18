@@ -44,6 +44,12 @@ Invoke-RestMethod "http://127.0.0.1:8000/backtest/compare?run_ids=<run_id_1>,<ru
 ```
 Expected: API returns stored reproducible runs and compare payload from persisted metrics; UI reads these values directly.
 
+### Risk replay contracts (P11)
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/risk/replay
+```
+Expected: API returns policy-governed allow/reject decisions over replayed signals with deterministic counters/state.
+
 ## Validation
 ```powershell
 .tools/Scripts/uv lock --check
