@@ -25,3 +25,9 @@ User authorized correcting the observed feed timestamp defect and configuring th
 2026-09-18: three advancing ticks on the user-selected running terminal were 10799.20–10799.54 seconds ahead of local UTC. This supports a temporary explicit 10800-second correction for this feed, not a general broker timezone/DST claim. Terminal/account settings unchanged.
 
 Local verification: 86 passed, 1 PostgreSQL test skipped (service unavailable), two existing dependency deprecation warnings. Ruff and mypy (82 files) pass; web lint/typecheck/build pass; diff check passes. Actual feed status live, recorded events increasing, no processing error, P&F column visible in browser. Paper disabled. Preview uses bid with fixed 0.5/1/2 price-unit boxes, reversal 2, from labelled example assumptions; no strategy validation claim. Self-review only; independent review pending.
+
+## User-requested chart presentation follow-up
+
+User requested Point & Figure X/O cells matching the supplied visual reference. Scope adds apps/web/app/page.tsx and globals.css; use skills/frontend/SKILL.md. Render confirmed transition box prices (including per-transition effective box sizes), no browser trading-rule calculation. White grid, green X/red O, actual confirmed support/resistance bands and floating Fast/Medium/Slow matrix. No inferred BOX 10/20/30 or H1/H4 indicators. Retain real feed status, explicit time correction and local-only paper boundary. Render window capped to 60 columns/2500 cells; history is not fabricated.
+
+Chart follow-up verification: web lint/typecheck/build PASS; browser shows green X and red O per confirmed price, blue confirmed support band, actual Bid/Ask and resolution states. Narrow layout keeps chart scrolling inside its panel; Matrix moves below chart. No fabricated historical columns.
