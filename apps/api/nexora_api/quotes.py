@@ -7,7 +7,7 @@ from collections import deque
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Protocol, cast
 from uuid import uuid4
 
 from nexora.market_data import (
@@ -110,7 +110,7 @@ def make_quote(
 
 
 class Mt5Source:
-    """Use the already-running terminal and the currently visible symbol when no fixed symbol is configured."""
+    """Use the running terminal and visible symbol when no fixed symbol is configured."""
 
     def __init__(
         self, path: str | None, symbol: str | None, *, time_offset_seconds: int = 0
@@ -137,7 +137,7 @@ class Mt5Source:
                 continue
             info = self.module.symbol_info(name)
             if info is not None and getattr(info, "visible", False):
-                return name
+                return cast(str, name)
         if self.symbol:
             info = self.module.symbol_info(self.symbol)
             if info is not None and getattr(info, "visible", False):

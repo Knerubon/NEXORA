@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime
+from datetime import datetime
 from decimal import Decimal
+from typing import cast
 
 from nexora.market_regime import RegimeSnapshot
 from nexora.matrix import MatrixSnapshot
@@ -73,7 +74,9 @@ class SignalEngine:
             regime=regime,
             matrix=matrix,
         )
-        action, score = self._resolve_action_and_score(assessment.buy_points, assessment.sell_points)
+        action, score = self._resolve_action_and_score(
+            assessment.buy_points, assessment.sell_points
+        )
         if matrix.alignment == "mixed" or regime.state.label in {"range", "high_volatility"}:
             action = "WAIT"
             score = min(score, self.config.wait_score_max)
@@ -157,7 +160,7 @@ class SignalEngine:
                 source_refs=source_refs,
             ),
         )
-        self._last_decision = signal.decision
+        self._last_decision = cast(SignalDecision, signal.decision)
         if self._history and self._is_duplicate(self._history[-1], signal):
             return self.snapshot()
         self._history.append(signal)
@@ -241,7 +244,9 @@ class SignalEngine:
             )
         source_refs.append(pnf_ref)
 
-        structure_side, structure_reason, structure_code, structure_ref = self._structure_evidence(structure)
+        structure_side, structure_reason, structure_code, structure_ref = self._structure_evidence(
+            structure
+        )
         if structure_side == "BUY":
             buy_points += self.config.weights.structure
             positive.append(
@@ -277,7 +282,9 @@ class SignalEngine:
                     polarity="neutral",
                     reason="Matrix disagreement detected.",
                     source_refs=tuple(
-                        state.latest_transition.identity_key if state.latest_transition is not None else f"matrix:{state.name}:none"
+                        state.latest_transition.identity_key
+                        if state.latest_transition is not None
+                        else f"matrix:{state.name}:none"
                         for state in matrix.resolutions
                     ),
                 )
@@ -362,7 +369,9 @@ class SignalEngine:
             )
         source_refs.extend(matrix_refs)
 
-        regime_side, regime_reason, regime_code = self._regime_evidence(regime=regime, matrix_side=matrix_side)
+        regime_side, regime_reason, regime_code = self._regime_evidence(
+            regime=regime, matrix_side=matrix_side
+        )
         if regime_side == "BUY":
             buy_points += self.config.weights.regime
             positive.append(
@@ -461,7 +470,9 @@ class SignalEngine:
             ),
         )
 
-    def _resolve_action_and_score(self, buy_points: int, sell_points: int) -> tuple[SignalAction, int]:
+    def _resolve_action_and_score(
+        self, buy_points: int, sell_points: int
+    ) -> tuple[SignalAction, int]:
         if buy_points == 0 and sell_points == 0:
             return ("WAIT", 0)
         dominant = max(buy_points, sell_points)
@@ -501,7 +512,9 @@ class SignalEngine:
             tp2 = reference + (risk * self.config.target_rr_tp2)
             reward = tp2 - reference
         else:
-            invalidation = resistance.price if resistance is not None else _latest_high_pivot(structure)
+            invalidation = (
+                resistance.price if resistance is not None else _latest_high_pivot(structure)
+            )
             if invalidation is None or invalidation <= entry_zone.high:
                 return None
             risk = invalidation - entry_zone.high
@@ -523,10 +536,14 @@ class SignalEngine:
             rr,
         )
 
-    def _future_conditions(self, *, regime: RegimeSnapshot, matrix: MatrixSnapshot) -> tuple[str, ...]:
+    def _future_conditions(
+        self, *, regime: RegimeSnapshot, matrix: MatrixSnapshot
+    ) -> tuple[str, ...]:
         conditions: list[str] = []
         if matrix.alignment == "mixed":
-            conditions.append("Additional matrix alignment would strengthen directional confidence.")
+            conditions.append(
+                "Additional matrix alignment would strengthen directional confidence."
+            )
         if regime.state.label == "range":
             conditions.append("Breakout confirmation from range could strengthen setup.")
         if regime.state.label == "high_volatility":
@@ -572,18 +589,45 @@ class SignalEngine:
         if transition is None:
             return ("WAIT", "P&F transition unavailable.", "pnf_unavailable", "pnf:none")
         if transition.type == "reversal" and transition.direction == "X":
-            return ("BUY", "P&F reversal O→X confirmed.", "pnf_reversal_bullish", transition.identity_key)
+            return (
+                "BUY",
+                "P&F reversal O→X confirmed.",
+                "pnf_reversal_bullish",
+                transition.identity_key,
+            )
         if transition.type == "reversal" and transition.direction == "O":
-            return ("SELL", "P&F reversal X→O confirmed.", "pnf_reversal_bearish", transition.identity_key)
+            return (
+                "SELL",
+                "P&F reversal X→O confirmed.",
+                "pnf_reversal_bearish",
+                transition.identity_key,
+            )
         if transition.direction == "X":
-            return ("BUY", "P&F extension remains bullish.", "pnf_extension_bullish", transition.identity_key)
+            return (
+                "BUY",
+                "P&F extension remains bullish.",
+                "pnf_extension_bullish",
+                transition.identity_key,
+            )
         if transition.direction == "O":
-            return ("SELL", "P&F extension remains bearish.", "pnf_extension_bearish", transition.identity_key)
+            return (
+                "SELL",
+                "P&F extension remains bearish.",
+                "pnf_extension_bearish",
+                transition.identity_key,
+            )
         return ("WAIT", "P&F evidence is neutral.", "pnf_neutral", transition.identity_key)
 
-    def _structure_evidence(self, structure: StructureSnapshot) -> tuple[SignalAction, str, str, str]:
+    def _structure_evidence(
+        self, structure: StructureSnapshot
+    ) -> tuple[SignalAction, str, str, str]:
         if len(structure.pivots) < 2:
-            return ("WAIT", "Insufficient confirmed pivots for structure trend.", "structure_warmup", "pivot:none")
+            return (
+                "WAIT",
+                "Insufficient confirmed pivots for structure trend.",
+                "structure_warmup",
+                "pivot:none",
+            )
 
         if len(structure.pivots) >= 3:
             first, second, third = structure.pivots[-3], structure.pivots[-2], structure.pivots[-1]
@@ -593,32 +637,92 @@ class SignalEngine:
                 and third.kind == "low"
                 and abs(first.price - third.price) <= self.config.pattern_price_tolerance
             ):
-                return ("BUY", "Structure confirms a bullish double-bottom pattern.", "structure_double_bottom", third.source_transition_id)
+                return (
+                    "BUY",
+                    "Structure confirms a bullish double-bottom pattern.",
+                    "structure_double_bottom",
+                    third.source_transition_id,
+                )
             if (
                 first.kind == "high"
                 and second.kind == "low"
                 and third.kind == "high"
                 and abs(first.price - third.price) <= self.config.pattern_price_tolerance
             ):
-                return ("SELL", "Structure confirms a bearish double-top pattern.", "structure_double_top", third.source_transition_id)
-            if first.kind == "low" and second.kind == "high" and third.kind == "low" and third.price > first.price:
-                return ("BUY", "Structure shows higher low support after a pivot trough.", "structure_higher_low", third.source_transition_id)
-            if first.kind == "high" and second.kind == "low" and third.kind == "high" and third.price < first.price:
-                return ("SELL", "Structure shows lower high resistance after a pivot peak.", "structure_lower_high", third.source_transition_id)
+                return (
+                    "SELL",
+                    "Structure confirms a bearish double-top pattern.",
+                    "structure_double_top",
+                    third.source_transition_id,
+                )
+            if (
+                first.kind == "low"
+                and second.kind == "high"
+                and third.kind == "low"
+                and third.price > first.price
+            ):
+                return (
+                    "BUY",
+                    "Structure shows higher low support after a pivot trough.",
+                    "structure_higher_low",
+                    third.source_transition_id,
+                )
+            if (
+                first.kind == "high"
+                and second.kind == "low"
+                and third.kind == "high"
+                and third.price < first.price
+            ):
+                return (
+                    "SELL",
+                    "Structure shows lower high resistance after a pivot peak.",
+                    "structure_lower_high",
+                    third.source_transition_id,
+                )
 
         left = structure.pivots[-2]
         right = structure.pivots[-1]
         if left.kind == "low" and right.kind == "high" and right.price > left.price:
-            return ("BUY", "Structure shows HL→HH progression.", "structure_hl_hh", right.source_transition_id)
+            return (
+                "BUY",
+                "Structure shows HL→HH progression.",
+                "structure_hl_hh",
+                right.source_transition_id,
+            )
         if left.kind == "high" and right.kind == "low" and right.price < left.price:
-            return ("SELL", "Structure shows LH→LL progression.", "structure_lh_ll", right.source_transition_id)
+            return (
+                "SELL",
+                "Structure shows LH→LL progression.",
+                "structure_lh_ll",
+                right.source_transition_id,
+            )
         if left.kind == "low" and right.kind == "low" and right.price < left.price:
-            return ("SELL", "Latest confirmed structure continues to a lower low.", "structure_lower_low", right.source_transition_id)
+            return (
+                "SELL",
+                "Latest confirmed structure continues to a lower low.",
+                "structure_lower_low",
+                right.source_transition_id,
+            )
         if left.kind == "high" and right.kind == "high" and right.price > left.price:
-            return ("BUY", "Latest confirmed structure continues to a higher high.", "structure_higher_high", right.source_transition_id)
+            return (
+                "BUY",
+                "Latest confirmed structure continues to a higher high.",
+                "structure_higher_high",
+                right.source_transition_id,
+            )
         if right.kind == "high":
-            return ("BUY", "Latest confirmed structure pivot is a high.", "structure_recent_high", right.source_transition_id)
-        return ("SELL", "Latest confirmed structure pivot is a low.", "structure_recent_low", right.source_transition_id)
+            return (
+                "BUY",
+                "Latest confirmed structure pivot is a high.",
+                "structure_recent_high",
+                right.source_transition_id,
+            )
+        return (
+            "SELL",
+            "Latest confirmed structure pivot is a low.",
+            "structure_recent_low",
+            right.source_transition_id,
+        )
 
     def _support_resistance_evidence(
         self,
@@ -648,10 +752,17 @@ class SignalEngine:
         if transition.direction == "X":
             return ("BUY", "Price holds above support context.", "sr_support_context", "sr:context")
         if transition.direction == "O":
-            return ("SELL", "Price holds below resistance context.", "sr_resistance_context", "sr:context")
+            return (
+                "SELL",
+                "Price holds below resistance context.",
+                "sr_resistance_context",
+                "sr:context",
+            )
         return ("WAIT", "S/R context neutral.", "sr_neutral", "sr:neutral")
 
-    def _matrix_evidence(self, matrix: MatrixSnapshot) -> tuple[SignalAction, str, str, tuple[str, ...]]:
+    def _matrix_evidence(
+        self, matrix: MatrixSnapshot
+    ) -> tuple[SignalAction, str, str, tuple[str, ...]]:
         refs = tuple(
             state.latest_transition.identity_key
             if state.latest_transition is not None
@@ -674,11 +785,19 @@ class SignalEngine:
     ) -> tuple[SignalAction, str, str]:
         if regime.state.label == "trend" and matrix_side in {"BUY", "SELL"}:
             direction = "bullish" if matrix_side == "BUY" else "bearish"
-            return (matrix_side, f"Trend regime supports {direction} continuation.", "regime_trend_support")
+            return (
+                matrix_side,
+                f"Trend regime supports {direction} continuation.",
+                "regime_trend_support",
+            )
         if regime.state.label == "range":
             return ("WAIT", "Range regime requires breakout confirmation.", "regime_range_caution")
         if regime.state.label == "high_volatility":
-            return ("WAIT", "High volatility regime requires stricter confirmation.", "regime_volatility_caution")
+            return (
+                "WAIT",
+                "High volatility regime requires stricter confirmation.",
+                "regime_volatility_caution",
+            )
         return ("WAIT", "Regime evidence unavailable.", "regime_unknown")
 
     def _patterns(self, structure: StructureSnapshot) -> tuple[PatternEvidence, ...]:
@@ -785,7 +904,9 @@ class _Assessment:
 
 def _latest_transition(matrix: MatrixSnapshot) -> PnfTransition | None:
     candidates = [
-        state.latest_transition for state in matrix.resolutions if state.latest_transition is not None
+        state.latest_transition
+        for state in matrix.resolutions
+        if state.latest_transition is not None
     ]
     if not candidates:
         return None
