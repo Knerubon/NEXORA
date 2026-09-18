@@ -26,3 +26,15 @@ footer p { color: #92a6b0; font-size: 12px; line-height: 1.6; }
 a:focus-visible { outline: 2px solid #a5e5d0; outline-offset: 6px; }
 @media (max-width: 900px) { .grid { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 540px) { main { padding: 24px; } .brand span { display: none; } .intro { padding: 56px 0 40px; } .grid { grid-template-columns: 1fr; } .section-heading { align-items: flex-start; flex-direction: column; gap: 0; } }
+section { margin-bottom: 32px; }
+section > article { margin-bottom: 12px; }
+svg { display: block; width: 100%; height: auto; min-height: 160px; }
+button, select { background: #182b36; color: #e6edee; border: 1px solid #49616e; border-radius: 5px; padding: 10px 14px; margin: 6px; }
+button:disabled { opacity: .45; }
+button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid #a5e5d0; }
+fieldset { display: flex; flex-wrap: wrap; gap: 12px; border: 1px solid #29363e; margin: 16px 0; }
+.table-scroll { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 12px; border-bottom: 1px solid #29363e; font-size: 13px; }
+details { padding: 12px 0; overflow-wrap: anywhere; }
+.warning { color: #edac9e; border: 1px solid #754740; padding: 16px; }

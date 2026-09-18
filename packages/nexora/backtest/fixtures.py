@@ -2,41 +2,49 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+from nexora.backtest.datasets import manifest_for
 from nexora.backtest.models import (
     BacktestConfig,
     CostPolicy,
     DatasetManifest,
-    DatasetPartition,
     ExecutionPolicy,
     RunMode,
 )
+from nexora.market_data.models import NormalizedPriceEvent
 from nexora.signals import ResearchSignal
 
 
-def fixture_dataset_manifest() -> DatasetManifest:
-    return DatasetManifest(
-        dataset_id="dataset-xauusd-2026-03",
-        parent_dataset_id=None,
-        source="MT5",
-        symbol="XAUUSD",
-        price_source="ask",
-        units="USD/oz",
-        timezone="UTC",
-        range_start=datetime(2026, 3, 1, 0, 0, tzinfo=UTC),
-        range_end=datetime(2026, 3, 2, 0, 0, tzinfo=UTC),
-        schema_version=1,
-        normalizer_version="p2-v1",
-        order_policy="event_time,received_at,source_sequence,source_order,source_event_id,identity_key",
-        quality_status="complete",
-        quality_snapshot_ref="dq1:sequence:22",
-        partitions=(
-            DatasetPartition(name="raw", content_hash="raw-hash-v1", rows=1200),
-            DatasetPartition(name="normalized", content_hash="norm-hash-v1", rows=1100),
-        ),
+def fixture_events() -> tuple[NormalizedPriceEvent, ...]:
+    start = datetime(2026, 3, 1, 9, 0, tzinfo=UTC)
+    return tuple(
+        NormalizedPriceEvent(
+            schema_version=1,
+            identity_key=f"test:{i}",
+            source="synthetic-test",
+            symbol="XAUUSD",
+            kind="tick",
+            event_time=start + timedelta(seconds=seconds),
+            received_at=start + timedelta(seconds=seconds),
+            source_sequence=i,
+            source_order=i,
+            source_event_id=f"test:{i}",
+            price_source="ask",
+            units="USD/oz",
+            precision=1,
+            price=Decimal(price),
+            ask=Decimal(price),
+        )
+        for i, (seconds, price) in enumerate(
+            ((0, "100"), (2, "101"), (7, "103"), (300, "106"), (302, "105"), (307, "102")), 1
+        )
     )
+
+
+def fixture_dataset_manifest() -> DatasetManifest:
+    return manifest_for(fixture_events(), quality="complete")
 
 
 def fixture_config(mode: RunMode) -> BacktestConfig:

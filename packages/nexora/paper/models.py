@@ -77,6 +77,7 @@ class PaperCheckpoint:
     orders: tuple[PaperOrder, ...]
     fills: tuple[PaperFill, ...]
     ledger: tuple[PaperLedgerEntry, ...]
+    account_id: str = "paper-account"
 
 
 @dataclass(frozen=True, slots=True)

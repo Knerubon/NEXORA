@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Literal
@@ -28,9 +29,12 @@ class QualityConfig:
     latency_threshold_ms: int = 3000
     session_start_hour_utc: int = 0
     session_end_hour_utc: int = 24
-    version: str = "dq1-v1"
+    version: str = "dq1-v2"
+    history_limit: int = 240
 
     def __post_init__(self) -> None:
+        if self.history_limit < 1:
+            raise ValueError("invalid_history_limit")
         if not self.symbol:
             raise ValueError("missing_symbol")
         if self.freshness_threshold_seconds < 1:
@@ -85,21 +89,24 @@ class MarketDataQualityMonitor:
         self._last_source_sequence: int | None = None
         self._last_status: QualityStatus = "unknown"
         self._counters = QualityCounters()
-        self._history: list[QualitySnapshot] = [
-            QualitySnapshot(
-                schema_version=1,
-                symbol=config.symbol,
-                sequence=0,
-                observed_at=datetime.now(UTC),
-                status="unknown",
-                code="warming_up",
-                age_seconds=None,
-                latency_ms=None,
-                completeness="unknown",
-                counters=self._counters,
-                config_version=config.version,
-            )
-        ]
+        self._history: deque[QualitySnapshot] = deque(
+            [
+                QualitySnapshot(
+                    schema_version=1,
+                    symbol=config.symbol,
+                    sequence=0,
+                    observed_at=datetime.now(UTC),
+                    status="unknown",
+                    code="warming_up",
+                    age_seconds=None,
+                    latency_ms=None,
+                    completeness="unknown",
+                    counters=self._counters,
+                    config_version=config.version,
+                )
+            ],
+            maxlen=config.history_limit,
+        )
 
     def observe_event(
         self,
@@ -148,7 +155,7 @@ class MarketDataQualityMonitor:
         else:
             status = "live"
             code = "ok"
-            completeness = "complete"
+            completeness = "partial" if self._counters.gaps else "unknown"
         return self._append_snapshot(
             observed_at=when,
             status=status,
@@ -172,9 +179,7 @@ class MarketDataQualityMonitor:
             self._counters = replace(self._counters, reconnects=self._counters.reconnects + 1)
         if status in {"error", "unavailable"}:
             self._counters = replace(self._counters, rejected=self._counters.rejected + 1)
-        completeness: Literal["complete", "partial", "unknown"] = (
-            "complete" if status == "live" else "unknown"
-        )
+        completeness: Literal["complete", "partial", "unknown"] = "unknown"
         return self._append_snapshot(
             observed_at=when,
             status=status,
@@ -189,7 +194,7 @@ class MarketDataQualityMonitor:
 
     def history(self, *, limit: int = 100) -> tuple[QualitySnapshot, ...]:
         bounded = max(1, min(limit, len(self._history)))
-        return tuple(self._history[-bounded:])
+        return tuple(self._history)[-bounded:]
 
     def _append_snapshot(
         self,

@@ -3,6 +3,8 @@
 import importlib
 import os
 import threading
+from collections import deque
+from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, Literal, Protocol
@@ -69,8 +71,10 @@ def make_quote(
     try:
         bid_price, ask_price = Decimal(str(bid)), Decimal(str(ask))
         if (
-            not bid_price.is_finite() or not ask_price.is_finite()
-            or bid_price <= 0 or ask_price < bid_price
+            not bid_price.is_finite()
+            or not ask_price.is_finite()
+            or bid_price <= 0
+            or ask_price < bid_price
         ):
             raise FeedError("invalid_quote", "error")
         quantum = Decimal(1).scaleb(-digits)
@@ -145,6 +149,7 @@ class Mt5Source:
 
 class QuoteService:
     def __init__(self, source: QuoteSource, symbol: str | None) -> None:
+        self.on_quote: Callable[[Quote], None] | None = None
         self.source = source
         self.lock = threading.Lock()
         self.stop_event = threading.Event()
@@ -154,7 +159,7 @@ class QuoteService:
         self.current = Snapshot(
             stream_id=str(uuid4()), sequence=0, status="waiting", code="connecting", symbol=symbol
         )
-        self._history: list[Snapshot] = [self.current]
+        self._history: deque[Snapshot] = deque([self.current], maxlen=240)
 
     def snapshot(self) -> Snapshot:
         with self.lock:
@@ -167,7 +172,7 @@ class QuoteService:
     def history(self, *, limit: int = 120) -> tuple[Snapshot, ...]:
         with self.lock:
             bounded = max(1, min(limit, len(self._history)))
-            return tuple(item.model_copy(deep=True) for item in self._history[-bounded:])
+            return tuple(item.model_copy(deep=True) for item in tuple(self._history)[-bounded:])
 
     def poll(self, now: datetime | None = None) -> None:
         observed_at = now or datetime.now(UTC)
@@ -203,6 +208,8 @@ class QuoteService:
                 quote=quote,
             )
             self._history.append(self.current)
+        if quote is not None and status == "live" and self.on_quote is not None:
+            self.on_quote(quote)
 
     def start(self) -> None:
         self.thread = threading.Thread(target=self._run, name="nexora-quotes", daemon=True)

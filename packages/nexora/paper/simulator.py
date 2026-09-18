@@ -18,6 +18,7 @@ from nexora.paper.models import (
     PaperState,
 )
 from nexora.risk import RiskDecision
+from nexora.risk.models import signal_fingerprint
 from nexora.signals import ResearchSignal
 
 
@@ -35,16 +36,20 @@ class PaperSimulator:
         starting_cash: Decimal,
         fee_per_unit: Decimal,
         slippage: Decimal,
+        account_id: str = "paper-account",
     ) -> None:
-        if not namespace.startswith("paper"):
+        if not namespace.startswith("paper-"):
             raise PaperInputError("invalid_namespace")
-        if starting_cash <= 0:
+        if not account_id:
+            raise PaperInputError("invalid_account_id")
+        if not starting_cash.is_finite() or starting_cash <= 0:
             raise PaperInputError("invalid_starting_cash")
-        if fee_per_unit < 0:
+        if not fee_per_unit.is_finite() or fee_per_unit < 0:
             raise PaperInputError("invalid_fee_per_unit")
-        if slippage < 0:
+        if not slippage.is_finite() or slippage < 0:
             raise PaperInputError("invalid_slippage")
         self.namespace = namespace
+        self.account_id = account_id
         self._cash = starting_cash
         self._realized_pnl = Decimal("0")
         self._status: PaperRuntimeStatus = "running"
@@ -74,12 +79,27 @@ class PaperSimulator:
         market_price: Decimal,
         event_time: datetime,
     ) -> PaperExecution:
-        if market_price <= 0:
+        if not market_price.is_finite() or market_price <= 0:
             raise PaperInputError("invalid_market_price")
         if decision.proposal_id in self._orders:
             existing = self._orders[decision.proposal_id]
             return PaperExecution(order=existing, fill=self._fills.get(decision.proposal_id))
 
+        if event_time.tzinfo is None or event_time.utcoffset() is None:
+            raise PaperInputError("timezone_required")
+        binding_error = (
+            decision.signal_id != signal.signal_id
+            or decision.signal_hash != signal_fingerprint(signal)
+            or decision.symbol != signal.symbol
+            or decision.side != signal.side
+            or decision.account_id != self.account_id
+            or decision.expires_at is None
+            or event_time < decision.effective_time
+            or event_time > decision.expires_at
+            or signal.status != "active"
+        )
+        if decision.action == "allow" and binding_error:
+            raise PaperInputError("invalid_approval_binding_or_time")
         self._sequence += 1
         created_at = event_time.astimezone(UTC)
         blocked = self._status in {"paused", "kill_switch"} or decision.action == "reject"
@@ -125,6 +145,8 @@ class PaperSimulator:
             if signal.side == "long"
             else market_price - self._slippage
         )
+        if executed_price <= 0:
+            raise PaperInputError("invalid_executed_price")
         fee = decision.approved_size * self._fee_per_unit
         self._cash = self._cash - (signed_size * executed_price) - fee
         realized = self._apply_fill(
@@ -187,6 +209,7 @@ class PaperSimulator:
             orders=self.orders(),
             fills=self.fills(),
             ledger=tuple(self._ledger),
+            account_id=self.account_id,
         )
         self._append_ledger(
             entry_type="checkpoint",
@@ -211,6 +234,7 @@ class PaperSimulator:
             starting_cash=max(checkpoint.cash, Decimal("1")),
             fee_per_unit=fee_per_unit,
             slippage=slippage,
+            account_id=checkpoint.account_id,
         )
         simulator._cash = checkpoint.cash
         simulator._realized_pnl = checkpoint.realized_pnl
@@ -218,10 +242,7 @@ class PaperSimulator:
         simulator._sequence = checkpoint.sequence
         simulator._positions = {position.symbol: position for position in checkpoint.positions}
         simulator._orders = {order.proposal_id: order for order in checkpoint.orders}
-        simulator._fills = {
-            fill.fill_id.rsplit(":fill:", 1)[-1]: fill
-            for fill in checkpoint.fills
-        }
+        simulator._fills = {fill.fill_id.rsplit(":fill:", 1)[-1]: fill for fill in checkpoint.fills}
         simulator._ledger = list(checkpoint.ledger)
         simulator._seen_proposals = checkpoint.seen_proposals
         return simulator

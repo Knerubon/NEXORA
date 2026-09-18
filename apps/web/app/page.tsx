@@ -1,283 +1,139 @@
 "use client";
 
-import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
-type QuoteSnapshot = {
-  sequence: number;
-  status: string;
-  code: string;
-  symbol: string | null;
-  quote: {
-    bid: string;
-    ask: string;
-    spread: string;
-    event_time: string;
-  } | null;
+type Column = { column_id: number; direction: string; open_price: string; close_price: string };
+type Signal = { signal_id: string; side: string; decision_time: string; reasons: string[]; source_refs: string[]; status: string };
+type Output = {
+  columns?: Column[];
+  matrix?: { alignment: string; resolutions: { name: string; direction: string; status: string }[] };
+  structure?: { levels: { side: string; price: string; status: string }[] };
+  regime?: { state: { label: string; reason: string } };
+  signals?: { history: Signal[] };
 };
-
-type QualitySnapshot = {
-  status: string;
-  code: string;
-  completeness: string;
-  counters: {
-    observed: number;
-    duplicates: number;
-    out_of_order: number;
-    gaps: number;
-    backfills: number;
-    reconnects: number;
-    disconnects: number;
-  };
+type State = {
+  sequence: number; research_mode: string; storage_backend: string;
+  quote: { stream_id: string; status: string; quote: { bid: string; ask: string; event_time: string } | null };
+  quality: { status: string; completeness: string; counters: { observed: number; gaps: number; reconnects: number } };
+  research: { event_count: number; error: string | null; output: Output };
 };
+type Run = { run_id: string; mode: string; status: string; dataset_id: string; config_hash: string;
+  metrics: { trade_count: number; win_rate: string; expectancy: string; profit_factor: string | null;
+    max_drawdown: string; average_entry_delay_seconds: string }; notes: string[] };
+type Paper = { status: string; accepted: number; rejected: number; fills: unknown[];
+  state: { cash?: string; realized_pnl?: string }; ledger: { entry_id: string; detail: string; amount: string }[] };
 
-type DashboardState = {
-  sequence: number;
-  quote: QuoteSnapshot;
-  quality: QualitySnapshot;
-  matrix_status: string;
-  structure_status: string;
-  regime_status: string;
-  signals_status: string;
-  backtest_lab_status: string;
-  paper_trading_status: string;
-};
+const metric = (value: string | null) => value === null ? "Undefined" : Number(value).toLocaleString("en", { maximumFractionDigits: 4 });
 
-type BacktestRunsResponse = {
-  runs: Array<{
-    run_id: string;
-    mode: string;
-    status: string;
-    metrics: {
-      trade_count: number;
-      expectancy: string;
-    };
-  }>;
-};
+const api = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
 
-type PaperReplayResponse = {
-  orders: Array<{
-    status: string;
-  }>;
-  fills: Array<{
-    fill_id: string;
-  }>;
-  state: {
-    status: string;
-  };
-};
-
-type OperationsReadiness = {
-  status: string;
-  reasons: string[];
-  quote_status: string;
-  quality_status: string;
-  paper_status: string;
-};
-
-const apiBase = process.env.NEXT_PUBLIC_NEXORA_API_URL ?? "http://127.0.0.1:8000";
-
-function statusLabel(status: string): string {
-  if (status === "live") return "Live";
-  if (status === "stale") return "Stale";
-  if (status === "clock_skew") return "Clock skew";
-  if (status === "disconnected") return "Disconnected";
-  if (status === "error") return "Error";
-  if (status === "pending_p10") return "Pending P10";
-  if (status === "running") return "Running";
-  if (status === "ready") return "Ready";
-  if (status === "degraded") return "Degraded";
-  if (status === "paused") return "Paused";
-  if (status === "kill_switch") return "Kill switch";
-  if (status === "unavailable") return "Unavailable";
-  return status;
+function StructureChart({ output }: { output: Output }) {
+  const columns = (output.columns ?? []).slice(-60);
+  if (!columns.length) return <p>No calculated P&amp;F columns yet. Configure research and ingest recorded data or observe the local feed.</p>;
+  const levels = (output.structure?.levels ?? []).filter((l) => l.status === "confirmed").slice(-12);
+  const prices = [...columns.flatMap((c) => [Number(c.open_price), Number(c.close_price)]), ...levels.map((l) => Number(l.price))];
+  const min = Math.min(...prices), max = Math.max(...prices);
+  const y = (price: number) => 240 - ((price-min)/(max-min || 1))*210;
+  return <svg viewBox="0 0 900 280" role="img" aria-label="Calculated P&F columns and confirmed support/resistance">
+    {levels.map((l, i) => <g key={`${l.side}-${i}`}><line x1="35" x2="820" y1={y(Number(l.price))} y2={y(Number(l.price))} stroke="#7998ac" strokeDasharray="4 6" />
+      <text x="825" y={y(Number(l.price))} fill="#afc3d0" fontSize="11">{l.price}</text></g>)}
+    {columns.map((c, i) => { const x = 45 + i*(760/Math.max(columns.length, 1)); const color = c.direction === "X" ? "#a5e5d0" : "#edac9e";
+      return <g key={c.column_id}><title>{`${c.direction}: ${c.open_price} → ${c.close_price}`}</title>
+        <line x1={x} x2={x} y1={y(Number(c.open_price))} y2={y(Number(c.close_price))} stroke={color} strokeWidth="3" />
+        <text x={x-4} y={y(Number(c.close_price))-7} fill={color} fontSize="12">{c.direction}</text></g>; })}
+    <text x="35" y="272" fill="#91a5b0" fontSize="11">Last {columns.length} P&amp;F columns · open → close · dashed lines: confirmed S/R</text>
+  </svg>;
 }
 
 export default function Home() {
-  const [state, setState] = useState<DashboardState | null>(null);
-  const [backtestRuns, setBacktestRuns] = useState<BacktestRunsResponse["runs"]>([]);
-  const [paperReplay, setPaperReplay] = useState<PaperReplayResponse | null>(null);
-  const [paperStatus, setPaperStatus] = useState<string | null>(null);
-  const [readiness, setReadiness] = useState<OperationsReadiness | null>(null);
+  const [state, setState] = useState<State | null>(null);
+  const [runs, setRuns] = useState<Run[]>([]);
+  const [paper, setPaper] = useState<Paper | null>(null);
+  const [reasons, setReasons] = useState<string[]>([]);
+  const [parameters, setParameters] = useState<string[]>([]);
+  const [chosen, setChosen] = useState("");
+  const [selected, setSelected] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let active = true;
-
-    const pullState = async () => {
-      try {
-        const [stateResponse, runsResponse, paperResponse, readinessResponse] = await Promise.all([
-          fetch(`${apiBase}/state`, { cache: "no-store" }),
-          fetch(`${apiBase}/backtest/runs`, { cache: "no-store" }),
-          fetch(`${apiBase}/paper/replay`, { cache: "no-store" }),
-          fetch(`${apiBase}/operations/readiness`, { cache: "no-store" }),
-        ]);
-        if (!stateResponse.ok) {
-          throw new Error(`state_fetch_failed_${stateResponse.status}`);
-        }
-        if (!runsResponse.ok) {
-          throw new Error(`backtest_runs_fetch_failed_${runsResponse.status}`);
-        }
-        if (!paperResponse.ok) {
-          throw new Error(`paper_replay_fetch_failed_${paperResponse.status}`);
-        }
-        if (!readinessResponse.ok) {
-          throw new Error(`readiness_fetch_failed_${readinessResponse.status}`);
-        }
-        const data = (await stateResponse.json()) as DashboardState;
-        const runs = (await runsResponse.json()) as BacktestRunsResponse;
-        const paper = (await paperResponse.json()) as PaperReplayResponse;
-        const readinessSnapshot = (await readinessResponse.json()) as OperationsReadiness;
-        if (active) {
-          setState(data);
-          setBacktestRuns(runs.runs);
-          setPaperReplay(paper);
-          setPaperStatus(paper.state.status);
-          setReadiness(readinessSnapshot);
-          setError(null);
-        }
-      } catch (fetchError) {
-        if (active) {
-          const message = fetchError instanceof Error ? fetchError.message : "state_fetch_failed";
-          setError(message);
-        }
-      }
-    };
-
-    void pullState();
-    const interval = setInterval(() => void pullState(), 2000);
-    const ws = new WebSocket(`${apiBase.replace("http", "ws")}/ws/events`);
-    ws.onmessage = (event) => {
-      try {
-        const parsed = JSON.parse(event.data) as { event_type: string; payload: unknown };
-        if (parsed.event_type === "quote_snapshot") {
-          setState((previous) => {
-            if (!previous) return previous;
-            return { ...previous, quote: parsed.payload as QuoteSnapshot };
-          });
-        }
-        if (parsed.event_type === "quality_snapshot") {
-          setState((previous) => {
-            if (!previous) return previous;
-            return { ...previous, quality: parsed.payload as QualitySnapshot };
-          });
-        }
-        if (parsed.event_type === "paper_snapshot") {
-          const payload = parsed.payload as { status: string };
-          setPaperStatus(payload.status);
-        }
-      } catch {
-        setError("invalid_ws_payload");
-      }
-    };
-    ws.onerror = () => setError("ws_stream_error");
-
-    return () => {
-      active = false;
-      clearInterval(interval);
-      ws.close();
-    };
+  const [busy, setBusy] = useState(false);
+  const refresh = useCallback(async (signal?: AbortSignal) => {
+    const paths = ["/state", "/backtest/runs", "/paper/replay", "/operations/readiness", "/config"];
+    const responses = await Promise.all(paths.map((p) => fetch(api+p, { cache: "no-store", signal })));
+    if (responses.some((r) => !r.ok)) throw new Error("Unable to load current research state.");
+    const [current, history, session, readiness, config] = await Promise.all(responses.map((r) => r.json()));
+    if (signal?.aborted) return;
+    setState(current); setRuns(history.runs); setPaper(session); setReasons(readiness.reasons);
+    setParameters(Object.keys(config.parameter_sets)); setError(null);
   }, []);
 
-  const cards = useMemo(
-    () => [
-      {
-        title: "Live Structure",
-        status: state ? statusLabel(state.quote.status) : "Loading",
-        detail: state?.quote.quote
-          ? `Bid ${state.quote.quote.bid} / Ask ${state.quote.quote.ask} / Spread ${state.quote.quote.spread}`
-          : "No quote snapshot yet",
-      },
-      {
-        title: "Matrix",
-        status: statusLabel(state?.matrix_status ?? "unavailable"),
-        detail: "Multi-resolution state from core engine.",
-      },
-      {
-        title: "Signals",
-        status: statusLabel(state?.signals_status ?? "unavailable"),
-        detail: "Explainable research signals only. No order execution.",
-      },
-      {
-        title: "Backtest Lab",
-        status: statusLabel(state?.backtest_lab_status ?? "pending_p10"),
-        detail:
-          backtestRuns.length > 0
-            ? `${backtestRuns.length} runs ready for comparison`
-            : "No stored runs yet",
-      },
-      {
-        title: "System",
-        status: readiness ? statusLabel(readiness.status) : state ? statusLabel(state.quality.status) : "Loading",
-        detail: state
-          ? readiness
-            ? `${readiness.reasons.length > 0 ? readiness.reasons.join(", ") : "no alerts"} | Obs ${state.quality.counters.observed}, gap ${state.quality.counters.gaps}, reconnect ${state.quality.counters.reconnects}`
-            : `Obs ${state.quality.counters.observed}, gap ${state.quality.counters.gaps}, reconnect ${state.quality.counters.reconnects}`
-          : "No health snapshot yet",
-      },
-      {
-        title: "Paper Trading",
-        status: statusLabel(paperStatus ?? state?.paper_trading_status ?? "unavailable"),
-        detail: paperReplay
-          ? `${paperReplay.fills.length} fills / ${paperReplay.orders.filter((item) => item.status === "rejected").length} rejected`
-          : "No replay snapshot yet",
-      },
-    ],
-    [backtestRuns.length, paperReplay, paperStatus, readiness, state],
-  );
+  useEffect(() => {
+    let stopped = false, socket: WebSocket | null = null;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    let poll: ReturnType<typeof setTimeout> | undefined;
+    const controller = new AbortController();
+    const pull = async () => {
+      try { await refresh(controller.signal); }
+      catch { if (!stopped) setError("Connection interrupted. Showing the last received snapshot."); }
+      finally { if (!stopped) poll = setTimeout(() => void pull(), 2000); }
+    };
+    const connect = () => {
+      if (stopped) return;
+      socket = new WebSocket(api.replace(/^http/, "ws")+"/ws/events");
+      socket.onopen = () => { void refresh(controller.signal).catch(() => undefined); };
+      socket.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          if (message.schema_version === 2 && message.event_type === "state_snapshot") {
+            setState((prior) => !prior || prior.quote.stream_id !== message.stream_id || message.sequence >= prior.sequence ? message.payload : prior);
+          }
+        } catch { setError("An invalid update was received. Refreshing from the server."); }
+      };
+      socket.onclose = () => { if (!stopped) retry = setTimeout(connect, 2000); };
+      socket.onerror = () => socket?.close();
+    };
+    void pull(); connect();
+    return () => { stopped = true; controller.abort(); clearTimeout(retry); clearTimeout(poll); socket?.close(); };
+  }, [refresh]);
 
-  return (
-    <main>
-      <header>
-        <Link href="/" aria-label="NEXORA home" className="brand">
-          NEXORA<span> / DASHBOARD</span>
-        </Link>
-        <span className="badge">LOCAL OBSERVATION ONLY</span>
-      </header>
-
-      <section className="intro" aria-labelledby="title">
-        <p className="eyebrow">09 / WEB DASHBOARD</p>
-        <h1 id="title">
-          Observe state in real time.<br />
-          <span>Keep research traceable.</span>
-        </h1>
-        <p className="subtitle">
-          Local dashboard for quotes, quality, structure, matrix, and signal surfaces.
-          Remote access must be authenticated and encrypted before external use.
-        </p>
-      </section>
-
-      {error ? (
-        <section aria-live="polite">
-          <article>
-            <h3>Connection warning</h3>
-            <p className="status">Error</p>
-            <p>{error}</p>
-          </article>
-        </section>
-      ) : null}
-
-      <section aria-labelledby="views-title">
-        <div className="section-heading">
-          <h2 id="views-title">Views</h2>
-          <span>{state ? `Sequence ${state.sequence}` : "Waiting for state stream"}</span>
-        </div>
-        <div className="grid">
-          {cards.map((card, index) => (
-            <article key={card.title}>
-              <span className="index">0{index + 1}</span>
-              <h3>{card.title}</h3>
-              <p className="status">{card.status}</p>
-              <p>{card.detail}</p>
-            </article>
-          ))}
-        </div>
-      </section>
-
-      <footer>
-        <span>RESEARCH BOUNDARY</span>
-        <p>No broker orders, no live auto-trading, and no secret material in UI output.</p>
-      </footer>
-    </main>
-  );
+  async function act(path: string, payload: object) {
+    setBusy(true);
+    try {
+      const response = await fetch(api+path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      if (!response.ok) { const body = await response.json(); throw new Error(body.detail ?? "Action failed."); }
+      await refresh();
+    } catch (e) { setError(e instanceof Error ? e.message : "Action failed."); }
+    finally { setBusy(false); }
+  }
+  const output = state?.research.output ?? {};
+  const compared = selected.length ? runs.filter((r) => selected.includes(r.run_id)) : runs;
+  return <main>
+    <header><strong className="brand">NEXORA / RESEARCH</strong><span className="badge">LOCAL RESEARCH &amp; PAPER ONLY</span></header>
+    <section className="intro"><p className="eyebrow">OBSERVE · EXPLAIN · REPLAY</p><h1>Price structure,<br /><span>with evidence.</span></h1>
+      <p className="subtitle">{state?.research_mode === "live_observation" ? "Live observation" : "Recorded research / waiting for a configured feed"}. No broker orders.</p></section>
+    {error && <p role="alert" className="warning">{error}</p>}
+    <section><h2>Price Structure</h2><p>{state?.quote.quote ? `Bid ${state.quote.quote.bid} / Ask ${state.quote.quote.ask} · ${state.quote.quote.event_time}` : "No live quote available"}</p>
+      <article><StructureChart output={output} /></article></section>
+    <section><h2>Matrix &amp; Regime</h2><p>{state?.research_mode === "live_observation" ? "Current observation" : "Last recorded calculation; not a live readiness indicator"}</p><div className="grid">
+      {(output.matrix?.resolutions ?? []).map((r) => <article key={r.name}><h3>{r.name}</h3><p className="status">{r.direction} · {r.status}</p></article>)}
+      <article><h3>Regime</h3><p>{output.regime?.state.label ?? "Unavailable"}</p><p>{output.regime?.state.reason ?? "Waiting for confirmed structure"}</p></article>
+    </div></section>
+    <section><h2>Signals</h2>{!(output.signals?.history.length) && <p>No research signals produced yet.</p>}
+      {(output.signals?.history ?? []).slice(-20).reverse().map((s) => <article key={s.signal_id}><h3>{s.side} · {s.status}</h3><p>{s.decision_time}</p><p>{s.reasons.join(" · ")}</p><details><summary>Evidence</summary><p>{s.source_refs.join(", ")}</p><p>{s.signal_id}</p></details></article>)}</section>
+    <section><h2>Backtest Lab</h2><p>Results use recorded event prices. Compare runs only with matching data, costs and evaluation assumptions.</p>
+      <label>Saved parameter set <select value={chosen} onChange={(e) => setChosen(e.target.value)}><option value="">Choose a configured set</option>{parameters.map((p) => <option key={p}>{p}</option>)}</select></label>
+      <button disabled={busy || !chosen || !state?.research.event_count} onClick={() => void act("/backtest/runs", { parameter_set: chosen })}>Run research</button>
+      {!parameters.length && <p>No parameter sets configured. Existing verified runs remain available below.</p>}
+      {!runs.length ? <p>No stored runs. No sample results are shown.</p> : <>
+        <fieldset><legend>Compare stored runs</legend>{runs.map((r) => <label key={r.run_id}><input type="checkbox" checked={selected.includes(r.run_id)} onChange={(e) => setSelected((s) => e.target.checked ? [...s, r.run_id] : s.filter((id) => id !== r.run_id))} />{r.mode} · {r.run_id.slice(-8)}</label>)}</fieldset>
+        <div className="table-scroll"><table><thead><tr><th>Mode / status</th><th>Trades</th><th>Win rate</th><th>Expectancy</th><th>Profit factor</th><th>Drawdown</th><th>Entry delay (s)</th></tr></thead><tbody>{compared.map((r) => <tr key={r.run_id}><td>{r.mode}<br />{r.status}</td><td>{r.metrics.trade_count}</td><td>{metric(r.metrics.win_rate)}</td><td>{metric(r.metrics.expectancy)}</td><td>{metric(r.metrics.profit_factor)}</td><td>{metric(r.metrics.max_drawdown)}</td><td>{metric(r.metrics.average_entry_delay_seconds)}</td></tr>)}</tbody></table></div>
+        {compared.map((r) => <details key={r.run_id}><summary>{r.mode} provenance</summary><p>Dataset: {r.dataset_id}</p><p>Configuration: {r.config_hash}</p><p>{r.notes.join(" · ")}</p></details>)}
+      </>}</section>
+    <section><h2>Paper Trading</h2><p>{paper?.status ?? "Unavailable"} · {paper?.accepted ?? 0} filled · {paper?.rejected ?? 0} rejected</p>
+      {paper?.state.cash && <p>Cash {paper.state.cash} · Realized P&amp;L before fees {paper.state.realized_pnl}</p>}
+      {paper && paper.status !== "unavailable" && <div>{["pause", "resume", "kill"].map((action) => <button disabled={busy} key={action} onClick={() => void act("/paper/control", { action })}>{action === "kill" ? "Stop paper execution" : `${action} paper`}</button>)}</div>}
+      {(paper?.ledger ?? []).slice(-10).map((l) => <p key={l.entry_id}>{l.detail} · {l.amount}</p>)}</section>
+    <section><h2>System</h2><p>Storage: {state?.storage_backend ?? "Unavailable"} · Recorded events: {state?.research.event_count ?? 0}</p>
+      <p>Feed: {state?.quote.status ?? "Unavailable"} · Coverage: {state?.quality.completeness ?? "Unknown"}</p>
+      <p>{reasons.length ? reasons.join(" · ") : "No readiness reasons received"}</p><p>Remote access disabled. Production hardening requires verified deployment and recovery evidence.</p></section>
+    <footer><span>RESEARCH BOUNDARY</span><p>Replay and paper results are research artifacts, not live execution approval.</p></footer>
+  </main>;
 }

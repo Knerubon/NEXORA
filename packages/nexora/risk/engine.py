@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from datetime import UTC
+from datetime import timedelta
 from decimal import ROUND_DOWN, Decimal
+from threading import RLock
+from zoneinfo import ZoneInfo
 
-from nexora.risk.models import RiskDecision, RiskPolicy, RiskProposal, RiskState
+from nexora.risk.models import RiskDecision, RiskPolicy, RiskProposal, RiskState, signal_fingerprint
 
 
 class RiskInputError(ValueError):
@@ -20,6 +22,10 @@ class RiskEngine:
     policy: RiskPolicy
     _state: RiskState
     _decisions: dict[str, RiskDecision]
+    _released: dict[str, Decimal]
+    _proposals: dict[str, RiskProposal]
+    _account_id: str | None
+    _lock: RLock
 
     def __init__(self, policy: RiskPolicy) -> None:
         self.policy = policy
@@ -34,11 +40,29 @@ class RiskEngine:
             seen_proposals=(),
         )
         self._decisions = {}
+        self._released = {}
+        self._proposals = {}
+        self._account_id = None
+        self._lock = RLock()
 
     def evaluate(self, proposal: RiskProposal) -> RiskDecision:
+        with self._lock:
+            return self._evaluate(proposal)
+
+    def _evaluate(self, proposal: RiskProposal) -> RiskDecision:
         if proposal.proposal_id in self._decisions:
+            if self._proposals[proposal.proposal_id] != proposal:
+                raise RiskInputError("proposal_identity_conflict")
             return self._decisions[proposal.proposal_id]
+        error = self._validate(proposal)
+        if error is not None:
+            return self._reject(proposal, error, (error,))
+        self._account_id = proposal.account.account_id
+        self._proposals[proposal.proposal_id] = proposal
         self._roll_trading_day(proposal)
+        self._state = replace(
+            self._state, equity_peak=max(self._state.equity_peak, proposal.account.equity)
+        )
         if self._state.kill_switch:
             decision = self._reject(proposal, "kill_switch_active", ("kill_switch",))
             return self._cache_decision(decision)
@@ -65,15 +89,18 @@ class RiskEngine:
             return self._cache_decision(decision)
         reserved_risk = proposal.stop_distance * size
         total_exposure = (
-            proposal.account.exposure_in_use
-            + self._state.reserved_exposure
-            + reserved_risk
+            proposal.account.exposure_in_use + self._state.reserved_exposure + reserved_risk
         )
         if total_exposure > self.policy.max_total_exposure:
             decision = self._reject(proposal, "exposure_limit", ("max_total_exposure",))
             return self._cache_decision(decision)
 
-        projected_daily_loss = abs(min(self._state.daily_pnl, Decimal("0"))) + reserved_risk
+        projected_daily_loss = (
+            abs(min(self._state.daily_pnl, Decimal("0")))
+            + self._state.reserved_exposure
+            + proposal.account.exposure_in_use
+            + reserved_risk
+        )
         if projected_daily_loss > self.policy.max_daily_loss:
             decision = self._reject(proposal, "daily_loss_limit", ("max_daily_loss",))
             return self._cache_decision(decision)
@@ -91,9 +118,15 @@ class RiskEngine:
             reason_codes=("policy_pass",),
             approved_size=size,
             reserved_risk=reserved_risk,
-            effective_time=proposal.price.observed_at,
+            effective_time=proposal.signal.decision_time,
             policy_version=self.policy.version,
             source_refs=proposal.signal.source_refs,
+            account_id=proposal.account.account_id,
+            symbol=proposal.signal.symbol,
+            side=proposal.signal.side,
+            signal_hash=signal_fingerprint(proposal.signal),
+            expires_at=proposal.signal.decision_time
+            + timedelta(seconds=self.policy.approval_ttl_seconds),
         )
         self._state = replace(
             self._state,
@@ -105,17 +138,22 @@ class RiskEngine:
         return self._cache_decision(decision)
 
     def release(self, proposal_id: str, *, realized_pnl: Decimal) -> None:
-        decision = self._decisions.get(proposal_id)
-        if decision is None or decision.action == "reject":
-            return
-        self._state = replace(
-            self._state,
-            reserved_exposure=max(
-                self._state.reserved_exposure - decision.reserved_risk,
-                Decimal("0"),
-            ),
-            daily_pnl=self._state.daily_pnl + realized_pnl,
-        )
+        with self._lock:
+            if not realized_pnl.is_finite():
+                raise RiskInputError("invalid_realized_pnl")
+            if proposal_id in self._released:
+                if self._released[proposal_id] != realized_pnl:
+                    raise RiskInputError("release_identity_conflict")
+                return
+            decision = self._decisions.get(proposal_id)
+            if decision is None or decision.action == "reject":
+                return
+            self._released[proposal_id] = realized_pnl
+            self._state = replace(
+                self._state,
+                reserved_exposure=self._state.reserved_exposure - decision.reserved_risk,
+                daily_pnl=self._state.daily_pnl + realized_pnl,
+            )
 
     def activate_kill_switch(self) -> None:
         self._state = replace(self._state, kill_switch=True, status="kill_switch")
@@ -129,15 +167,65 @@ class RiskEngine:
     def decisions(self) -> tuple[RiskDecision, ...]:
         return tuple(self._decisions[item] for item in self._state.seen_proposals)
 
+    def _validate(self, proposal: RiskProposal) -> str | None:
+        signal = proposal.signal
+        times = (
+            signal.decision_time,
+            signal.confirmation_time,
+            signal.occurrence_time,
+            proposal.account.observed_at,
+            proposal.price.observed_at,
+        )
+        if any(t.tzinfo is None or t.utcoffset() is None for t in times):
+            raise RiskInputError("timezone_required")
+        if not proposal.proposal_id or not proposal.account.account_id:
+            return "missing_identity"
+        if self._account_id not in (None, proposal.account.account_id):
+            return "account_mismatch"
+        if (
+            signal.status != "active"
+            or signal.side not in {"long", "short"}
+            or signal.confirmation_time > signal.decision_time
+            or signal.occurrence_time > signal.confirmation_time
+        ):
+            return "invalid_signal"
+        if proposal.price.symbol != signal.symbol:
+            return "symbol_mismatch"
+        for value in (
+            proposal.account.equity,
+            proposal.account.balance,
+            proposal.requested_size,
+            proposal.stop_distance,
+        ):
+            if not value.is_finite() or value <= 0:
+                return "invalid_account_or_size"
+        if not proposal.account.exposure_in_use.is_finite() or proposal.account.exposure_in_use < 0:
+            return "invalid_exposure"
+        if proposal.price.price is not None and (
+            not proposal.price.price.is_finite() or proposal.price.price <= 0
+        ):
+            return "invalid_price"
+        for observed in (proposal.account.observed_at, proposal.price.observed_at):
+            age = (signal.decision_time - observed).total_seconds()
+            if not 0 <= age <= self.policy.max_input_age_seconds:
+                return "stale_or_future_input"
+        day = signal.decision_time.astimezone(ZoneInfo(self.policy.timezone)).date().isoformat()
+        if self._state.trading_day != "unknown" and day < self._state.trading_day:
+            return "out_of_order_day"
+        return None
+
     def _roll_trading_day(self, proposal: RiskProposal) -> None:
-        trading_day = proposal.account.observed_at.astimezone(UTC).date().isoformat()
+        trading_day = (
+            proposal.signal.decision_time.astimezone(ZoneInfo(self.policy.timezone))
+            .date()
+            .isoformat()
+        )
         if self._state.trading_day != trading_day:
             self._state = replace(
                 self._state,
                 trading_day=trading_day,
                 daily_pnl=Decimal("0"),
-                reserved_exposure=Decimal("0"),
-                equity_peak=proposal.account.equity,
+                equity_peak=max(self._state.equity_peak, proposal.account.equity),
             )
 
     def _reject(self, proposal: RiskProposal, reason: str, codes: tuple[str, ...]) -> RiskDecision:
@@ -150,9 +238,15 @@ class RiskEngine:
             reason_codes=codes,
             approved_size=Decimal("0"),
             reserved_risk=Decimal("0"),
-            effective_time=proposal.price.observed_at,
+            effective_time=proposal.signal.decision_time,
             policy_version=self.policy.version,
             source_refs=proposal.signal.source_refs,
+            account_id=proposal.account.account_id,
+            symbol=proposal.signal.symbol,
+            side=proposal.signal.side,
+            signal_hash=signal_fingerprint(proposal.signal),
+            expires_at=proposal.signal.decision_time
+            + timedelta(seconds=self.policy.approval_ttl_seconds),
         )
 
     def _cache_decision(self, decision: RiskDecision) -> RiskDecision:
