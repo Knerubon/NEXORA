@@ -19,6 +19,18 @@ test('actual SVG renders centered X/O shapes with original prices and confirmed 
   assert.match(html, /stroke-dasharray="4 6"/);
 });
 
+test('live quote fallback renders the current market price when research output is stale or absent', () => {
+  const html = renderChart({
+    columns: [{ column_id: 1, open_price: '100', close_price: '103' }],
+    transitions: [
+      { column_id: 1, direction: 'X', from_price: '100', to_price: '103', boxes_moved: 3, effective_box_size: '1' },
+    ],
+    quote: { bid: '100.50', ask: '101.00' },
+  });
+  assert.match(html, /Latest live quote/);
+  assert.match(html, /100\.75|101\.00|100\.50/);
+});
+
 test('empty and missing transition states are explicit', () => {
   assert.match(renderChart({}), /No calculated/);
   assert.match(renderChart({ columns: [{ column_id: 1, open_price: '100', close_price: '103' }] }), /geometry unavailable/);

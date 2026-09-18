@@ -16,7 +16,7 @@ type Output = {
 };
 type State = {
   sequence: number; research_mode: string; storage_backend: string;
-  quote: { stream_id: string; status: string; quote: { bid: string; ask: string; event_time: string; raw_event_time?: string; time_offset_seconds?: number } | null };
+  quote: { stream_id: string; status: string; quote: { symbol: string; bid: string; ask: string; event_time: string; raw_event_time?: string; time_offset_seconds?: number } | null };
   quality: { status: string; completeness: string; counters: { observed: number; gaps: number; reconnects: number } };
   research: { event_count: number; error: string | null; output: Output };
 };
@@ -30,10 +30,13 @@ const metric = (value: string | null) => value === null ? "Undefined" : Number(v
 
 const api = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
 
-function StructureChart({ output }: { output: Output }) {
+function StructureChart({ output, liveQuote }: { output: Output; liveQuote?: { bid: string; ask: string } | null }) {
   const columns = (output.columns ?? []).slice(-60);
   const ids = new Set(columns.map((c) => c.column_id));
   const transitions = (output.transitions ?? []).filter((t) => ids.has(t.column_id));
+  const livePrice = liveQuote && Number.isFinite(Number(liveQuote.bid)) && Number.isFinite(Number(liveQuote.ask))
+    ? (Number(liveQuote.bid) + Number(liveQuote.ask)) / 2
+    : Number(output.event?.price ?? 0);
   // Render confirmed transition cells, including each transition's actual box size.
   // No trading rules or column directions are calculated in the browser.
   const cells = transitions.flatMap((t) => {
@@ -46,20 +49,24 @@ function StructureChart({ output }: { output: Output }) {
   }).slice(-2500);
   const step = Number(transitions.at(-1)?.effective_box_size ?? 1);
   const safeStep = Number.isFinite(step) && step > 0 ? step : 1;
-  const latest = Number(output.event?.price ?? 0);
+  const latest = Number.isFinite(livePrice) ? livePrice : Number(output.event?.price ?? 0);
   const prices = cells.map((c) => c.price);
   const high = prices.length ? Math.max(...prices, latest) : 10;
   const low = prices.length ? Math.min(...prices, latest) : 0;
-  const anchor = prices[0] ?? 0;
+  // Align display grid to whole box multiples; retain recorded X/O prices.
+  const anchor = 0;
   const min = anchor + Math.floor((low - anchor) / safeStep - 3) * safeStep;
   const max = anchor + Math.ceil((high - anchor) / safeStep + 3) * safeStep;
   const rows = Math.min(160, Math.max(20, Math.ceil((max - min) / safeStep)));
-  const rowStep = Math.max(safeStep, (max - min) / rows);
+  const rowStep = Math.max(1, Math.ceil((max - min) / rows / safeStep)) * safeStep;
   const width = Math.max(1400, columns.length * 30 + 420), height = Math.max(600, rows * 26);
   const top = min + rows * rowStep;
   const y = (price: number) => 26 + (top - price) / rowStep * 26;
-  // Keep price coordinates for labels/overlays; glyphs occupy the cell above each boundary.
-  const glyphY = (price: number) => y(price) - 13;
+  // Center glyphs in their display-grid cell; data-price retains the exact engine price.
+  const glyphY = (price: number) => {
+    const cellBoundary = min + Math.floor((price - min) / rowStep + 1e-9) * rowStep;
+    return y(cellBoundary) - 13;
+  };
   const levels = (output.structure?.levels ?? []).filter((l) => l.status === "confirmed").slice(-12);
   return <div className="pnf-workspace">
     <div className="pnf-scroll" tabIndex={0} aria-label="Scrollable point and figure chart">
@@ -69,11 +76,11 @@ function StructureChart({ output }: { output: Output }) {
         {levels.map((l,i) => <g key={i}><rect x="0" y={y(Number(l.price))-13} width={width} height="26" fill={l.side === "support" ? "#527dea" : "#ef5350"} opacity=".34" /><title>{l.side}: {l.price} · confirmed</title></g>)}
         {Array.from({length: rows+1},(_,i) => {const price = top-i*rowStep; return <g key={i}><line x1="0" x2={width} y1={y(price)} y2={y(price)} stroke="#e5e7eb" /><text x="8" y={y(price)+4} fontSize="11" fill="#707780">{price.toFixed(2)}</text></g>;})}
         {cells.map((c,i) => {const x = 90 + columns.findIndex((col) => col.column_id === c.column)*30; return <g key={i} data-pnf-glyph="" data-price={c.price}><title>{`Column ${c.column} · ${c.direction} · ${c.price.toFixed(2)}`}</title>{c.direction === "X" ? <path d={`M ${x-5} ${glyphY(c.price)-5} l 10 10 m 0 -10 l -10 10`} stroke="#09a77a" strokeWidth="2" fill="none" /> : <circle cx={x} cy={glyphY(c.price)} r="5" stroke="#f34b55" strokeWidth="2" fill="none" />}</g>;})}
-        {prices.length > 0 && <g><line x1="75" x2={width} y1={y(latest)} y2={y(latest)} stroke="#64748b" strokeDasharray="4 5" /><title>Latest observed price: {latest}</title></g>}
+        {prices.length > 0 && <g><line x1="75" x2={width} y1={y(latest)} y2={y(latest)} stroke="#64748b" strokeDasharray="4 5" /><title>{liveQuote ? `Latest live quote: ${latest.toFixed(2)}` : `Latest observed price: ${latest}`}</title></g>}
       </svg>
     </div>
-    <aside className="matrix-float"><strong>Matrix: {output.event?.symbol ?? "Waiting for feed"}</strong><div className="matrix-mini">{(output.matrix?.resolutions ?? []).map((r) => <div key={r.name}><span>{r.name}</span><b className={r.direction === "X" ? "up" : "down"}>{r.direction === "X" || r.direction === "O" ? r.direction : "—"}</b><small>{r.status}</small></div>)}</div><small>Actual configured resolutions · observation</small></aside>
-    <div className="chart-caption">{cells.length ? `${columns.length} columns · ${cells.length} confirmed boxes · latest box ${safeStep}` : "Waiting for the first confirmed box — no sample data"} · {output.config_version ?? "Unconfigured"}</div>
+    <aside className="matrix-float"><strong>Matrix: {output.event?.symbol ?? liveQuote ? (liveQuote ? "Live MT5 quote" : "Waiting for feed") : "Waiting for feed"}</strong><div className="matrix-mini">{(output.matrix?.resolutions ?? []).map((r) => <div key={r.name}><span>{r.name}</span><b className={r.direction === "X" ? "up" : "down"}>{r.direction === "X" || r.direction === "O" ? r.direction : "—"}</b><small>{r.status}</small></div>)}</div><small>Actual configured resolutions · observation</small></aside>
+    <div className="chart-caption">{liveQuote ? `Box ${safeStep} | ${columns.length} columns | ${cells.length} confirmed boxes | Latest live quote ${latest.toFixed(2)} · ${liveQuote.bid} / ${liveQuote.ask}` : cells.length ? `${columns.length} columns · ${cells.length} confirmed boxes · latest box ${safeStep}` : "Waiting for the first confirmed box — no sample data"} · {output.config_version ?? "Unconfigured"}</div>
   </div>;
 }
 
@@ -142,8 +149,8 @@ export default function Home() {
     <section className="intro"><h1>Point &amp; Figure <span> / X · O</span></h1>
       <p className="subtitle">{state?.research_mode === "live_observation" ? "Live observation" : "Recorded research / waiting for a configured feed"}. No broker orders.</p></section>
     {error && <p role="alert" className="warning">{error}</p>}
-    <section><h2>Price Structure</h2><p>{state?.quote.quote ? `Bid ${state.quote.quote.bid} / Ask ${state.quote.quote.ask} · ${state.quote.quote.event_time}` : "No live quote available"}</p>
-      <p>Feed: {state?.quote.status ?? "Unavailable"}{state?.quote.quote?.time_offset_seconds ? ` · Explicit feed time correction: −${state.quote.quote.time_offset_seconds}s · raw: ${state.quote.quote.raw_event_time}` : ""}</p><StructureChart output={output} /></section>
+    <section><h2>Price Structure</h2><p>{state?.quote.quote ? `${state.quote.quote.symbol} | Bid ${state.quote.quote.bid} / Ask ${state.quote.quote.ask} · ${state.quote.quote.event_time}` : "No live quote available"}</p>
+      <p>Feed: {state?.quote.status ?? "Unavailable"}{state?.quote.quote?.time_offset_seconds ? ` · Explicit feed time correction: −${state.quote.quote.time_offset_seconds}s · raw: ${state.quote.quote.raw_event_time}` : ""}</p><StructureChart output={output} liveQuote={state?.quote.quote ?? null} /></section>
     <section><h2>Matrix &amp; Regime</h2><p>{state?.research_mode === "live_observation" ? "Current observation" : "Last recorded calculation; not a live readiness indicator"}</p><div className="grid">
       {(output.matrix?.resolutions ?? []).map((r) => <article key={r.name}><h3>{r.name}</h3><p className="status">{r.direction} · {r.status}</p></article>)}
       <article><h3>Regime</h3><p>{output.regime?.state.label ?? "Unavailable"}</p><p>{output.regime?.state.reason ?? "Waiting for confirmed structure"}</p></article>

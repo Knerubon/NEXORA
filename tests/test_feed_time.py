@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from unittest.mock import patch
 
 import pytest
 from nexora_api.quotes import FeedError, Mt5Source, Quote, QuoteService, make_quote
@@ -35,6 +36,55 @@ def test_corrected_feed_still_enforces_freshness(age: int, status: str) -> None:
     service.poll(now)
     assert service.snapshot().status == status
     assert len(delivered) == (1 if status == "live" else 0)
+
+
+def test_dynamic_mt5_symbol_selection_uses_visible_symbol() -> None:
+    class FakeTick:
+        bid = 100.0
+        ask = 101.0
+        time_msc = 1_700_000_000_000
+
+    class FakeInfo:
+        visible = True
+        digits = 2
+
+    class FakeMT5:
+        def initialize(self, path, timeout=5000):
+            return True
+
+        def terminal_info(self):
+            class Terminal:
+                connected = True
+            return Terminal()
+
+        def symbols_get(self):
+            return [type("Sym", (), {"name": "EURUSD"}), type("Sym", (), {"name": "XAUUSD"})]
+
+        def symbol_info(self, symbol):
+            if symbol == "XAUUSD":
+                return FakeInfo()
+            return None
+
+        def symbol_info_tick(self, symbol):
+            return FakeTick() if symbol == "XAUUSD" else None
+
+        def shutdown(self):
+            return None
+
+    class FakePsutil:
+        @staticmethod
+        def process_iter(_):
+            return [type("P", (), {"info": {"exe": r"C:\Terminal\terminal64.exe"}})]
+
+    fake_module = FakeMT5()
+
+    source = Mt5Source(r"C:\Terminal\terminal64.exe", None)
+    with patch("nexora_api.quotes.importlib.import_module", side_effect=lambda name: FakePsutil if name == "psutil" else fake_module):
+        quote = source.read()
+
+    assert quote.symbol == "XAUUSD"
+    assert quote.bid == "100.00"
+    assert quote.ask == "101.00"
 
 
 def test_invalid_offset_fails_closed() -> None:

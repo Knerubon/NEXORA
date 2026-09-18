@@ -3,6 +3,7 @@ import type { Column, Transition } from "./pnf-layout";
 
 export function StructureChart({ output }: { output: {
   columns?: Column[]; transitions?: Transition[];
+  quote?: { bid?: string; ask?: string } | null;
   structure?: { levels: { side: string; price: string; status: string }[] };
 } }) {
   const columns = (output.columns ?? []).slice(-60);
@@ -12,6 +13,9 @@ export function StructureChart({ output }: { output: {
   const levels = (output.structure?.levels ?? []).filter((l) => l.status === "confirmed").slice(-12);
   const y = priceScale(cells, levels.map((l) => l.price));
   const width = 760 / columns.length;
+  const latestLivePrice = output.quote && Number.isFinite(Number(output.quote.bid)) && Number.isFinite(Number(output.quote.ask))
+    ? (Number(output.quote.bid) + Number(output.quote.ask)) / 2
+    : null;
   return <div className="pnf-chart" tabIndex={0} role="region" aria-label="P&F chart; scroll horizontally on small screens"><svg viewBox="0 0 900 280" role="img" aria-label="Calculated P&F cells and confirmed support/resistance">
     {cells.map((cell, i) => {
       const left = 35 + columns.findIndex((c) => c.column_id === cell.columnId) * width;
@@ -28,6 +32,7 @@ export function StructureChart({ output }: { output: {
     })}
     {levels.map((l, i) => <g key={`${l.side}-${i}`}><line x1="35" x2="795" y1={y(Number(l.price))} y2={y(Number(l.price))} stroke="#7998ac" strokeDasharray="4 6" />
       <text x="800" y={y(Number(l.price))} fill="#afc3d0" fontSize="11">{l.price}</text></g>)}
+    {latestLivePrice !== null && <text x="35" y="255" fill="#dff7ef" fontSize="11">Latest live quote: {latestLivePrice.toFixed(2)} ({output.quote?.bid} / {output.quote?.ask})</text>}
     <text x="35" y="272" fill="#91a5b0" fontSize="11">Last {columns.length} columns · up to 3000 recorded boxes · dashed lines: confirmed S/R</text>
   </svg></div>;
 }
