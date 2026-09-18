@@ -1,0 +1,88 @@
+{
+  "paper": null,
+  "pipeline": {
+    "regime": {
+      "high_volatility_min_width": "8",
+      "hysteresis": "0.5",
+      "lookback": 4,
+      "symbol": "XAUUSD",
+      "trend_min_slope": "2",
+      "version": "regime-v2"
+    },
+    "resolutions": [
+      {
+        "name": "fast",
+        "pnf": {
+          "box_size": "0.5",
+          "price_precision": 1,
+          "price_source": "close",
+          "reversal_boxes": 2,
+          "symbol": "XAUUSD",
+          "version": "fast-v2"
+        },
+        "sizing": {
+          "atr_multiplier": "1",
+          "atr_period": 2,
+          "fixed_box_size": "0.5",
+          "max_box_size": "5",
+          "min_box_size": "0.1",
+          "mode": "fixed",
+          "price_precision": 1,
+          "rule_version": "fast-v2"
+        }
+      },
+      {
+        "name": "medium",
+        "pnf": {
+          "box_size": "1",
+          "price_precision": 1,
+          "price_source": "close",
+          "reversal_boxes": 2,
+          "symbol": "XAUUSD",
+          "version": "medium-v2"
+        },
+        "sizing": {
+          "atr_multiplier": "1",
+          "atr_period": 2,
+          "fixed_box_size": "1",
+          "max_box_size": "5",
+          "min_box_size": "0.1",
+          "mode": "fixed",
+          "price_precision": 1,
+          "rule_version": "medium-v2"
+        }
+      },
+      {
+        "name": "slow",
+        "pnf": {
+          "box_size": "2",
+          "price_precision": 1,
+          "price_source": "close",
+          "reversal_boxes": 2,
+          "symbol": "XAUUSD",
+          "version": "slow-v2"
+        },
+        "sizing": {
+          "atr_multiplier": "1",
+          "atr_period": 2,
+          "fixed_box_size": "2",
+          "max_box_size": "5",
+          "min_box_size": "0.1",
+          "mode": "fixed",
+          "price_precision": 1,
+          "rule_version": "slow-v2"
+        }
+      }
+    ],
+    "signals": {
+      "cooldown_events": 1,
+      "expiry_events": 20,
+      "symbol": "XAUUSD",
+      "version": "signal-v2"
+    },
+    "stale_after_events": 100,
+    "structure_resolution": "fast",
+    "version": "example-only-v2"
+  },
+  "units": "USD/oz"
+}

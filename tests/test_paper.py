@@ -2,32 +2,18 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any, cast
 
 from nexora.backtest.service import BacktestLabService
 from nexora.paper import PaperSimulator
 from nexora.risk import RiskEngine, proposal_fixture, risk_policy_fixture, signal_fixture
 
 
-def test_paper_replay_traces_orders_fills_and_rejections() -> None:
+def test_paper_service_does_not_create_fixture_session() -> None:
     service = BacktestLabService.bootstrap()
-
     replay = service.paper_replay()
-    accepted = cast(int, replay["accepted"])
-    rejected = cast(int, replay["rejected"])
-    orders = cast(list[dict[str, Any]], replay["orders"])
-    fills = cast(list[dict[str, Any]], replay["fills"])
-
-    assert accepted >= 1
-    assert rejected >= 1
-    assert len(orders) == accepted + rejected
-    filled_order_ids = {
-        cast(str, order["order_id"])
-        for order in orders
-        if order["status"] == "filled"
-    }
-    for fill in fills:
-        assert fill["order_id"] in filled_order_ids
+    assert replay["status"] == "unavailable"
+    assert replay["fills"] == []
+    assert service.list_runs() == ()
 
 
 def test_paper_simulator_avoids_duplicate_fill_after_restart() -> None:
@@ -47,13 +33,13 @@ def test_paper_simulator_avoids_duplicate_fill_after_restart() -> None:
         decision=decision,
         signal=signal,
         market_price=Decimal("101.0"),
-        event_time=datetime(2026, 3, 6, 9, 0, tzinfo=UTC),
+        event_time=proposal.signal.decision_time,
     )
     duplicate = simulator.apply_decision(
         decision=decision,
         signal=signal,
         market_price=Decimal("101.0"),
-        event_time=datetime(2026, 3, 6, 9, 0, tzinfo=UTC),
+        event_time=proposal.signal.decision_time,
     )
     checkpoint = simulator.checkpoint(
         checkpoint_id="paper-main:checkpoint:1",
@@ -104,9 +90,9 @@ def test_paper_simulator_blocks_fill_for_reject_and_kill_switch() -> None:
     allow_decision = engine.evaluate(proposal_fixture(proposal_id="paper-allow"))
     blocked_execution = simulator.apply_decision(
         decision=allow_decision,
-        signal=signal_fixture(signal_id="allow-signal"),
+        signal=signal_fixture(),
         market_price=Decimal("100.0"),
-        event_time=datetime(2026, 3, 6, 10, 1, tzinfo=UTC),
+        event_time=signal_fixture().decision_time,
     )
 
     assert rejected_execution.fill is None

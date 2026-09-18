@@ -82,6 +82,8 @@ def test_risk_engine_kill_switch_daily_reset_and_idempotency() -> None:
         replace(
             proposal_fixture(proposal_id="next-day"),
             account=next_day_account,
+            price=replace(proposal.price, observed_at=next_day_account.observed_at),
+            signal=replace(proposal.signal, decision_time=next_day_account.observed_at),
         )
     )
     assert next_day.action in {"allow", "reject"}

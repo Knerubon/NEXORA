@@ -7,11 +7,16 @@ name = "nexora"
 version = "0.1.0"
 description = "Price-structure research foundation"
 requires-python = ">=3.13,<3.14"
-dependencies = []
+dependencies = [
+    "tzdata>=2026.4 ; sys_platform == 'win32'",
+]
 
 [project.optional-dependencies]
 api = ["fastapi>=0.115,<1", "uvicorn>=0.34,<1", "websockets>=15,<17"]
 mt5 = ["MetaTrader5==5.0.6180; sys_platform == 'win32'", "psutil>=7,<8"]
+postgres = [
+    "psycopg[binary]>=3.3,<4",
+]
 
 [dependency-groups]
 dev = ["pytest>=8,<10", "httpx>=0.28,<1", "ruff>=0.11,<1", "mypy>=1.15,<2"]

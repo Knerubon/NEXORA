@@ -14,6 +14,7 @@ from nexora.backtest import (
     fixture_dataset_manifest,
     fixture_signals,
 )
+from nexora.backtest.fixtures import fixture_events
 
 
 def test_backtest_rerun_with_same_inputs_is_deterministic() -> None:
@@ -26,6 +27,7 @@ def test_backtest_rerun_with_same_inputs_is_deterministic() -> None:
 
     first = runner.run(
         dataset=dataset,
+        events=fixture_events(),
         config=config,
         expected_dataset_hash=expected_hash,
         signals=signals,
@@ -33,6 +35,7 @@ def test_backtest_rerun_with_same_inputs_is_deterministic() -> None:
     )
     second = runner.run(
         dataset=dataset,
+        events=fixture_events(),
         config=config,
         expected_dataset_hash=expected_hash,
         signals=signals,
@@ -51,6 +54,7 @@ def test_backtest_rejects_hash_mismatch_and_unknown_quality() -> None:
     with pytest.raises(BacktestInputError) as mismatch:
         runner.run(
             dataset=dataset,
+            events=fixture_events(),
             config=config,
             expected_dataset_hash="bad-hash",
             signals=signals,
@@ -61,6 +65,7 @@ def test_backtest_rejects_hash_mismatch_and_unknown_quality() -> None:
     with pytest.raises(BacktestInputError) as quality:
         runner.run(
             dataset=unknown_dataset,
+            events=fixture_events(),
             config=config,
             expected_dataset_hash=canonical_hash(unknown_dataset),
             signals=signals,
@@ -83,6 +88,7 @@ def test_backtest_metrics_handle_zero_loss_without_division_error() -> None:
     )
     run = runner.run(
         dataset=dataset,
+        events=fixture_events(),
         config=config,
         expected_dataset_hash=canonical_hash(dataset),
         signals=(fixture_signals()[0],),
@@ -98,12 +104,14 @@ def test_backtest_store_compare_is_stable() -> None:
     expected_hash = canonical_hash(dataset)
     baseline = runner.run(
         dataset=dataset,
+        events=fixture_events(),
         config=fixture_config("baseline"),
         expected_dataset_hash=expected_hash,
         signals=fixture_signals(),
     )
     fixed = runner.run(
         dataset=dataset,
+        events=fixture_events(),
         config=fixture_config("fixed_pnf"),
         expected_dataset_hash=expected_hash,
         signals=fixture_signals(),

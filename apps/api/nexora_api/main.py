@@ -1,21 +1,30 @@
-"""Local-only research API for realtime observation and state views."""
+"""Local-only API backed by actual research state and durable artifacts."""
 
 from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from dataclasses import asdict
-from typing import Literal, cast
+from datetime import UTC, datetime
+from typing import Any, cast
 
-from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from nexora.artifacts import canonical_hash, canonical_serialize
 from nexora.backtest import BacktestLabService
-from nexora.market_data import QualitySnapshot
-from pydantic import BaseModel
+from nexora.backtest.datasets import manifest_for
+from nexora.backtest.models import BacktestConfig
+from nexora.research.runtime import ResearchRuntime
+from nexora.storage import Journal
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from nexora_api.quotes import QuoteService, Snapshot, configured_service
+from nexora_api.quotes import QuoteService, configured_service
+from nexora_api.research import (
+    configured_backtests,
+    configured_journal,
+    configured_runtime,
+    observe_quote,
+)
 
 LOCAL_CLIENTS = {"127.0.0.1", "::1", "testclient"}
 LOCAL_ORIGINS = {
@@ -23,71 +32,46 @@ LOCAL_ORIGINS = {
 }
 
 
-class Health(BaseModel):
-    status: Literal["ok"] = "ok"
-    mode: Literal["research"] = "research"
-    database: Literal["not_configured"] = "not_configured"
-    broker: Literal["not_configured"] = "not_configured"
-    engine: Literal["not_implemented"] = "not_implemented"
+def _assert_local_http(request: Request, *, mutation: bool = False) -> None:
+    if (
+        request.client is None
+        or request.client.host not in LOCAL_CLIENTS
+        or request.headers.get("origin") not in (None, *LOCAL_ORIGINS)
+        or (mutation and request.headers.get("origin") not in LOCAL_ORIGINS)
+    ):
+        raise HTTPException(status_code=403, detail="Local access only")
 
 
-class DashboardConfig(BaseModel):
-    symbol: str | None
-    source: Literal["MT5"] = "MT5"
-    local_only: Literal[True] = True
-    websocket_channels: tuple[str, ...] = ("quotes", "events")
+def _is_local_ws(ws: WebSocket) -> bool:
+    return (
+        ws.client is not None
+        and ws.client.host in LOCAL_CLIENTS
+        and ws.headers.get("origin") in LOCAL_ORIGINS
+    )
 
 
-class DashboardState(BaseModel):
-    schema_version: Literal[1] = 1
-    sequence: int
-    quote: Snapshot
-    quality: QualitySnapshot
-    matrix_status: Literal["ready", "unavailable"] = "ready"
-    structure_status: Literal["ready", "unavailable"] = "ready"
-    regime_status: Literal["ready", "unavailable"] = "ready"
-    signals_status: Literal["ready", "unavailable"] = "ready"
-    backtest_lab_status: Literal["ready", "pending_p10"] = "pending_p10"
-    paper_trading_status: Literal["running", "paused", "kill_switch", "unavailable"] = "unavailable"
-
-
-class DashboardHistory(BaseModel):
-    schema_version: Literal[1] = 1
-    quote_history: tuple[Snapshot, ...]
-    quality_history: tuple[QualitySnapshot, ...]
-
-
-class EventEnvelope(BaseModel):
-    schema_version: Literal[1] = 1
-    sequence: int
-    event_type: Literal["quote_snapshot", "quality_snapshot", "paper_snapshot"]
-    payload: dict[str, object]
-
-
-class OperationsReadiness(BaseModel):
-    schema_version: Literal[1] = 1
-    status: Literal["ready", "degraded"]
-    reasons: tuple[str, ...]
-    quote_status: str
-    quality_status: str
-    paper_status: str
-
-
-class OperationsAlert(BaseModel):
-    schema_version: Literal[1] = 1
-    code: str
-    severity: Literal["info", "warning", "critical"]
-    message: str
-    component: Literal["quote", "quality", "paper"]
-    observed_at: str
-
-
-def create_app(service: QuoteService | None = None, *, start_worker: bool = True) -> FastAPI:
+def create_app(
+    service: QuoteService | None = None,
+    *,
+    start_worker: bool = True,
+    journal: Journal | None = None,
+    runtime: ResearchRuntime | None = None,
+    backtest_configs: dict[str, BacktestConfig] | None = None,
+) -> FastAPI:
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
+        store = journal or configured_journal()
+        engine = runtime or configured_runtime(store)
         feed = service or configured_service()
         application.state.quotes = feed
-        application.state.backtest = BacktestLabService.bootstrap()
+        application.state.journal = store
+        application.state.runtime = engine
+        application.state.backtest = BacktestLabService.bootstrap(store, engine)
+        application.state.configs = (
+            backtest_configs if backtest_configs is not None else configured_backtests()
+        )
+        if engine is not None:
+            feed.on_quote = lambda quote: observe_quote(engine, quote)
         if start_worker:
             feed.start()
         try:
@@ -95,280 +79,255 @@ def create_app(service: QuoteService | None = None, *, start_worker: bool = True
         finally:
             if start_worker:
                 await asyncio.to_thread(feed.stop)
+            feed.on_quote = None
+            if journal is None:
+                store.close()
 
-    application = FastAPI(
-        title="NEXORA",
-        version="0.2.0",
-        docs_url=None,
-        redoc_url=None,
-        lifespan=lifespan,
+    app = FastAPI(title="NEXORA", version="0.3.0", docs_url=None, redoc_url=None, lifespan=lifespan)
+    app.add_middleware(
+        TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "testserver"]
     )
-    application.add_middleware(
-        TrustedHostMiddleware,
-        allowed_hosts=["127.0.0.1", "localhost", "testserver"],
-    )
-    application.add_middleware(
+    app.add_middleware(
         CORSMiddleware,
         allow_origins=sorted(LOCAL_ORIGINS),
         allow_credentials=False,
-        allow_methods=["GET"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST"],
+        allow_headers=["Content-Type"],
     )
 
-    @application.get("/health", response_model=Health)
-    def health() -> Health:
-        return Health()
-
-    @application.get("/config", response_model=DashboardConfig)
-    def config(request: Request) -> DashboardConfig:
-        _assert_local_http(request)
-        feed: QuoteService = request.app.state.quotes
-        return DashboardConfig(symbol=feed.snapshot().symbol)
-
-    @application.get("/quotes", response_model=Snapshot)
-    def quotes(request: Request, response: Response) -> Snapshot:
-        _assert_local_http(request)
+    @app.middleware("http")
+    async def no_cache(request: Request, call_next: Any) -> Any:
+        response = await call_next(request)
         response.headers["Cache-Control"] = "no-store"
-        feed: QuoteService = request.app.state.quotes
-        return feed.snapshot()
+        return response
 
-    @application.get("/quality", response_model=QualitySnapshot)
-    def quality(request: Request, response: Response) -> QualitySnapshot:
-        _assert_local_http(request)
-        response.headers["Cache-Control"] = "no-store"
-        feed: QuoteService = request.app.state.quotes
-        return feed.quality_snapshot()
+    @app.get("/health")
+    def health() -> dict[str, str]:
+        return {"status": "ok", "mode": "research", "readiness": "/operations/readiness"}
 
-    @application.get("/state", response_model=DashboardState)
-    def state(request: Request, response: Response) -> DashboardState:
-        _assert_local_http(request)
-        response.headers["Cache-Control"] = "no-store"
-        feed: QuoteService = request.app.state.quotes
-        backtest: BacktestLabService = request.app.state.backtest
-        snapshot = feed.snapshot()
-        paper_snapshot = backtest.paper_snapshot()
-        return DashboardState(
-            sequence=snapshot.sequence,
-            quote=snapshot,
-            quality=feed.quality_snapshot(),
-            backtest_lab_status="ready",
-            paper_trading_status=cast(
-                Literal["running", "paused", "kill_switch", "unavailable"],
-                paper_snapshot["status"],
-            ),
+    def state_payload() -> dict[str, Any]:
+        feed: QuoteService = app.state.quotes
+        engine: ResearchRuntime | None = app.state.runtime
+        lab: BacktestLabService = app.state.backtest
+        quote = feed.snapshot()
+        research = engine.snapshot() if engine else {"output": {}, "error": None, "event_count": 0}
+        output = research["output"]
+        observed = output.get("event", {}).get("received_at")
+        age = (
+            (datetime.now(UTC) - datetime.fromisoformat(observed)).total_seconds()
+            if observed
+            else None
         )
-
-    @application.get("/history", response_model=DashboardHistory)
-    def history(request: Request, response: Response, limit: int = 60) -> DashboardHistory:
-        _assert_local_http(request)
-        response.headers["Cache-Control"] = "no-store"
-        bounded_limit = max(1, min(limit, 240))
-        feed: QuoteService = request.app.state.quotes
-        return DashboardHistory(
-            quote_history=feed.history(limit=bounded_limit),
-            quality_history=feed.quality_monitor.history(limit=bounded_limit),
+        fresh = (
+            quote.status == "live" and age is not None and 0 <= age <= 10 and not research["error"]
         )
+        matrix = output.get("matrix", {})
+        structure = output.get("structure", {})
+        regime = output.get("regime", {}).get("state", {})
+        try:
+            backtest_status = "ready" if lab.list_runs() else "empty"
+            app.state.journal.read("readiness-probe")
+            storage_available = True
+        except Exception:
+            backtest_status = "unavailable"
+            storage_available = False
+            fresh = False
+        return {
+            "schema_version": 2,
+            "sequence": quote.sequence,
+            "quote": quote.model_dump(mode="json"),
+            "quality": canonical_serialize(feed.quality_snapshot()),
+            "matrix_status": "ready"
+            if fresh and matrix.get("alignment") not in (None, "unavailable")
+            else "unavailable",
+            "structure_status": "ready" if fresh and structure.get("pivots") else "unavailable",
+            "regime_status": "ready"
+            if fresh and regime.get("label") not in (None, "unknown")
+            else "unavailable",
+            "signals_status": "ready" if fresh and output.get("signals") else "unavailable",
+            "backtest_lab_status": backtest_status,
+            "paper_trading_status": lab.paper_snapshot()["status"],
+            "research": research,
+            "research_mode": "live_observation" if fresh else "recorded_or_unavailable",
+            "storage_backend": app.state.journal.backend,
+            "storage_available": storage_available,
+        }
 
-    @application.get("/backtest/runs")
-    def backtest_runs(request: Request, response: Response) -> dict[str, object]:
+    @app.get("/config")
+    def config(request: Request) -> dict[str, Any]:
         _assert_local_http(request)
-        response.headers["Cache-Control"] = "no-store"
-        backtest: BacktestLabService = request.app.state.backtest
-        runs = backtest.list_runs()
-        return {"schema_version": 1, "runs": runs}
+        engine: ResearchRuntime | None = app.state.runtime
+        return {
+            "local_only": True,
+            "symbol": app.state.quotes.snapshot().symbol,
+            "websocket_channels": ["quotes", "events"],
+            "pipeline": canonical_serialize(engine.config) if engine else None,
+            "parameter_sets": canonical_serialize(app.state.configs),
+        }
 
-    @application.get("/backtest/compare")
-    def backtest_compare(request: Request, response: Response, run_ids: str) -> dict[str, object]:
+    @app.get("/state")
+    def state(request: Request) -> dict[str, Any]:
         _assert_local_http(request)
-        response.headers["Cache-Control"] = "no-store"
-        selected = tuple(item.strip() for item in run_ids.split(",") if item.strip())
-        backtest: BacktestLabService = request.app.state.backtest
-        compared = backtest.compare(selected)
-        return {"schema_version": 1, "runs": compared}
+        return state_payload()
 
-    @application.get("/risk/replay")
-    def risk_replay(request: Request, response: Response) -> dict[str, object]:
+    @app.get("/quotes")
+    def quotes(request: Request) -> Any:
         _assert_local_http(request)
-        response.headers["Cache-Control"] = "no-store"
-        backtest: BacktestLabService = request.app.state.backtest
-        return {"schema_version": 1, **backtest.risk_replay()}
+        return app.state.quotes.snapshot()
 
-    @application.get("/paper/replay")
-    def paper_replay(request: Request, response: Response) -> dict[str, object]:
+    @app.get("/quality")
+    def quality(request: Request) -> Any:
         _assert_local_http(request)
-        response.headers["Cache-Control"] = "no-store"
-        backtest: BacktestLabService = request.app.state.backtest
-        return {"schema_version": 1, **backtest.paper_replay()}
+        return app.state.quotes.quality_snapshot()
 
-    @application.get("/operations/readiness", response_model=OperationsReadiness)
-    def operations_readiness(request: Request, response: Response) -> OperationsReadiness:
+    @app.get("/history")
+    def history(request: Request, limit: int = 60) -> dict[str, Any]:
         _assert_local_http(request)
-        response.headers["Cache-Control"] = "no-store"
-        feed: QuoteService = request.app.state.quotes
-        backtest: BacktestLabService = request.app.state.backtest
-        quote_snapshot = feed.snapshot()
-        quality_snapshot = feed.quality_snapshot()
-        paper_snapshot = backtest.paper_snapshot()
-        reasons: list[str] = []
-        if quote_snapshot.status != "live":
-            reasons.append(f"quote_{quote_snapshot.status}")
-        if quality_snapshot.status not in {"live", "partial", "complete"}:
-            reasons.append(f"quality_{quality_snapshot.status}")
-        if paper_snapshot["status"] != "running":
-            reasons.append(f"paper_{paper_snapshot['status']}")
-        return OperationsReadiness(
-            status="degraded" if reasons else "ready",
-            reasons=tuple(reasons),
-            quote_status=quote_snapshot.status,
-            quality_status=quality_snapshot.status,
-            paper_status=str(paper_snapshot["status"]),
-        )
+        bounded = max(1, min(limit, 240))
+        engine: ResearchRuntime | None = app.state.runtime
+        output = engine.snapshot()["output"] if engine else {}
+        return {
+            "schema_version": 2,
+            "quote_history": app.state.quotes.history(limit=bounded),
+            "quality_history": app.state.quotes.quality_monitor.history(limit=bounded),
+            "transitions": output.get("transitions", [])[-bounded:],
+            "signals": output.get("signals", {}).get("history", [])[-bounded:],
+        }
 
-    @application.get("/operations/alerts")
-    def operations_alerts(request: Request, response: Response) -> dict[str, object]:
+    @app.get("/backtest/runs")
+    def backtest_runs(request: Request) -> dict[str, Any]:
         _assert_local_http(request)
-        response.headers["Cache-Control"] = "no-store"
-        feed: QuoteService = request.app.state.quotes
-        backtest: BacktestLabService = request.app.state.backtest
-        quote_snapshot = feed.snapshot()
-        quality_snapshot = feed.quality_snapshot()
-        paper_snapshot = backtest.paper_snapshot()
-        observed_at = (
-            quote_snapshot.quote.received_at.isoformat()
-            if quote_snapshot.quote is not None
-            else "unknown"
-        )
-        alerts: list[OperationsAlert] = []
-        if quote_snapshot.status != "live":
-            alerts.append(
-                OperationsAlert(
-                    code=f"quote_{quote_snapshot.status}",
-                    severity="warning",
-                    message=f"Quote stream status is {quote_snapshot.status}.",
-                    component="quote",
-                    observed_at=observed_at,
-                )
+        return {"schema_version": 2, "runs": app.state.backtest.list_runs()}
+
+    @app.post("/backtest/runs")
+    def run_backtest(request: Request, payload: dict[str, str]) -> dict[str, Any]:
+        _assert_local_http(request, mutation=True)
+        engine: ResearchRuntime | None = app.state.runtime
+        cfg = app.state.configs.get(payload.get("parameter_set", ""))
+        if engine is None or cfg is None or not engine.events():
+            raise HTTPException(409, "Configured research data and parameter set required")
+        events = engine.events()
+        # Quote observation is partial, not a claim of lossless market capture.
+        dataset = manifest_for(events, quality="partial")
+        try:
+            run = app.state.backtest.runner.run(
+                dataset=dataset,
+                config=cfg,
+                events=events,
+                expected_dataset_hash=canonical_hash(dataset),
             )
-        if quality_snapshot.status in {"disconnected", "error", "stale", "clock_skew"}:
-            alerts.append(
-                OperationsAlert(
-                    code=f"quality_{quality_snapshot.status}",
-                    severity="critical",
-                    message=f"Quality monitor reported {quality_snapshot.status}.",
-                    component="quality",
-                    observed_at=quality_snapshot.observed_at.isoformat(),
-                )
-            )
-        if paper_snapshot["status"] in {"paused", "kill_switch"}:
-            alerts.append(
-                OperationsAlert(
-                    code=f"paper_{paper_snapshot['status']}",
-                    severity="warning",
-                    message=f"Paper simulator is {paper_snapshot['status']}.",
-                    component="paper",
-                    observed_at=observed_at,
-                )
-            )
-        if not alerts:
-            alerts.append(
-                OperationsAlert(
-                    code="operations_nominal",
-                    severity="info",
-                    message="No active operational alerts.",
-                    component="quality",
-                    observed_at=observed_at,
-                )
-            )
-        return {"schema_version": 1, "alerts": [item.model_dump(mode="json") for item in alerts]}
+            app.state.backtest.store.append(run)
+        except ValueError:
+            raise HTTPException(422, "Invalid dataset or research configuration") from None
+        return cast(dict[str, Any], canonical_serialize(run))
 
-    @application.websocket("/ws/quotes")
-    async def stream_quotes(websocket: WebSocket) -> None:
-        if not _is_local_ws(websocket):
-            await websocket.close(code=1008)
+    @app.get("/backtest/compare")
+    def compare(request: Request, run_ids: str = "") -> dict[str, Any]:
+        _assert_local_http(request)
+        return {"runs": app.state.backtest.compare(tuple(run_ids.split(",")))}
+
+    @app.get("/risk/replay")
+    def risk(request: Request) -> Any:
+        _assert_local_http(request)
+        return app.state.backtest.risk_replay()
+
+    @app.get("/paper/replay")
+    def paper(request: Request) -> Any:
+        _assert_local_http(request)
+        return app.state.backtest.paper_replay()
+
+    @app.post("/paper/control")
+    def paper_control(request: Request, payload: dict[str, str]) -> Any:
+        _assert_local_http(request, mutation=True)
+        engine: ResearchRuntime | None = app.state.runtime
+        if engine is None or engine.paper is None:
+            raise HTTPException(409, "Paper not configured")
+        try:
+            engine.paper.control(payload.get("action", ""))
+        except ValueError:
+            raise HTTPException(422, "Invalid paper control") from None
+        return engine.paper.snapshot()
+
+    def readiness_payload() -> dict[str, Any]:
+        payload = state_payload()
+        reasons = []
+        if payload["research"]["event_count"] == 0:
+            reasons.append("research_not_initialized")
+        if payload["quote"]["status"] != "live":
+            reasons.append("feed_not_live")
+        if payload["research_mode"] != "live_observation":
+            reasons.append("research_not_fresh")
+        if payload["research"]["error"]:
+            reasons.append(payload["research"]["error"])
+        if not payload["storage_available"]:
+            reasons.append("storage_unavailable")
+        if payload["storage_backend"] != "postgresql":
+            reasons.append("postgres_not_configured")
+        return {
+            "status": "degraded" if reasons else "ready",
+            "reasons": reasons,
+            "scope": "local_observation",
+            "remote_access": "disabled",
+            "production_hardening": "unverified",
+        }
+
+    @app.get("/operations/readiness")
+    def readiness(request: Request) -> dict[str, Any]:
+        _assert_local_http(request)
+        return readiness_payload()
+
+    @app.get("/operations/alerts")
+    def alerts(request: Request) -> dict[str, Any]:
+        _assert_local_http(request)
+        value = readiness_payload()
+        return {"alerts": [{"code": reason, "severity": "warning"} for reason in value["reasons"]]}
+
+    async def stream(ws: WebSocket, quotes_only: bool) -> None:
+        if not _is_local_ws(ws):
+            await ws.close(code=1008)
             return
-        await websocket.accept()
-        feed: QuoteService = websocket.app.state.quotes
-        last_sequence = -1
+        await ws.accept()
+        previous = ""
         try:
             while True:
-                snapshot = feed.snapshot()
-                if snapshot.sequence != last_sequence:
-                    await websocket.send_json(snapshot.model_dump(mode="json"))
-                    last_sequence = snapshot.sequence
+                payload = state_payload()
+                fingerprint = canonical_hash(payload)
+                if fingerprint != previous:
+                    if quotes_only:
+                        await asyncio.wait_for(ws.send_json(payload["quote"]), timeout=5)
+                    else:
+                        # Full snapshots recover from reconnects and missed deltas.
+                        await asyncio.wait_for(
+                            ws.send_json(
+                                {
+                                    "schema_version": 2,
+                                    "event_type": "state_snapshot",
+                                    "sequence": payload["sequence"],
+                                    "stream_id": payload["quote"]["stream_id"],
+                                    "payload": payload,
+                                }
+                            ),
+                            timeout=5,
+                        )
+                    previous = fingerprint
                 try:
-                    message = await asyncio.wait_for(websocket.receive(), timeout=0.25)
+                    message = await asyncio.wait_for(ws.receive(), timeout=0.25)
                     if message["type"] == "websocket.disconnect":
                         break
                 except TimeoutError:
                     pass
-        except (WebSocketDisconnect, OSError):
-            pass
-
-    @application.websocket("/ws/events")
-    async def stream_events(websocket: WebSocket) -> None:
-        if not _is_local_ws(websocket):
-            await websocket.close(code=1008)
+        except (WebSocketDisconnect, OSError, TimeoutError):
             return
-        await websocket.accept()
-        feed: QuoteService = websocket.app.state.quotes
-        last_sequence = -1
-        try:
-            while True:
-                snapshot = feed.snapshot()
-                if snapshot.sequence != last_sequence:
-                    quality_snapshot = feed.quality_snapshot()
-                    backtest: BacktestLabService = websocket.app.state.backtest
-                    paper_snapshot = backtest.paper_snapshot()
-                    quote_event = EventEnvelope(
-                        sequence=snapshot.sequence,
-                        event_type="quote_snapshot",
-                        payload=snapshot.model_dump(mode="json"),
-                    )
-                    quality_event = EventEnvelope(
-                        sequence=quality_snapshot.sequence,
-                        event_type="quality_snapshot",
-                        payload=asdict(quality_snapshot),
-                    )
-                    paper_event = EventEnvelope(
-                        sequence=snapshot.sequence,
-                        event_type="paper_snapshot",
-                        payload=paper_snapshot,
-                    )
-                    await websocket.send_json(quote_event.model_dump(mode="json"))
-                    await websocket.send_json(quality_event.model_dump(mode="json"))
-                    await websocket.send_json(paper_event.model_dump(mode="json"))
-                    last_sequence = snapshot.sequence
-                try:
-                    message = await asyncio.wait_for(websocket.receive(), timeout=0.25)
-                    if message["type"] == "websocket.disconnect":
-                        break
-                except TimeoutError:
-                    pass
-        except (WebSocketDisconnect, OSError):
-            pass
 
-    return application
+    @app.websocket("/ws/events")
+    async def events(ws: WebSocket) -> None:
+        await stream(ws, False)
 
+    @app.websocket("/ws/quotes")
+    async def quote_stream(ws: WebSocket) -> None:
+        await stream(ws, True)
 
-def _is_local_http(request: Request) -> bool:
-    return (
-        request.client is not None
-        and request.client.host in LOCAL_CLIENTS
-        and request.headers.get("origin") in (None, *LOCAL_ORIGINS)
-    )
-
-
-def _assert_local_http(request: Request) -> None:
-    if not _is_local_http(request):
-        raise HTTPException(status_code=403, detail="Local access only")
-
-
-def _is_local_ws(websocket: WebSocket) -> bool:
-    return (
-        websocket.client is not None
-        and websocket.client.host in LOCAL_CLIENTS
-        and websocket.headers.get("origin") in LOCAL_ORIGINS
-    )
+    return app
 
 
 app = create_app()

@@ -64,11 +64,13 @@ def test_dashboard_state_config_quality_and_history_endpoints() -> None:
     assert paper.status_code == 200
     assert readiness.status_code == 200
     assert alerts.status_code == 200
-    assert state.json()["backtest_lab_status"] == "ready"
+    assert state.json()["backtest_lab_status"] == "empty"
+    assert state.json()["matrix_status"] == "unavailable"
+    assert state.json()["paper_trading_status"] == "unavailable"
     assert config.json()["local_only"] is True
     assert len(history.json()["quote_history"]) == 2
     assert len(history.json()["quality_history"]) == 2
-    assert len(backtest.json()["runs"]) == 3
+    assert backtest.json()["runs"] == []
     assert "accepted" in risk.json()
     assert "fills" in paper.json()
     assert "status" in readiness.json()
@@ -96,13 +98,10 @@ def test_dashboard_event_stream_emits_quote_and_quality_snapshots() -> None:
             headers={"origin": "http://localhost:3000"},
         ) as ws:
             quote_event = ws.receive_json()
-            quality_event = ws.receive_json()
-            paper_event = ws.receive_json()
 
-    assert quote_event["event_type"] == "quote_snapshot"
-    assert quality_event["event_type"] == "quality_snapshot"
-    assert paper_event["event_type"] == "paper_snapshot"
-    assert quality_event["payload"]["status"] in {"disconnected", "error", "unavailable", "unknown"}
+    assert quote_event["event_type"] == "state_snapshot"
+    assert quote_event["payload"]["quote"]["status"] == "disconnected"
+    assert quote_event["payload"]["matrix_status"] == "unavailable"
 
 
 def test_dashboard_event_stream_rejects_untrusted_origin() -> None:
@@ -133,4 +132,4 @@ def test_backtest_compare_returns_selected_runs_only() -> None:
         )
 
     assert compared.status_code == 200
-    assert len(compared.json()["runs"]) == 2
+    assert compared.json()["runs"] == []

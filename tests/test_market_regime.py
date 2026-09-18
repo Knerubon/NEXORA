@@ -111,8 +111,18 @@ def test_regime_hysteresis_holds_previous_state_near_boundary() -> None:
     assert baseline.state.label == "trend"
 
     held = engine.classify(
-        structure=_structure(["101", "101.5", "102", "102.5"]),
+        structure=_structure(["101", "101.5", "102", "103.5"]),
         matrix=_matrix("mixed", datetime(2026, 2, 3, 10, 5, tzinfo=UTC)),
     )
     assert held.state.label == "trend"
     assert held.state.reason == "hysteresis_hold"
+
+
+def test_high_volatility_exits_after_calm_prices() -> None:
+    engine = MarketRegimeEngine(_config())
+    matrix = _matrix("mixed", datetime(2026, 2, 3, 10, 3, tzinfo=UTC))
+    assert (
+        engine.classify(_structure(["100", "110", "101", "109"]), matrix).state.label
+        == "high_volatility"
+    )
+    assert engine.classify(_structure(["100", "101", "100", "101"]), matrix).state.label == "range"

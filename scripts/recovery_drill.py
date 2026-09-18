@@ -1,52 +1,97 @@
-"""Run local recovery drill checks for P13 hardening evidence."""
+"""Backup a real local journal and verify recovery in a fresh Python process.
+
+Without arguments, run an isolated synthetic paper-session recovery rehearsal.
+This does not certify PostgreSQL recovery or remote deployment.
+"""
 
 from __future__ import annotations
 
-import hashlib
+import argparse
 import json
+import subprocess
+import sys
+import tempfile
+from decimal import Decimal
 from pathlib import Path
-from typing import Any, cast
 
-from nexora.backtest import BacktestLabService
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
-MIGRATIONS = (
-    REPO_ROOT / "infra" / "migrations" / "004_backtest_runs.sql",
-    REPO_ROOT / "infra" / "migrations" / "005_risk_decisions.sql",
-    REPO_ROOT / "infra" / "migrations" / "006_paper_trading.sql",
-)
+from nexora.artifacts import canonical_hash, decode
+from nexora.paper.session import PaperSession, PaperSessionConfig
+from nexora.risk import proposal_fixture, risk_policy_fixture
+from nexora.storage import SQLiteJournal
 
 
-def _hash_payload(payload: dict[str, Any]) -> str:
-    normalized = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
-    return hashlib.sha256(normalized).hexdigest()
+def recovered_hash(path: Path, namespace: str) -> str:
+    journal = SQLiteJournal(path)
+    try:
+        rows = journal.read(f"paper:{namespace}:config")
+        if len(rows) != 1:
+            raise ValueError("paper_config_missing")
+        config = decode(PaperSessionConfig, rows[0])
+        session = PaperSession(config, journal)
+        return canonical_hash(session.snapshot())
+    finally:
+        journal.close()
+
+
+def drill(source: Path, destination: Path, namespace: str) -> None:
+    before = recovered_hash(source, namespace)
+    journal = SQLiteJournal(source)
+    try:
+        journal.backup(destination)
+    finally:
+        journal.close()
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(Path(__file__).resolve()),
+            "--verify",
+            str(destination),
+            "--namespace",
+            namespace,
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    after = json.loads(result.stdout)["state_hash"]
+    if before != after:
+        raise RuntimeError("restore_state_mismatch")
+    print(f"PASS: SQLite backup and fresh-process paper/risk recovery {after}")
+    print("NOT VERIFIED: PostgreSQL backup/restore, host crash, RPO/RTO, remote access")
 
 
 def main() -> None:
-    missing = [path for path in MIGRATIONS if not path.exists()]
-    if missing:
-        missing_list = ", ".join(str(item) for item in missing)
-        raise RuntimeError(f"missing_migrations:{missing_list}")
-
-    service = BacktestLabService.bootstrap()
-    first = service.paper_replay()
-    second = service.paper_replay()
-    first_hash = _hash_payload(first)
-    second_hash = _hash_payload(second)
-    if first_hash != second_hash:
-        raise RuntimeError("non_deterministic_paper_replay")
-    accepted = cast(int, first["accepted"])
-    rejected = cast(int, first["rejected"])
-    if accepted < 1 or rejected < 1:
-        raise RuntimeError("insufficient_replay_coverage")
-
-    checkpoint_rows = cast(list[dict[str, object]], first["checkpoints"])
-    if len(checkpoint_rows) < 1:
-        raise RuntimeError("missing_checkpoint_rows")
-
-    print("PASS: migrations-present")
-    print(f"PASS: deterministic-paper-replay {first_hash}")
-    print(f"PASS: checkpoints {len(checkpoint_rows)}")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--source", type=Path)
+    parser.add_argument("--backup", type=Path)
+    parser.add_argument("--verify", type=Path)
+    parser.add_argument("--namespace", default="paper-recovery")
+    args = parser.parse_args()
+    if args.verify:
+        print(json.dumps({"state_hash": recovered_hash(args.verify, args.namespace)}))
+        return
+    if args.source:
+        if not args.source.is_file() or args.backup is None:
+            parser.error("existing --source and a new --backup path are required")
+        drill(args.source, args.backup, args.namespace)
+        return
+    with tempfile.TemporaryDirectory(prefix="nexora-recovery-") as temporary:
+        source, backup = Path(temporary) / "source.sqlite", Path(temporary) / "backup.sqlite"
+        journal = SQLiteJournal(source)
+        config = PaperSessionConfig(
+            args.namespace,
+            "paper-account",
+            Decimal("10000"),
+            Decimal("0.05"),
+            Decimal("0.1"),
+            risk_policy_fixture(),
+            Decimal("1"),
+            Decimal("1"),
+        )
+        session = PaperSession(config, journal)
+        session.submit(proposal_fixture().signal, price=Decimal("100"), quality="complete")
+        journal.close()
+        drill(source, backup, args.namespace)
 
 
 if __name__ == "__main__":

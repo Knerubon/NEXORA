@@ -7,6 +7,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Literal
 
+from nexora.research import PipelineConfig
 from nexora.signals import ResearchSignal
 
 RunMode = Literal["baseline", "fixed_pnf", "adaptive_pnf"]
@@ -66,6 +67,8 @@ class BacktestConfig:
     seed: int | None
     cost_policy: CostPolicy
     execution_policy: ExecutionPolicy
+    pipeline: PipelineConfig | None = None
+    baseline_lookback: int = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +84,7 @@ class SimulatedTrade:
     net_pnl: Decimal
     hold_seconds: int
     source_refs: tuple[str, ...]
+    decision_time: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -97,3 +97,7 @@ next_action: <specific action>
 Repo มี runnable P1–P4 implementation แล้ว; commands อยู่ใน [development guide](docs/development.md) และ historical task evidence ต้องตรวจว่าใช้ได้กับ checkout ปัจจุบันก่อนอ้าง pass
 สำหรับ docs-only: ตรวจ links/context paths, metadata, dependency graph, source-of-truth diff และ `git diff --check`; อย่าอ้างว่า application tests ผ่าน
 PR ระบุ problem/outcome, changed scope, validation, decisions และ limitations โดยใช้ evidence จริง
+
+## Corrective work
+
+[FIX1](tasks/FIX1-system-readiness.md) tracks the post-merge readiness corrections under [ADR-018](docs/decisions/ADR-018-readiness-corrections.md). Historical P1–P4 evidence remains unchanged; see [runtime release gates](docs/research-runtime.md) for unverified operational requirements.

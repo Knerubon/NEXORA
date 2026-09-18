@@ -1,0 +1,90 @@
+"""Durable observation orchestration with explicit research/paper configuration."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from threading import RLock
+from typing import Any
+
+from nexora.artifacts import canonical_hash, decode
+from nexora.market_data.models import NormalizedPriceEvent
+from nexora.paper.session import PaperSession, PaperSessionConfig
+from nexora.research import PipelineConfig, ResearchPipeline
+from nexora.storage import Journal
+
+
+@dataclass(frozen=True)
+class RuntimeConfig:
+    pipeline: PipelineConfig
+    units: str
+    paper: PaperSessionConfig | None = None
+    implementation_version: str = "research-pipeline-v2"
+
+
+class ResearchRuntime:
+    def __init__(self, config: RuntimeConfig, journal: Journal) -> None:
+        self.config, self.journal = config, journal
+        self.stream = "research:" + canonical_hash(config)
+        self._lock = RLock()
+        self.error: str | None = None
+        journal.append(self.stream + ":config", "config", config)
+        self.paper = PaperSession(config.paper, journal) if config.paper is not None else None
+        self._rebuild()
+
+    def _rebuild(self) -> None:
+        self.engine = ResearchPipeline(self.config.pipeline)
+        self._events: list[NormalizedPriceEvent] = []
+        for row in self.journal.read(self.stream):
+            event = decode(NormalizedPriceEvent, row["event"])
+            self.engine.process(event)
+            self._events.append(event)
+            self._paper_event(event, str(row.get("completeness", "unknown")))
+
+    def ingest(self, event: NormalizedPriceEvent, *, completeness: str = "unknown") -> None:
+        with self._lock:
+            try:
+                if event.units != self.config.units:
+                    raise ValueError("event_units_mismatch")
+                for stored in self._events:
+                    if stored.identity_key == event.identity_key:
+                        if canonical_hash(stored) != canonical_hash(event):
+                            raise ValueError("event_identity_conflict")
+                        return
+                output = self.engine.process(event)
+                inserted = self.journal.append(
+                    self.stream,
+                    event.identity_key,
+                    {"event": event, "output": output, "completeness": completeness},
+                    expected_count=len(self._events),
+                )
+                if inserted:
+                    self._events.append(event)
+                self._paper_event(event, completeness)
+                self.error = None
+            except Exception:
+                self.error = "research_processing_failed"
+                self._rebuild()
+                raise
+
+    def _paper_event(self, event: NormalizedPriceEvent, completeness: str) -> None:
+        if self.paper is not None:
+            latest = self.engine.signals.snapshot().latest
+            if (
+                latest is not None
+                and latest.status == "active"
+                and latest.decision_time == event.received_at
+            ):
+                self.paper.submit(latest, price=event.price, quality=completeness)
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            return {
+                "backend": self.journal.backend,
+                "error": self.error,
+                "event_count": len(self._events),
+                "output": self.engine.snapshot(),
+            }
+
+    def events(self) -> tuple[NormalizedPriceEvent, ...]:
+        with self._lock:
+            return tuple(self._events)

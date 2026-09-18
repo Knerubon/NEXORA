@@ -34,9 +34,7 @@ def main() -> None:
                     assert payload == {
                         "status": "ok",
                         "mode": "research",
-                        "database": "not_configured",
-                        "broker": "not_configured",
-                        "engine": "not_implemented",
+                        "readiness": "/operations/readiness",
                     }
                 print("PASS: loopback API HTTP health")
                 return

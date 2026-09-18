@@ -29,7 +29,7 @@ P13 harden operation ไม่เลื่อน auth/encryption, risk หรื
 ## Status and decision gates
 ใช้แต่ละ task Execution record + review/merge evidence ไม่ใช้ roadmap เป็น completion record
 P4 implementation merged ใน PR #5 แต่ required review/DoD ยังไม่ครบหลักฐาน: ดู ADR-007; P1–P4 history คงเดิมและ P5 ยัง blocked
-P5–P13 และ DQ1 ยัง not_started/blocked; dependency completion และ ADR-007 review เป็น entry gates
+P5–P13 implementation merged ถึง e16ef34 แต่ audit พบ integration/correctness gaps; merged ไม่เท่ากับผ่าน acceptance ทั้งหมด ดู [FIX1](../tasks/FIX1-system-readiness.md) และ [ADR-018](decisions/ADR-018-readiness-corrections.md). Historical execution records คงเดิม; independent review และ operational evidence ยังเป็น release gates.
 P5 ล็อก configs/snapshot; P6 pivot/S&R; P7 regime rules; P8 signal rules; P9 transport/auth; P10 dataset/costs/metrics/splits; P11 risk policy; P12 simulated fill/accounting; P13 measurable recovery/operational targets
 Numeric thresholds/formulas ยังต้อง reviewed decisions และ golden fixtures; OX observations ไม่ใช่ specification
 

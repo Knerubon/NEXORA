@@ -83,3 +83,7 @@ See `docs/requirements.md` and `docs/architecture.md` as the project is built ou
 See [P1–P13 roadmap](docs/roadmap.md) and [ADR-007 numbering/boundary clarification](docs/decisions/ADR-007-task-roadmap.md).
 Includes additive market-data quality (DQ1), dataset versioning (P10), a separate Risk Engine (P11), local Paper Trading (P12) and Production Hardening (P13).
 Requirements/architecture remain the source of truth; no live/demo broker orders. Historical task records are preserved; merged implementation is not proof of completed independent review.
+
+## Research runtime status
+
+[FIX1 corrective work](tasks/FIX1-system-readiness.md) connects recorded inputs, shared engines, durable paper state and actual-price backtests. Read [runtime setup and release gaps](docs/research-runtime.md) before using the system; merged phase code does not certify production readiness.

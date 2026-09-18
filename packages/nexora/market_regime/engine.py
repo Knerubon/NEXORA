@@ -50,7 +50,17 @@ class MarketRegimeEngine:
             if (
                 self._previous_label != "unknown"
                 and label != self._previous_label
-                and width < (self.config.high_volatility_min_width + self.config.hysteresis)
+                and (
+                    (
+                        self._previous_label == "high_volatility"
+                        and width >= self.config.high_volatility_min_width - self.config.hysteresis
+                    )
+                    or (
+                        self._previous_label == "trend"
+                        and label == "range"
+                        and abs(slope) >= self.config.trend_min_slope - self.config.hysteresis
+                    )
+                )
             ):
                 label = self._previous_label
                 reason = "hysteresis_hold"

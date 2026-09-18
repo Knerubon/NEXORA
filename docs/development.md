@@ -67,7 +67,7 @@ Expected: explicit `ready|degraded` readiness with reason codes plus observable 
 ```powershell
 .venv/Scripts/python scripts/recovery_drill.py
 ```
-Expected: migration presence checks and deterministic paper replay hash with checkpoint evidence.
+Expected: isolated SQLite backup restored in a fresh Python process; paper/risk state hashes match. This does not certify PostgreSQL, host crash recovery or RPO/RTO. See [research runtime](research-runtime.md).
 
 ## Validation
 ```powershell
@@ -100,3 +100,7 @@ Get-NetTCPConnection -LocalPort 5432 -State Listen
 ```
 Expected: `1`, `localhost` และ loopback listeners; ห้ามเปิด DB/MT5 public
 Schema/migrations เป็นงาน P2
+
+## Connected research runtime (FIX1)
+
+See [configuration, recorded-data import and remaining release gates](research-runtime.md). Default startup contains no sample backtests and no configured paper session.

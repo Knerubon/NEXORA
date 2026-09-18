@@ -9,9 +9,7 @@ def test_health_reports_liveness_without_claiming_readiness() -> None:
     assert response.json() == {
         "status": "ok",
         "mode": "research",
-        "database": "not_configured",
-        "broker": "not_configured",
-        "engine": "not_implemented",
+        "readiness": "/operations/readiness",
     }
 
 
