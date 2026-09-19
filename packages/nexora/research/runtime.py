@@ -10,6 +10,7 @@ from nexora.artifacts import canonical_hash, decode
 from nexora.market_data.models import NormalizedPriceEvent
 from nexora.paper.session import PaperSession, PaperSessionConfig
 from nexora.research import PipelineConfig, ResearchPipeline
+from nexora.signals import ResearchSignal
 from nexora.storage import Journal
 
 
@@ -38,7 +39,7 @@ class ResearchRuntime:
             event = decode(NormalizedPriceEvent, row["event"])
             self.engine.process(event)
             self._events.append(event)
-            self._paper_event(event, str(row.get("completeness", "unknown")))
+            self._paper_event(event, str(row.get("completeness", "unknown")), row["output"])
 
     def ingest(self, event: NormalizedPriceEvent, *, completeness: str = "unknown") -> None:
         with self._lock:
@@ -59,21 +60,37 @@ class ResearchRuntime:
                 )
                 if inserted:
                     self._events.append(event)
-                self._paper_event(event, completeness)
+                self._paper_event(event, completeness, output)
                 self.error = None
             except Exception:
                 self.error = "research_processing_failed"
                 self._rebuild()
                 raise
 
-    def _paper_event(self, event: NormalizedPriceEvent, completeness: str) -> None:
+    def _paper_event(
+        self, event: NormalizedPriceEvent, completeness: str, output: dict[str, Any]
+    ) -> None:
         if self.paper is not None:
-            latest = self.engine.signals.snapshot().latest
+            # Recorded decisions are immutable even when a newer engine rebuilds
+            # research state. Never retroactively submit its new interpretation.
+            payload = output.get("signals", {}).get("latest")
+            latest = decode(ResearchSignal, payload) if payload is not None else None
             if (
                 latest is not None
                 and latest.status == "active"
                 and latest.decision_time == event.received_at
             ):
+                for row in self.journal.read(self.paper.stream):
+                    if row.get("signal_id") == latest.signal_id:
+                        # Older serialized decisions lack the additive defaults.
+                        # Accept the original hash or its typed reconstruction,
+                        # but retain identity-conflict rejection for changed data.
+                        if row["signal_hash"] not in {
+                            canonical_hash(payload),
+                            canonical_hash(latest),
+                        }:
+                            raise ValueError("signal_identity_conflict")
+                        return
                 self.paper.submit(latest, price=event.price, quality=completeness)
 
     def snapshot(self) -> dict[str, Any]:

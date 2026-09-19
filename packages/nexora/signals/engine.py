@@ -69,6 +69,27 @@ class SignalEngine:
             )
             return self.snapshot()
 
+        # Reject inconsistent snapshots instead of consuming future confirmations.
+        cutoff = matrix.generated_at
+        if (
+            any(
+                p.confirmation_time > cutoff or p.occurrence_time > p.confirmation_time
+                for p in structure.pivots
+            )
+            or any(level.updated_at > cutoff for level in structure.levels)
+            or regime.state.effective_time > cutoff
+            or any(
+                r.latest_transition is not None and r.latest_transition.event_time > cutoff
+                for r in matrix.resolutions
+            )
+        ):
+            self._last_decision = self._wait_decision(
+                reason_code="future_inputs",
+                reason_text="Inputs contain information confirmed after decision time.",
+                source_refs=("future_inputs",),
+            )
+            return self.snapshot()
+
         assessment = self._assess_components(
             structure=structure,
             regime=regime,
@@ -91,6 +112,9 @@ class SignalEngine:
             self._last_decision = SignalDecision(
                 action="WAIT",
                 score=score,
+                buy_strength=max(0, min(100, assessment.buy_points)),
+                sell_strength=max(0, min(100, assessment.sell_points)),
+                strength_available=True,
                 entry_zone=None,
                 invalidation_price=None,
                 invalidation_reason=None,
@@ -101,7 +125,7 @@ class SignalEngine:
                 negative_evidence=assessment.negative_evidence,
                 future_conditions=self._future_conditions(regime=regime, matrix=matrix),
                 config_version=self.config.version,
-                engine_version=f"{self.config.version}:p8a-v1",
+                engine_version=f"{self.config.version}:p8b-v2",
                 source_refs=source_refs,
             )
             return self.snapshot()
@@ -116,6 +140,18 @@ class SignalEngine:
                 reason_code="missing_trade_setup",
                 reason_text="Deterministic entry/invalidation targets are unavailable.",
                 source_refs=source_refs,
+            )
+            self._last_decision = replace(
+                self._last_decision,
+                buy_strength=max(0, min(100, assessment.buy_points)),
+                sell_strength=max(0, min(100, assessment.sell_points)),
+                strength_available=True,
+                patterns=assessment.patterns,
+                positive_evidence=assessment.positive_evidence,
+                negative_evidence=(
+                    *assessment.negative_evidence,
+                    *self._last_decision.negative_evidence,
+                ),
             )
             return self.snapshot()
         entry_zone, invalidation_price, invalidation_reason, targets, risk_reward = setup
@@ -140,12 +176,15 @@ class SignalEngine:
             engine_versions=(
                 assessment.engine_version_ref,
                 regime.state.config_version,
-                f"{self.config.version}:p8a-v1",
+                f"{self.config.version}:p8b-v2",
             ),
             status="active",
             decision=SignalDecision(
                 action=action,
                 score=score,
+                buy_strength=max(0, min(100, assessment.buy_points)),
+                sell_strength=max(0, min(100, assessment.sell_points)),
+                strength_available=True,
                 entry_zone=entry_zone,
                 invalidation_price=invalidation_price,
                 invalidation_reason=invalidation_reason,
@@ -156,7 +195,7 @@ class SignalEngine:
                 negative_evidence=assessment.negative_evidence,
                 future_conditions=self._future_conditions(regime=regime, matrix=matrix),
                 config_version=self.config.version,
-                engine_version=f"{self.config.version}:p8a-v1",
+                engine_version=f"{self.config.version}:p8b-v2",
                 source_refs=source_refs,
             ),
         )
@@ -397,8 +436,18 @@ class SignalEngine:
                 )
             )
 
-        patterns = self._patterns(structure)
         dominant_before = "BUY" if buy_points >= sell_points else "SELL"
+        patterns = tuple(
+            replace(
+                pattern,
+                relation=(
+                    "confirmation"
+                    if (pattern.direction == "bullish") == (dominant_before == "BUY")
+                    else "conflict"
+                ),
+            )
+            for pattern in self._patterns(structure)
+        )
         for pattern in patterns:
             if pattern.relation == "confirmation":
                 points = self.config.weights.pattern_confirmation
@@ -580,7 +629,7 @@ class SignalEngine:
             negative_evidence=(evidence,),
             future_conditions=("Await confirmed market structure evidence.",),
             config_version=self.config.version,
-            engine_version=f"{self.config.version}:p8a-v1",
+            engine_version=f"{self.config.version}:p8b-v2",
             source_refs=source_refs,
         )
 
@@ -847,36 +896,69 @@ class SignalEngine:
                     relation="confirmation",
                 )
             )
-        if first.kind == "high" and second.kind == "low" and third.kind == "high":
-            patterns.append(
-                PatternEvidence(
-                    pattern_type="head_and_shoulders_candidate",
-                    direction="bearish",
-                    start_time=first.occurrence_time,
-                    confirmation_time=third.confirmation_time,
-                    price_low=second.price,
-                    price_high=max(first.price, third.price),
-                    evidence_code="pattern_hs_conflict",
-                    source_data_reference=third.source_transition_id,
-                    algorithm_version="p8a-pattern-v1",
-                    relation="conflict",
+        # A three-pivot high/low/high shape is not head and shoulders.
+        # Require five alternating pivots and a sixth confirmed neckline break.
+        if len(structure.pivots) >= 6:
+            window = structure.pivots[-6:]
+            a, b, c, d, e, f = window
+            kinds = tuple(p.kind for p in window)
+            bearish = kinds == ("high", "low", "high", "low", "high", "low")
+            bullish = kinds == ("low", "high", "low", "high", "low", "high")
+            tolerance = self.config.pattern_price_tolerance
+            name = None
+            if bearish and c.price > max(a.price, e.price) + tolerance:
+                if abs(a.price - e.price) <= tolerance and f.price < min(b.price, d.price):
+                    name = "head_and_shoulders"
+            if bullish and c.price < min(a.price, e.price) - tolerance:
+                if abs(a.price - e.price) <= tolerance and f.price > max(b.price, d.price):
+                    name = "inverse_head_and_shoulders"
+            if name is None and bearish:
+                if a.price > c.price > e.price and b.price < d.price and f.price < b.price:
+                    name = "triangle_breakdown"
+            if name is None and bullish:
+                if a.price < c.price < e.price and b.price > d.price and f.price > b.price:
+                    name = "triangle_breakout"
+            if name is not None:
+                patterns.append(
+                    PatternEvidence(
+                        pattern_type=name,
+                        direction="bearish" if bearish else "bullish",
+                        start_time=a.occurrence_time,
+                        confirmation_time=max(p.confirmation_time for p in window),
+                        price_low=min(p.price for p in window),
+                        price_high=max(p.price for p in window),
+                        evidence_code=f"pattern_{name}",
+                        source_data_reference="|".join(p.source_transition_id for p in window),
+                        algorithm_version="p8b-pattern-v2",
+                        relation="confirmation",
+                    )
                 )
-            )
-        if first.kind == "low" and second.kind == "high" and third.kind == "low":
-            patterns.append(
-                PatternEvidence(
-                    pattern_type="inverse_head_and_shoulders_candidate",
-                    direction="bullish",
-                    start_time=first.occurrence_time,
-                    confirmation_time=third.confirmation_time,
-                    price_low=min(first.price, third.price),
-                    price_high=second.price,
-                    evidence_code="pattern_inverse_hs",
-                    source_data_reference=third.source_transition_id,
-                    algorithm_version="p8a-pattern-v1",
-                    relation="confirmation",
+        if len(structure.pivots) >= 4:
+            a, b, c, d = structure.pivots[-4:]
+            name = None
+            if (a.kind, b.kind, c.kind, d.kind) == ("high", "low", "high", "low"):
+                if c.price > a.price and d.price < b.price:
+                    name = "failed_breakout"
+            if (a.kind, b.kind, c.kind, d.kind) == ("low", "high", "low", "high"):
+                if c.price < a.price and d.price > b.price:
+                    name = "failed_breakdown"
+            if name is not None:
+                patterns.append(
+                    PatternEvidence(
+                        pattern_type=name,
+                        direction="bearish" if name == "failed_breakout" else "bullish",
+                        start_time=a.occurrence_time,
+                        confirmation_time=max(p.confirmation_time for p in (a, b, c, d)),
+                        price_low=min(p.price for p in (a, b, c, d)),
+                        price_high=max(p.price for p in (a, b, c, d)),
+                        evidence_code=f"pattern_{name}",
+                        source_data_reference="|".join(
+                            p.source_transition_id for p in (a, b, c, d)
+                        ),
+                        algorithm_version="p8b-pattern-v2",
+                        relation="confirmation",
+                    )
                 )
-            )
         return tuple(patterns)
 
     @staticmethod

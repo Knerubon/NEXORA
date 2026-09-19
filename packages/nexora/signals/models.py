@@ -79,6 +79,10 @@ class SignalDecision:
     engine_version: str
     source_refs: tuple[str, ...]
 
+    buy_strength: int | None = None
+    sell_strength: int | None = None
+    strength_available: bool = False
+
 
 @dataclass(frozen=True, slots=True)
 class SignalConfig:
