@@ -114,3 +114,28 @@ Final local evidence:
 Self-review; independent review pending. Draft PR only; no merge. Remaining work:
 independent review, optional PostgreSQL validation and the explicit A–E research contract.
 No empirical claim that the new pattern definitions improve trading performance.
+
+## Merge follow-up: persisted signal compatibility
+
+User explicitly requested merge after review. Fix P1 before merging: inspect
+`packages/nexora/research/runtime.py`, `packages/nexora/storage.py`,
+`packages/nexora/paper/session.py`, `tests/test_readiness_regressions.py` and
+`tests/test_signal_upgrade.py` to preserve committed artifacts across schema upgrades.
+Rebuild paper from recorded decision-time output, not reinterpreted historical signals.
+Keep PaperSession's identity conflict protection and all risk/execution rules unchanged.
+
+P1 resolved: runtime rebuild now uses the journal's recorded signal payload for Paper.
+Already committed signals accept either the original serialized hash or its typed
+reconstruction with additive defaults. Different signal content still fails identity
+validation. Missing submissions recover the original recorded decision; historical
+no-signal rows never submit a newly reinterpreted signal. No stored rows are rewritten,
+and PaperSession/Risk execution and duplicate protections are unchanged.
+
+Added four upgrade regressions: legacy committed restart, pending submission recovery,
+no retrospective new signal, and genuine identity-conflict rejection. Validated:
+`.venv/Scripts/python -m pytest -q` 126 passed / 1 optional PostgreSQL skip;
+`.venv/Scripts/ruff check .` passed; `.venv/Scripts/mypy` passed (87 files);
+`.venv/Scripts/python scripts/recovery_drill.py` passed;
+changed-file format and `git diff --check` passed.
+User's explicit merge request supersedes the earlier draft-only/no-merge instruction.
+Self-review of the fix completed; merge remains gated on updated CI checks.
