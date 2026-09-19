@@ -114,3 +114,8 @@ h1 { font-size: 20px; letter-spacing: -.4px; white-space: nowrap; }
   .is-focused .pnf-scroll { flex: 1; }
   .is-focused .matrix-float { flex-shrink: 0; }
 }
+.signal-summary, .signal-plan { display: flex; flex-wrap: wrap; gap: 12px 28px; }
+.signal-summary strong { margin-left: 6px; }
+.signal-plan dt { color: #697586; font-size: 12px; }
+.signal-plan dd { margin: 4px 0 0; }
+.signal-intelligence small { display: block; margin-top: 10px; color: #697586; }

@@ -72,7 +72,7 @@ def _matrix(
         symbol="XAUUSD",
         sequence=1,
         watermark_sequence=1,
-        generated_at=NOW,
+        generated_at=NOW + timedelta(hours=1),
         alignment=alignment,
         strength=3,
         resolutions=(

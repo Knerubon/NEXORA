@@ -1,5 +1,7 @@
 "use client";
 
+import { SignalIntelligence, type SignalDecision } from "./signal-intelligence";
+
 import { useCallback, useEffect, useRef, useState } from "react";
 
 type Column = { column_id: number; direction: string; open_price: string; close_price: string };
@@ -12,7 +14,7 @@ type Output = {
   matrix?: { alignment: string; resolutions: { name: string; direction: string; status: string }[] };
   structure?: { levels: { side: string; price: string; status: string }[] };
   regime?: { state: { label: string; reason: string } };
-  signals?: { history: Signal[] };
+  signals?: { history: Signal[]; decision?: SignalDecision };
 };
 type State = {
   sequence: number; research_mode: string; storage_backend: string;
@@ -177,6 +179,7 @@ export default function Home() {
     {error && <p role="alert" className="warning">{error}</p>}
     <section className="price-structure" aria-label="Price Structure"><p>{state?.quote.quote ? `Bid ${state.quote.quote.bid} / Ask ${state.quote.quote.ask} · ${state.quote.quote.event_time}` : "No live quote available"}</p>
       <p>Feed: {state?.quote.status ?? "Unavailable"}{state?.quote.quote?.time_offset_seconds ? ` · Explicit feed time correction: −${state.quote.quote.time_offset_seconds}s · raw: ${state.quote.quote.raw_event_time}` : ""}</p><StructureChart output={output} liveQuote={state?.quote.quote ?? null} /></section>
+    <SignalIntelligence decision={output.signals?.decision} />
     <section><h2>Matrix &amp; Regime</h2><p>{state?.research_mode === "live_observation" ? "Current observation" : "Last recorded calculation; not a live readiness indicator"}</p><div className="grid">
       {(output.matrix?.resolutions ?? []).map((r) => <article key={r.name}><h3>{r.name}</h3><p className="status">{r.direction} · {r.status}</p></article>)}
       <article><h3>Regime</h3><p>{output.regime?.state.label ?? "Unavailable"}</p><p>{output.regime?.state.reason ?? "Waiting for confirmed structure"}</p></article>
