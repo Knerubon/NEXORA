@@ -8,12 +8,13 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any, cast
 
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from nexora.artifacts import canonical_hash, canonical_serialize
 from nexora.backtest import BacktestLabService
 from nexora.backtest.datasets import manifest_for
 from nexora.backtest.models import BacktestConfig
+from nexora.experience import ExperienceRepository
 from nexora.research.runtime import ResearchRuntime
 from nexora.storage import Journal
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -65,13 +66,21 @@ def create_app(
         feed = service or configured_service()
         application.state.quotes = feed
         application.state.journal = store
+        application.state.experiences = ExperienceRepository(store)
         application.state.runtime = engine
         application.state.backtest = BacktestLabService.bootstrap(store, engine)
         application.state.configs = (
             backtest_configs if backtest_configs is not None else configured_backtests()
         )
         if engine is not None:
-            feed.on_quote = lambda quote: observe_quote(engine, quote)
+            feed.on_quote = lambda quote: observe_quote(
+                engine,
+                quote,
+                metadata={
+                    "quality": canonical_serialize(feed.quality_snapshot()),
+                    "status": feed.snapshot().model_dump(mode="json"),
+                },
+            )
         if start_worker:
             feed.start()
         try:
@@ -198,6 +207,60 @@ def create_app(
     def backtest_runs(request: Request) -> dict[str, Any]:
         _assert_local_http(request)
         return {"schema_version": 2, "runs": app.state.backtest.list_runs()}
+
+    @app.get("/experiences/summary")
+    def experience_summary(request: Request) -> dict[str, Any]:
+        _assert_local_http(request)
+        repository: ExperienceRepository = app.state.experiences
+        return {"schema_version": 1, "hypothetical_only": True, **repository.summary()}
+
+    @app.get("/experiences")
+    def recent_experiences(
+        request: Request,
+        limit: int = Query(20, ge=1, le=200),
+        offset: int = Query(0, ge=0),
+    ) -> dict[str, Any]:
+        _assert_local_http(request)
+        repository: ExperienceRepository = app.state.experiences
+        return {
+            "schema_version": 1,
+            "limit": limit,
+            "offset": offset,
+            "experiences": canonical_serialize(repository.recent(limit=limit, offset=offset)),
+        }
+
+    @app.get("/experiences/{experience_id}")
+    def experience_detail(request: Request, experience_id: str) -> dict[str, Any]:
+        _assert_local_http(request)
+        repository: ExperienceRepository = app.state.experiences
+        result = repository.detail(experience_id)
+        if result is None:
+            raise HTTPException(404, "Experience not found")
+        return result
+
+    @app.get("/experiences/{experience_id}/outcomes")
+    def experience_outcomes(
+        request: Request,
+        experience_id: str,
+        limit: int = Query(100, ge=1, le=200),
+        offset: int = Query(0, ge=0),
+    ) -> dict[str, Any]:
+        _assert_local_http(request)
+        repository: ExperienceRepository = app.state.experiences
+        if repository.get(experience_id) is None:
+            raise HTTPException(404, "Experience not found")
+        return {
+            "schema_version": 1,
+            "experience_id": experience_id,
+            "outcomes": repository.outcomes(experience_id),
+            "raw_observations": repository.raw_observations(
+                experience_id,
+                limit=limit,
+                offset=offset,
+            ),
+            "raw_limit": limit,
+            "raw_offset": offset,
+        }
 
     @app.post("/backtest/runs")
     def run_backtest(request: Request, payload: dict[str, str]) -> dict[str, Any]:

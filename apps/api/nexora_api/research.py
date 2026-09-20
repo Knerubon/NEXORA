@@ -6,7 +6,7 @@ import json
 import os
 from decimal import Decimal
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from nexora.artifacts import canonical_hash, decode
 from nexora.backtest.models import BacktestConfig
@@ -46,7 +46,12 @@ def configured_backtests() -> dict[str, BacktestConfig]:
     }
 
 
-def observe_quote(runtime: ResearchRuntime, quote: Quote) -> None:
+def observe_quote(
+    runtime: ResearchRuntime,
+    quote: Quote,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> None:
     """Quote polling is observation with unknown coverage, never full tick capture."""
     try:
         events = runtime.events()
@@ -89,6 +94,10 @@ def observe_quote(runtime: ResearchRuntime, quote: Quote) -> None:
             bid=bid,
             ask=ask,
         )
-        runtime.ingest(event, completeness="unknown")
+        runtime.ingest(
+            event,
+            completeness="unknown",
+            observation_metadata={"quote": quote.model_dump(mode="json"), "feed": metadata},
+        )
     except Exception:
         runtime.error = "research_processing_failed"

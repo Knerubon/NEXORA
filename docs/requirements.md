@@ -54,6 +54,15 @@ Initial views:
 - Initial metrics: trade count, win rate, expectancy, profit factor, max drawdown, false-entry proxy and latency/entry delay.
 - Include spread/commission/slippage assumptions where trade simulation is used.
 
+### FR-10 Experience Engine V1 research memory
+- Record immutable decision-time context and meaningful state transitions, including WAIT.
+- Measure later sampled market movement at T0 + 5/15/30/60 minutes and conditional
+  hypothetical plan outcomes; retain raw observations, provenance and missing-data status.
+- Query historical snapshots/outcomes and basic counts through internal services/local APIs.
+- Experience is memory/measurement only: no feedback into decisions, predictive ML/LLM,
+  strategy optimization, probability interpretation of Strength or execution changes.
+- Exact identity, measurement and recovery contract: [EX1](../tasks/EX1-experience-engine-v1.md).
+
 ## Non-functional requirements
 - Windows home PC is the initial production-like host.
 - PostgreSQL is the primary persistence layer.
