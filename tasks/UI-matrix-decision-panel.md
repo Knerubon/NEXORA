@@ -61,3 +61,15 @@ Python tests unnecessary unless backend changed. Independent review pending.
   fixtures; all changed application files are frontend UI/tests. No trading,
   feed, risk, execution, paper, backend or release changes.
 - Status: in_review; self-review; independent review pending. Draft PR only.
+
+## Review correction and release authorization (2026-09-20)
+- Owner authorized fixing the CI blocker, merging after checks pass, and tag 1.1.0.
+  This supersedes the earlier draft-only/no-merge/no-tag instructions for this PR.
+- Review found web CI failed because the chart regression reads baseline commit
+  8dd31a2 but checkout supplied shallow history. Web CI now fetches full history;
+  the baseline comparison and all production code remain unchanged.
+- Prior independent inspection: no backend, P&F/Matrix calculation, Signal Engine,
+  MT5, Risk, Paper or broker execution changes. Local web tests (23), lint,
+  typecheck and build passed; Python CI passed 127 tests, Ruff, mypy and recovery.
+- Merge remains gated on fresh CI for this correction. Browser pointer/resize
+  integration coverage remains a non-blocking follow-up, not a claimed pass.
