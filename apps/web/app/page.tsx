@@ -1,6 +1,8 @@
 "use client";
 
-import { SignalIntelligence, type SignalDecision } from "./signal-intelligence";
+import { SignalIntelligence, type SignalDecision, type PanelProps } from "./signal-intelligence";
+
+import { MatrixFloat } from "./matrix-float";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -17,8 +19,8 @@ type Output = {
   signals?: { history: Signal[]; decision?: SignalDecision };
 };
 type State = {
-  sequence: number; research_mode: string; storage_backend: string;
-  quote: { stream_id: string; status: string; quote: { symbol: string; bid: string; ask: string; event_time: string; raw_event_time?: string; time_offset_seconds?: number } | null };
+  sequence: number; research_mode: string; storage_backend: string; matrix_status?: string;
+  quote: { stream_id: string; status: string; symbol?: string; quote: { symbol: string; bid: string; ask: string; event_time: string; raw_event_time?: string; time_offset_seconds?: number } | null };
   quality: { status: string; completeness: string; counters: { observed: number; gaps: number; reconnects: number } };
   research: { event_count: number; error: string | null; output: Output };
 };
@@ -32,7 +34,7 @@ const metric = (value: string | null) => value === null ? "Undefined" : Number(v
 
 const api = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
 
-function StructureChart({ output, liveQuote }: { output: Output; liveQuote?: { symbol: string; bid: string; ask: string } | null }) {
+function StructureChart({ output, liveQuote, panelProps }: { panelProps?: PanelProps; output: Output; liveQuote?: { symbol: string; bid: string; ask: string } | null }) {
   const [zoom, setZoom] = useState(120);
   const [focused, setFocused] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -106,7 +108,7 @@ function StructureChart({ output, liveQuote }: { output: Output; liveQuote?: { s
         {prices.length > 0 && <g><line x1="75" x2={width} y1={y(latest)} y2={y(latest)} stroke="#64748b" strokeDasharray="4 5" /><title>{liveQuote ? `Latest live quote: ${latest.toFixed(2)}` : `Latest observed price: ${latest}`}</title></g>}
       </svg>
     </div>
-    <aside className="matrix-float"><strong>Matrix: {symbol}</strong><div className="matrix-mini">{(output.matrix?.resolutions ?? []).map((r) => <div key={r.name}><span>{r.name}</span><b className={r.direction === "X" ? "up" : "down"}>{r.direction === "X" || r.direction === "O" ? r.direction : "—"}</b><small>{r.status}</small></div>)}</div><small>Actual configured resolutions · observation</small></aside>
+    <MatrixFloat {...panelProps} decision={output.signals?.decision} matrix={output.matrix} onDetails={() => setFocused(false)} />
     </div>
     <div className="chart-caption">{liveQuote ? `Box ${safeStep} | ${columns.length} columns | ${cells.length} confirmed boxes | Latest live quote ${latest.toFixed(2)} · ${liveQuote.bid} / ${liveQuote.ask}` : cells.length ? `${columns.length} columns · ${cells.length} confirmed boxes · latest box ${safeStep}` : "Waiting for the first confirmed box — no sample data"} · {output.config_version ?? "Unconfigured"}</div>
   </div>;
@@ -178,14 +180,12 @@ export default function Home() {
       <p className="subtitle">{state?.research_mode === "live_observation" ? "Live observation" : "Recorded research / waiting for a configured feed"}. No broker orders.</p></section>
     {error && <p role="alert" className="warning">{error}</p>}
     <section className="price-structure" aria-label="Price Structure"><p>{state?.quote.quote ? `Bid ${state.quote.quote.bid} / Ask ${state.quote.quote.ask} · ${state.quote.quote.event_time}` : "No live quote available"}</p>
-      <p>Feed: {state?.quote.status ?? "Unavailable"}{state?.quote.quote?.time_offset_seconds ? ` · Explicit feed time correction: −${state.quote.quote.time_offset_seconds}s · raw: ${state.quote.quote.raw_event_time}` : ""}</p><StructureChart output={output} liveQuote={state?.quote.quote ?? null} /></section>
-    <SignalIntelligence decision={output.signals?.decision} />
-    <section><h2>Matrix &amp; Regime</h2><p>{state?.research_mode === "live_observation" ? "Current observation" : "Last recorded calculation; not a live readiness indicator"}</p><div className="grid">
-      {(output.matrix?.resolutions ?? []).map((r) => <article key={r.name}><h3>{r.name}</h3><p className="status">{r.direction} · {r.status}</p></article>)}
-      <article><h3>Regime</h3><p>{output.regime?.state.label ?? "Unavailable"}</p><p>{output.regime?.state.reason ?? "Waiting for confirmed structure"}</p></article>
-    </div></section>
-    <section><h2>Signals</h2>{!(output.signals?.history.length) && <p>No research signals produced yet.</p>}
-      {(output.signals?.history ?? []).slice(-20).reverse().map((s) => <article key={s.signal_id}><h3>{s.side} · {s.status}</h3><p>{s.decision_time}</p><p>{s.reasons.join(" · ")}</p><details><summary>Evidence</summary><p>{s.source_refs.join(", ")}</p><p>{s.signal_id}</p></details></article>)}</section>
+      <p>Feed: {state?.quote.status ?? "Unavailable"}{state?.quote.quote?.time_offset_seconds ? ` · Explicit feed time correction: −${state.quote.quote.time_offset_seconds}s · raw: ${state.quote.quote.raw_event_time}` : ""}</p><StructureChart output={output} liveQuote={state?.quote.quote ?? null} panelProps={{ symbol: output.event?.symbol ?? state?.quote.quote?.symbol ?? state?.quote.symbol, matrixStatus: state?.matrix_status, researchMode: state?.research_mode, connectionError: Boolean(error) }} /></section>
+    <SignalIntelligence decision={output.signals?.decision}
+      symbol={output.event?.symbol ?? state?.quote.quote?.symbol ?? state?.quote.symbol}
+      matrix={output.matrix} matrixStatus={state?.matrix_status} feedStatus={state?.quote.status}
+      quoteTime={state?.quote.quote?.event_time} researchMode={state?.research_mode}
+      connectionError={Boolean(error)} regime={output.regime?.state} history={output.signals?.history} />
     <section><h2>Backtest Lab</h2><p>Results use recorded event prices. Compare runs only with matching data, costs and evaluation assumptions.</p>
       <label>Saved parameter set <select value={chosen} onChange={(e) => setChosen(e.target.value)}><option value="">Choose a configured set</option>{parameters.map((p) => <option key={p}>{p}</option>)}</select></label>
       <button disabled={busy || !chosen || !state?.research.event_count} onClick={() => void act("/backtest/runs", { parameter_set: chosen })}>Run research</button>
