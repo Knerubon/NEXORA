@@ -9,29 +9,47 @@ import { createElement } from 'react';
 const require = createRequire(import.meta.url);
 const source = readFileSync(new URL('../app/signal-intelligence.tsx', import.meta.url), 'utf8');
 const { outputText } = ts.transpileModule(source, { compilerOptions: {
-  module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX,
+  target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX,
 } });
 const exports = {};
 new Function('require', 'exports', outputText)(require, exports);
-const render = decision => renderToStaticMarkup(createElement(exports.SignalIntelligence, { decision }));
+const render = (decision, props = {}) => renderToStaticMarkup(createElement(exports.SignalIntelligence, { decision, ...props }));
 const decision = {
   action: 'WAIT', score: 47, buy_strength: 78, sell_strength: 31, strength_available: true,
   entry_zone: null, invalidation_price: null, invalidation_reason: null, targets: [], risk_reward: null,
-  patterns: [], positive_evidence: [], negative_evidence: [{code: 'matrix_mixed', reason: 'Matrix disagreement'}],
+  patterns: [], positive_evidence: [], negative_evidence: [{component: 'matrix', code: 'matrix_mixed', reason: 'Matrix disagreement', points: 0, polarity: 'neutral'}],
 };
 
-test('evaluated WAIT renders independent strengths and legacy score from backend', () => {
+test('evaluated WAIT renders independent strengths, exact arcs and legacy score', () => {
   const html = render(decision);
   for (const text of ['WAIT', '78/100', '31/100', '47/100', 'Matrix disagreement', 'not win probability']) assert.ok(html.includes(text));
+  assert.match(html, /stroke-dasharray="78 100"/);
+  assert.match(html, /stroke-dasharray="31 100"/);
   assert.ok(!html.includes('22/100'));
 });
-test('initial, old payload and cooldown never render zero evaluated strength', () => {
+test('initial, old payload, missing inputs and cooldown never render evaluated zero', () => {
   for (const d of [undefined, {...decision, strength_available: undefined}, {...decision, strength_available: false, buy_strength: 0, sell_strength: 0}, {...decision, buy_strength: null, sell_strength: null}]) {
     const html = render(d);
-    assert.match(html, /BUY Strength <strong>Unavailable/);
-    assert.match(html, /SELL Strength <strong>Unavailable/);
+    assert.match(html, /aria-label="BUY Strength: Unavailable"/);
+    assert.match(html, /aria-label="SELL Strength: Unavailable"/);
+    assert.ok(!html.includes('ring-value'));
   }
-  assert.match(render({...decision, buy_strength: 0}), /BUY Strength <strong>0\/100/);
+  assert.match(render({...decision, buy_strength: 0}), /aria-label="BUY Strength: 0\/100"/);
+});
+test('nullable and invalid strengths are independent; neither is normalized or clamped', () => {
+  for (const value of [null, undefined, -1, 101, NaN, Infinity]) {
+    const html = render({...decision, buy_strength: value});
+    assert.match(html, /BUY Strength: Unavailable/);
+    assert.match(html, /SELL Strength: 31\/100/);
+  }
+  assert.match(render({...decision, buy_strength: 100, sell_strength: 100}), /SELL Strength: 100\/100/);
+});
+test('BUY SELL WAIT use backend decision and score regardless of strength ranking', () => {
+  for (const action of ['BUY', 'SELL', 'WAIT']) {
+    const html = render({...decision, action, score: 65});
+    assert.match(html, new RegExp(`Why ${action}\\?`));
+    assert.match(html, /Signal Score <strong>65\/100/);
+  }
 });
 test('trade plan and patterns render exact backend values, without inferred levels', () => {
   const html = render({...decision, action: 'SELL', entry_zone: {low: '100.125', high: '101.875', reason: 'Confirmed box'},
@@ -40,9 +58,63 @@ test('trade plan and patterns render exact backend values, without inferred leve
     patterns: [{pattern_type: 'head_and_shoulders', direction: 'bearish', relation: 'confirmation', confirmation_time: '2026-02-03T09:13:00Z'}],
   });
   for (const text of ['100.125', '101.875', '104.333', '97.123', '93.456', '1:2.5', 'head_and_shoulders', 'bearish', 'confirmation', 'Confirmed resistance']) assert.ok(html.includes(text));
+  assert.match(html, /<details><summary>Trade Plan · View Setup<\/summary>/);
+  assert.match(html, /<details><summary>Why SELL\?<\/summary>/);
+  assert.ok(!html.includes('<details open'));
 });
-test('dashboard keeps chart first and reads current decision instead of latest historical signal', () => {
+test('explainability respects polarity, cautions and WAIT without treating positive as decision support', () => {
+  const positive_evidence = [
+    {component: 'pnf', code: 'pnf_up', reason: 'Rising boxes', points: 20, polarity: 'bullish'},
+    {component: 'structure', code: 'structure_down', reason: 'Lower highs', points: 25, polarity: 'bearish'},
+  ];
+  const html = render({...decision, action: 'SELL', positive_evidence});
+  assert.match(html, /P&amp;F<\/strong><span>Opposes SELL/);
+  assert.match(html, /Structure<\/strong><span>Supports SELL/);
+  assert.match(html, /Matrix<\/strong><span>Caution \/ conflict/);
+  assert.match(html, /20 points.*bullish/);
+  assert.match(html, /Pattern<\/strong><span>Not reported/);
+  const wait = render({...decision, positive_evidence});
+  assert.ok(!wait.includes('Supports WAIT') && !wait.includes('Opposes WAIT'));
+  assert.match(wait, /bullish evidence/);
+  assert.match(wait, /bearish evidence/);
+});
+test('readiness and quote status come from backend; bias stays unavailable even with aligned matrix', () => {
+  const props = {symbol: 'XAUUSD-STD', matrixStatus: 'unavailable', feedStatus: 'stale', quoteTime: '2026-09-18T20:56:59Z',
+    matrix: {alignment: 'aligned_bearish', resolutions: [{name: 'fast', direction: 'O', status: 'ready'}, {name: 'medium', direction: 'none', status: 'warmup'}]},
+    regime: {label: 'trend', reason: 'trend_slope_threshold'}};
+  const html = render(decision, props);
+  for (const text of ['XAUUSD-STD', 'Matrix: UNAVAILABLE', 'Feed: stale', 'Recorded / last received', 'FAST', 'warmup', 'Short-term Bias</h3><strong>Unavailable', 'not readiness to BUY or SELL', 'not timeframes']) assert.ok(html.includes(text), text);
+  const ready = render(decision, {...props, matrixStatus: 'ready', researchMode: 'live_observation', feedStatus: 'live'});
+  assert.match(ready, /Matrix: READY/);
+  assert.ok(!ready.includes('Recorded / last received'));
+  const disconnected = render(decision, {...props, matrixStatus: 'ready', feedStatus: 'live', connectionError: true});
+  assert.ok(!disconnected.includes('Matrix: READY') && !disconnected.includes('Feed: live'));
+});
+test('dashboard keeps chart first, uses current decision and removes duplicate Matrix views', () => {
   const page = readFileSync(new URL('../app/page.tsx', import.meta.url), 'utf8');
   assert.ok(page.indexOf('<StructureChart output=') < page.indexOf('<SignalIntelligence decision='));
-  assert.ok(page.includes('<SignalIntelligence decision={output.signals?.decision} />'));
+  assert.ok(page.includes('<SignalIntelligence decision={output.signals?.decision}'));
+  assert.ok(page.includes('matrixStatus={state?.matrix_status}'));
+  assert.ok(page.includes('<MatrixFloat {...panelProps} decision={output.signals?.decision} matrix={output.matrix}'));
+  assert.ok(!page.includes('Matrix &amp; Regime'));
+});
+test('responsive panel provides shrinkable columns, wrapped metadata and keyboard disclosures', () => {
+  const css = readFileSync(new URL('../app/globals.css', import.meta.url), 'utf8');
+  assert.match(css, /\.decision-grid > div \{ min-width: 0;/);
+  assert.match(css, /\.decision-grid \{ grid-template-columns: minmax\(0, 1fr\);/);
+  assert.match(css, /\.decision-details summary:focus-visible/);
+  const html = render(decision, {symbol: '<script>long_symbol</script>'});
+  assert.ok(html.includes('&lt;script&gt;') && !html.includes('<script>'));
+  assert.equal((html.match(/<summary>/g) ?? []).length, 2);
+});
+
+test('floating summary uses identical independent current strengths and unavailable bias', () => {
+  const html = renderToStaticMarkup(createElement(exports.MatrixSummary, { decision, symbol: 'XAUUSD', matrixStatus: 'ready' }));
+  for (const text of ['78/100', '31/100', 'WAIT', 'Bias: Unavailable', 'XAUUSD', 'READY', 'Recorded / last received']) assert.ok(html.includes(text), text);
+  const cooldown = renderToStaticMarkup(createElement(exports.MatrixSummary, { decision: {...decision, strength_available: false} }));
+  assert.ok(!cooldown.includes('ring-value'));
+});
+test('full analysis includes deterministic reasons and recent backend signal history', () => {
+  const html = render(decision, {history: [{signal_id:'a', side:'SELL', status:'confirmed', decision_time:'2026-09-20T10:00:00Z', reasons:['Recorded reason'], source_refs:['ref-1']}]});
+  for (const text of ['AI วิเคราะห์', 'Trade Plan', 'Pattern', 'Recent Signals', 'Recorded reason', 'ref-1', '2026-09-20T10:00:00Z']) assert.ok(html.includes(text), text);
 });

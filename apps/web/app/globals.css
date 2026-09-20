@@ -60,15 +60,9 @@ th, td, fieldset, footer { border-color: #dce2e8; }
 .pnf-workspace { position: relative; border: 1px solid #dce2e8; background: white; }
 .pnf-scroll { overflow: auto; height: 67vh; min-height: 420px; }
 .pnf-scroll svg { width: auto; max-width: none; height: auto; min-height: 0; }
-.matrix-float { position: absolute; top: 12px; right: 14px; background: #ffffffed; border: 1px solid #e3e6eb; border-radius: 9px; box-shadow: 0 4px 16px #17212e16; padding: 14px; width: 260px; font-size: 13px; }
-.matrix-mini { display: flex; justify-content: space-between; border-bottom: 1px solid #dce2e8; padding: 12px 0; margin-bottom: 9px; }
-.matrix-mini > div { display: flex; flex-direction: column; gap: 10px; text-align: center; }
-.matrix-mini span { color: #6b7280; font-size: 11px; text-transform: uppercase; }
-.matrix-mini b { font-size: 20px; }
-.matrix-float small { color: #768292; font-size: 10px; }
 .up { color: #09a77a; } .down { color: #f34b55; }
 .chart-caption { padding: 9px 12px; font-size: 11px; color: #687587; border-top: 1px solid #e3e6eb; }
-@media(max-width:540px) { main { padding: 12px; } .intro { padding: 12px 0; } .matrix-float { position: static; width: auto; box-shadow: none; margin: 8px; } .brand { font-size: 12px; } .badge { font-size: 8px; letter-spacing: 0; } }
+@media(max-width:540px) { main { padding: 12px; } .intro { padding: 12px 0; } .brand { font-size: 12px; } .badge { font-size: 8px; letter-spacing: 0; } }
 
 /* Match the compact, chart-first NEXORA observation reference. */
 main { padding: 10px; }
@@ -87,11 +81,6 @@ h1 { font-size: 20px; letter-spacing: -.4px; white-space: nowrap; }
 .chart-body { position: relative; }
 .pnf-scroll { height: calc(100dvh - 220px); min-height: 420px; }
 .pnf-scroll:focus-visible { outline: 2px solid #147b62; outline-offset: -2px; }
-.matrix-float { top: 20px; right: 18px; width: 300px; padding: 16px; font-size: 14px; }
-.matrix-mini { padding: 16px 0; }
-.matrix-mini span { font-size: 12px; }
-.matrix-mini b { font-size: 24px; }
-.matrix-float small { font-size: 12px; }
 .is-focused { position: fixed; inset: 0; z-index: 100; display: flex; flex-direction: column; }
 .is-focused .chart-body { flex: 1; min-height: 0; }
 .is-focused .pnf-scroll { height: 100%; min-height: 0; }
@@ -108,14 +97,114 @@ h1 { font-size: 20px; letter-spacing: -.4px; white-space: nowrap; }
   .brand { letter-spacing: 1.5px; }
   .badge { padding: 8px; }
   .subtitle { font-size: 12px; }
-  .matrix-float { position: static; width: auto; margin: 8px; }
   .pnf-scroll { min-height: 360px; height: 55dvh; }
   .is-focused .chart-body { display: flex; flex-direction: column; }
   .is-focused .pnf-scroll { flex: 1; }
-  .is-focused .matrix-float { flex-shrink: 0; }
 }
-.signal-summary, .signal-plan { display: flex; flex-wrap: wrap; gap: 12px 28px; }
-.signal-summary strong { margin-left: 6px; }
+.signal-plan { display: flex; flex-wrap: wrap; gap: 12px 28px; }
 .signal-plan dt { color: #697586; font-size: 12px; }
 .signal-plan dd { margin: 4px 0 0; }
 .signal-intelligence small { display: block; margin-top: 10px; color: #697586; }
+
+/* Compact decision panel: presentation of current backend contracts only. */
+.signal-intelligence { background: #fff; border: 1px solid #dce2e8; border-radius: 14px; padding: 18px 22px; font-size: 13px; overflow-wrap: anywhere; }
+.decision-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; }
+.panel-eyebrow { color: #64748b; font-size: 10px; letter-spacing: 1.4px; }
+.decision-heading h2 { margin: 5px 0 0; font-size: 18px; font-weight: 700; }
+.panel-health { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; justify-content: flex-end; }
+.health-chip { background: #f1f5f9; border: 1px solid #dce2e8; border-radius: 20px; padding: 6px 10px; font-size: 11px; }
+.panel-health time { flex-basis: 100%; text-align: right; color: #64748b; font-size: 11px; }
+.snapshot-note { color: #875512; margin: 10px 0 0; }
+.decision-grid { display: grid; grid-template-columns: minmax(160px, .8fr) minmax(300px, 1.5fr) minmax(180px, 1fr); gap: 24px; padding: 18px 0; }
+.decision-grid > div { min-width: 0; }
+.signal-intelligence h3 { font-size: 12px; font-weight: 600; margin: 0 0 12px; }
+.resolution-list > div { display: grid; grid-template-columns: 1fr 30px 1fr; gap: 8px; align-items: center; padding: 7px 0; }
+.resolution-list b { font-size: 21px; }
+.signal-intelligence small { font-size: 11px; line-height: 1.5; }
+.resolution-list small { margin: 0; text-align: right; }
+.strength-panel { border-inline: 1px solid #e8edf2; padding-inline: 22px; text-align: center; }
+.strength-pair { display: flex; justify-content: center; gap: 32px; }
+.strength > span { font-size: 11px; font-weight: 600; }
+.strength-ring { position: relative; width: 92px; height: 92px; margin: 6px auto; }
+.strength-ring svg { width: 100%; height: 100%; min-height: 0; }
+.strength-ring circle { fill: none; stroke-width: 7; }
+.ring-track { stroke: #edf1f5; }
+.strength-buy .ring-value { stroke: #11876b; }
+.strength-sell .ring-value { stroke: #d74760; }
+.strength-ring > strong { position: absolute; inset: 0; display: flex; justify-content: center; align-items: center; flex-direction: column; font-size: 24px; }
+.strength-ring strong small { margin: 0; font-size: 10px; font-weight: 400; }
+.strength-unavailable { font-size: 11px; color: #64748b; font-weight: 400; }
+.decision-line { display: flex; justify-content: center; gap: 12px 20px; flex-wrap: wrap; }
+.decision-line strong { margin-left: 5px; }
+.decision-buy { color: #087758; } .decision-sell { color: #c43650; } .decision-wait { color: #895b12; }
+.market-panel > small { margin-top: 5px; }
+.market-panel p { line-height: 1.5; margin: 12px 0 0; }
+.market-panel p > span { color: #64748b; }
+.pattern-summary { font-size: 12px; }
+.analysis-summary { border-top: 1px solid #e8edf2; padding-top: 14px; }
+.analysis-summary h3 { margin-bottom: 4px; }
+.analysis-summary h3 span, .analysis-note { color: #64748b; font-weight: 400; }
+.analysis-note { font-size: 11px; margin: 0 0 12px; }
+.evidence-overview { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; }
+.evidence-overview > div { background: #f7f9fc; border-radius: 7px; padding: 8px 10px; font-size: 11px; }
+.evidence-overview span { display: block; color: #566477; margin-top: 5px; line-height: 1.4; }
+.analysis-caution { color: #875512; font-size: 12px; margin-bottom: 0; }
+.decision-details { display: flex; flex-wrap: wrap; gap: 0 12px; margin-top: 12px; }
+.decision-details details { min-width: 0; padding: 0; }
+.decision-details details[open] { flex-basis: 100%; padding-bottom: 12px; }
+.decision-details summary { cursor: pointer; border: 1px solid #dce2e8; border-radius: 6px; padding: 9px 12px; width: fit-content; margin: 4px 0 8px; font-weight: 600; }
+.decision-details summary:focus-visible { outline: 2px solid #147b62; outline-offset: 2px; }
+.evidence-row { border-bottom: 1px solid #e8edf2; padding: 10px 0; }
+.evidence-row > span { display: inline-block; margin-left: 12px; color: #64748b; font-size: 11px; }
+.evidence-row p { margin: 6px 0; }
+.evidence-row small { margin-top: 0; }
+@media (max-width: 900px) {
+  .decision-grid { grid-template-columns: minmax(140px, 1fr) minmax(260px, 2fr); gap: 18px; }
+  .market-panel { grid-column: 1 / -1; border-top: 1px solid #e8edf2; padding-top: 14px; }
+  .strength-panel { border-right: 0; }
+  .evidence-overview { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 540px) {
+  .signal-intelligence { padding: 16px; }
+  .panel-health { justify-content: flex-start; }
+  .panel-health time { text-align: left; }
+  .decision-grid { grid-template-columns: minmax(0, 1fr); }
+  .strength-panel { border-inline: 0; border-block: 1px solid #e8edf2; padding: 16px 0; }
+  .market-panel { border: 0; padding: 0; }
+  .evidence-overview { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .strength-pair { gap: 24px; }
+  .signal-plan { gap: 16px; }
+}
+@media (max-width: 540px) { .chart-controls { min-width: 0; max-width: 100%; flex-shrink: 1; } }
+
+/* Owner-approved Matrix analysis cards and chart overlay. */
+.decision-grid { gap: 12px; }
+.resolution-panel, .strength-panel, .market-panel, .analysis-summary { border: 1px solid #e4ebf3; border-radius: 9px; padding: 16px; background: linear-gradient(135deg, #fff, #f8fbff); }
+.resolution-list { display: flex; justify-content: space-around; gap: 10px; margin: 18px 0; }
+.resolution-list > div { display: flex; flex-direction: column; text-align: center; }
+.resolution-list b { font-size: 30px; }
+.decision-line { background: #f5f1f8; border-radius: 8px; padding: 12px; }
+.decision-details { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.decision-details > article, .decision-details > details { border: 1px solid #e4ebf3; border-radius: 9px; padding: 12px; min-width: 0; }
+.decision-details summary { border: 0; padding: 0; }
+.matrix-float { position: absolute; z-index: 2; top: 20px; right: 18px; width: 300px; max-width: 100%; max-height: 100%; overflow: auto; box-sizing: border-box; padding: 12px; background: #fffffff5; border: 1px solid #dce2e8; border-radius: 12px; box-shadow: 0 5px 20px #17212e20; font-size: 12px; }
+.matrix-float-toolbar, .matrix-summary header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.matrix-float-toolbar { margin-bottom: 10px; }
+.matrix-float button { font-size: 11px; }
+.matrix-drag { cursor: grab; touch-action: none; }
+.matrix-drag:active { cursor: grabbing; }
+.matrix-summary small { display: block; color: #64748b; font-size: 10px; }
+.matrix-summary .resolution-list { margin: 6px 0; }
+.matrix-summary .strength-ring { width: 64px; height: 64px; }
+.matrix-summary .strength-ring strong { font-size: 18px; }
+.matrix-summary .strength-unavailable { font-size: 9px; }
+.matrix-summary .strength-pair { gap: 22px; }
+.matrix-float a { display: block; margin-top: 10px; }
+@media(max-width:900px) { .decision-details { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media(max-width:700px) {
+  .matrix-float { position: static; width: auto; max-height: none; margin: 8px; box-shadow: none; }
+  .matrix-drag { touch-action: auto; cursor: default; }
+  .matrix-float-toolbar button { display: none; }
+  .is-focused .chart-body { overflow: auto; }
+}
+@media(max-width:540px) { .decision-details { grid-template-columns: minmax(0, 1fr); } }
