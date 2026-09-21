@@ -1,5 +1,7 @@
 "use client";
 
+import { environmentDisplay } from "./environment";
+
 import { SignalIntelligence, type SignalDecision, type PanelProps } from "./signal-intelligence";
 
 import { MatrixFloat } from "./matrix-float";
@@ -33,7 +35,8 @@ type Paper = { status: string; accepted: number; rejected: number; fills: unknow
 
 const metric = (value: string | null) => value === null ? "Undefined" : Number(value).toLocaleString("en", { maximumFractionDigits: 4 });
 
-const api = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
+const environment = environmentDisplay(process.env.NEXT_PUBLIC_NEXORA_ENV);
+const api = process.env.NEXT_PUBLIC_API_BASE_URL ?? environment.api;
 
 function StructureChart({ output, liveQuote, panelProps }: { panelProps?: PanelProps; output: Output; liveQuote?: { symbol: string; bid: string; ask: string } | null }) {
   const [zoom, setZoom] = useState(120);
@@ -286,7 +289,7 @@ export default function Home() {
   const output = state?.research.output ?? {};
   const compared = selected.length ? runs.filter((r) => selected.includes(r.run_id)) : runs;
   return <main>
-    <header><strong className="brand">NEXORA / RESEARCH</strong><span className="badge">LOCAL RESEARCH &amp; PAPER ONLY</span></header>
+    <header><strong className="brand">NEXORA / <span style={{ background: environment.production ? "#164e63" : "#fbbf24", color: environment.production ? "#ffffff" : "#111827", padding: "4px 8px", borderRadius: 4 }}>{environment.label}</span></strong><span className="badge">LOCAL RESEARCH &amp; PAPER ONLY</span></header>
     <section className="intro"><h1>Point &amp; Figure <span> / X · O</span></h1>
       <p className="subtitle">{state?.research_mode === "live_observation" ? "Live observation" : "Recorded research / waiting for a configured feed"}. No broker orders.</p></section>
     {error && <p role="alert" className="warning">{error}</p>}

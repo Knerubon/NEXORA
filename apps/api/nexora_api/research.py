@@ -14,16 +14,20 @@ from nexora.market_data.models import NormalizedPriceEvent, PriceSource
 from nexora.research.runtime import ResearchRuntime, RuntimeConfig
 from nexora.storage import Journal, PostgresJournal, SQLiteJournal
 
+from nexora_api.environment import Environment, validate_postgres_identity
 from nexora_api.quotes import Quote
 
 
 def configured_journal() -> Journal:
+    environment = Environment.resolve()
+    environment.prepare()
     if conninfo := os.environ.get("NEXORA_POSTGRES_DSN"):
+        validate_postgres_identity(conninfo, environment.name)
         try:
             return PostgresJournal(conninfo)
         except Exception:
             raise RuntimeError("postgres_unavailable") from None
-    path = Path(os.environ.get("NEXORA_JOURNAL_PATH", "data/research.sqlite"))
+    path = environment.storage
     path.parent.mkdir(parents=True, exist_ok=True)
     return SQLiteJournal(path)
 

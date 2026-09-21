@@ -12,14 +12,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-api = ["fastapi>=0.115,<1", "uvicorn>=0.34,<1", "websockets>=15,<17"]
+api = ["fastapi>=0.115,<1", "uvicorn>=0.34,<1", "websockets>=15,<17", "psutil>=7,<8"]
 mt5 = ["MetaTrader5==5.0.6180; sys_platform == 'win32'", "psutil>=7,<8"]
 postgres = [
     "psycopg[binary]>=3.3,<4",
 ]
 
 [dependency-groups]
-dev = ["pytest>=8,<10", "httpx>=0.28,<1", "ruff>=0.11,<1", "mypy>=1.15,<2"]
+dev = ["pytest>=8,<10", "httpx>=0.28,<1", "ruff>=0.11,<1", "mypy>=1.15,<2", "types-psutil>=7,<8"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["packages/nexora", "apps/api/nexora_api"]

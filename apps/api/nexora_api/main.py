@@ -19,6 +19,7 @@ from nexora.research.runtime import ResearchRuntime
 from nexora.storage import Journal
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from nexora_api.environment import Environment
 from nexora_api.quotes import QuoteService, configured_service
 from nexora_api.research import (
     configured_backtests,
@@ -28,9 +29,11 @@ from nexora_api.research import (
 )
 
 LOCAL_CLIENTS = {"127.0.0.1", "::1", "testclient"}
-LOCAL_ORIGINS = {
-    f"http://{host}:{port}" for host in ("127.0.0.1", "localhost") for port in (3000, 3100)
-}
+
+
+def _local_origins() -> set[str]:
+    port = Environment.resolve().web_port
+    return {f"http://{host}:{port}" for host in ("127.0.0.1", "localhost")}
 
 
 def _local_host(request: Request | WebSocket) -> str | None:
@@ -46,7 +49,7 @@ def _local_host(request: Request | WebSocket) -> str | None:
 def _is_local_origin(headers: Any) -> bool:
     origin = headers.get("origin")
     if origin is not None:
-        return origin in LOCAL_ORIGINS
+        return origin in _local_origins()
     host = headers.get("host")
     if host:
         hostname = host.split(":", 1)[0]
@@ -61,7 +64,9 @@ def _assert_local_http(request: Request, *, mutation: bool = False) -> None:
         or not _is_local_origin(request.headers)
     ):
         raise HTTPException(status_code=403, detail="Local access only")
-    if mutation and request.headers.get("origin") not in LOCAL_ORIGINS:
+    if mutation and (
+        request.headers.get("origin") is None or not _is_local_origin(request.headers)
+    ):
         raise HTTPException(status_code=403, detail="Local access only")
 
 
@@ -142,7 +147,7 @@ def create_app(
     )
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=sorted(LOCAL_ORIGINS),
+        allow_origins=sorted(_local_origins()),
         allow_credentials=False,
         allow_methods=["GET", "POST"],
         allow_headers=["Content-Type"],
@@ -156,7 +161,12 @@ def create_app(
 
     @app.get("/health")
     def health() -> dict[str, str]:
-        return {"status": "ok", "mode": "research", "readiness": "/operations/readiness"}
+        return {
+            "status": "ok",
+            "mode": "research",
+            "readiness": "/operations/readiness",
+            "environment": Environment.resolve().name,
+        }
 
     def state_payload() -> dict[str, Any]:
         feed: QuoteService = app.state.quotes
@@ -212,6 +222,7 @@ def create_app(
         engine: ResearchRuntime | None = app.state.runtime
         return {
             "local_only": True,
+            "environment": Environment.resolve().name,
             "symbol": app.state.quotes.snapshot().symbol,
             "websocket_channels": ["quotes", "events"],
             "pipeline": canonical_serialize(engine.config) if engine else None,
