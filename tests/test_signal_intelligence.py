@@ -248,7 +248,16 @@ def test_api_and_websocket_serialize_current_decision(
             with client.websocket_connect(
                 "/ws/events", headers={"origin": "http://localhost:3000"}
             ) as ws:
-                assert ws.receive_json()["payload"]["research"]["output"]["signals"] == payload
+                # Research is published once for all clients; quote heartbeats
+                # keep flowing while the next shared research snapshot is built.
+                for _ in range(12):
+                    message = ws.receive_json()
+                    if message["event_type"] == "state_snapshot":
+                        current = message["payload"]["research"]["output"].get("signals")
+                        if current == payload:
+                            break
+                else:
+                    raise AssertionError("current decision was not published")
 
 
 @pytest.mark.parametrize("buy,sell,expected", [(150, 120, (100, 100)), (-5, 35, (0, 35))])

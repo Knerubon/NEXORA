@@ -547,6 +547,10 @@ def test_delayed_entry_horizon_prefix_and_restart(
     # Rin's independent timeline: no entry until +20, TP1 at +25.
     value = output("BUY")
     monkeypatch.setattr(ResearchPipeline, "process", lambda self, e: deepcopy(value))
+    # This fixture deliberately bypasses pipeline chronology to exercise the
+    # memory boundary. Main now uses a separate no-snapshot replay entry point;
+    # keep the same fake engine on both paths, retaining every outcome assertion.
+    monkeypatch.setattr(ResearchPipeline, "replay", lambda self, e: None)
     config = RuntimeConfig(pipeline_config(), "USD/oz")
     runtime = ResearchRuntime(config, store)
     sequence = [
@@ -584,6 +588,9 @@ def test_late_market_time_cannot_backdate_horizon_or_lifecycle(
 ) -> None:
     value = output("BUY")
     monkeypatch.setattr(ResearchPipeline, "process", lambda self, e: deepcopy(value))
+    # The synthetic noncanonical input uses the same fake engine on recovery.
+    # Real pipeline chronology and replay parity are tested in startup_recovery.
+    monkeypatch.setattr(ResearchPipeline, "replay", lambda self, e: None)
     config = RuntimeConfig(pipeline_config(), "USD/oz")
     runtime = ResearchRuntime(config, store)
     # Receipt time is increasing. Entry market time +4 is not known until +20.

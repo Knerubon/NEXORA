@@ -248,3 +248,30 @@ CI including PostgreSQL and web validation will be linked on the PR for the push
 Self-review; independent Rin re-review pending. No merge or tag operations performed.
 Existing draft-V1 artifacts are never overwritten: any conflicting pre-fix projection still
 fails visibly through the existing journal conflict guard; no silent historical migration.
+
+## Authorized merge integration (2026-09-21)
+User explicitly requests latest main including real-time fixes, then merge PR #21.
+This supersedes this task's earlier draft-only/no-merge constraint.
+Additional inputs: tasks/FIX2-api-startup-recovery.md, tasks/FIX3-realtime-quote.md,
+tests/test_startup_recovery.py, tests/test_realtime_delivery.py, and main's changes to
+storage.py/pipeline.py/quotes.py/main.py/research.py/runtime.py: preserve startup recovery,
+quote/research decoupling and bounded snapshots while integrating Experience recording.
+Base main fetched at f5f388f (merged PR #22). Clean worktree before merge; conflict in
+research/runtime.py requires explicit integration. Self-review; no new independent approval claimed.
+
+Integration resolution and evidence:
+- Preserve main's iter_read + no-snapshot engine.replay + progress logging, alongside
+  Experience recovery from original recorded output. No real-time publisher/reader rollback.
+- Keep original local-client checks in HTTP/WS as well as main's origin handling; a
+  nonlocal client spoofing localhost headers must not gain access to research history.
+- Adapt the synthetic fake pipeline to both process/replay entry points. All no-lookahead
+  assertions retained; real-engine replay parity and streaming recovery tests remain passing.
+- Targeted Experience/API/startup/realtime tests: 56 passed.
+- `.venv/Scripts/python -m pytest -q`: 182 passed, 2 PostgreSQL skips locally.
+- `.venv/Scripts/ruff check .`, `.venv/Scripts/mypy`: PASS (97 source files).
+- Changed-file Ruff format check: PASS (3 files).
+- `npm --prefix apps/web test`: 25 passed; lint, typecheck, build: PASS.
+- `.venv/Scripts/python scripts/recovery_drill.py`: PASS (SQLite).
+- CI with PostgreSQL required on the integrated commit before user-authorized merge.
+Self-review of integration completed; user merge authorization supersedes prior no-merge
+instructions. No independent approval or target-host production certification invented.

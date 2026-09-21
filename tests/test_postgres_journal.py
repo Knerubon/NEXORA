@@ -23,6 +23,7 @@ def test_postgres_transaction_durability_and_conflict() -> None:
         reader = PostgresJournal(conninfo)
         try:
             assert reader.read(stream) == ({"value": "100.01"},)
+            assert tuple(reader.iter_read(stream)) == reader.read(stream)
             with pytest.raises(ValueError, match="concurrent"):
                 reader.append(stream, "two", {"value": "2"}, expected_count=0)
         finally:

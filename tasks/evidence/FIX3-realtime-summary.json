@@ -1,0 +1,54 @@
+{
+  "duration_seconds": 65.015755859375,
+  "mt5_unique_quotes": 389,
+  "backend_unique_quotes": 239,
+  "websocket_messages": 241,
+  "websocket_unique_quotes": 200,
+  "ui_observations": 243,
+  "ui_unique_quotes": 202,
+  "max_ws_interval_seconds": 0.512,
+  "max_ui_interval_seconds": 0.511,
+  "max_ui_market_change_interval_seconds": 1.168,
+  "sockets_opened": 1,
+  "sockets_closed": 0,
+  "max_active_sockets": 1,
+  "active_sockets": 1,
+  "matched_backend_ui_samples": 242,
+  "backend_ui_mismatches": 0,
+  "requests_during_test": 0,
+  "browser_errors": [],
+  "max_pending_1s_to_5s_timers": 0,
+  "pending_1s_to_5s_timers": 0,
+  "research_first": {
+    "at": 1789978802893,
+    "events": 16096,
+    "columns": 84,
+    "transitions": 254,
+    "error": null
+  },
+  "research_last": {
+    "at": 1789978868793,
+    "events": 16125,
+    "columns": 84,
+    "transitions": 254,
+    "error": null
+  },
+  "reconnect": {
+    "opened": 2,
+    "closed": 1,
+    "active": 1,
+    "maxActive": 1,
+    "pendingTimers": 0,
+    "maxPendingTimers": 1,
+    "timers": [
+      {
+        "at": 1789978869256,
+        "delay": 1000
+      }
+    ]
+  },
+  "sample_count": 63,
+  "all_backend_samples_live": true,
+  "maximum_observed_backend_receipt_to_dom_seconds": 0.30252999999999997,
+  "source_quiet_interval_note": "The 1.168-second displayed market-change interval spans unchanged MT5 source time 08:21:05.968Z until the next source tick 08:21:07.246Z (configured correction retained). Quote observations still arrived within 0.512 seconds; no price or timestamp was fabricated."
+}

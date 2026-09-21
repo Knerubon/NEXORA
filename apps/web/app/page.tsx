@@ -3,6 +3,7 @@
 import { SignalIntelligence, type SignalDecision, type PanelProps } from "./signal-intelligence";
 
 import { MatrixFloat } from "./matrix-float";
+import { latestQuote, type QuoteSnapshot } from "./live-quote";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -20,7 +21,7 @@ type Output = {
 };
 type State = {
   sequence: number; research_mode: string; storage_backend: string; matrix_status?: string;
-  quote: { stream_id: string; status: string; symbol?: string; quote: { symbol: string; bid: string; ask: string; event_time: string; raw_event_time?: string; time_offset_seconds?: number } | null };
+  quote: QuoteSnapshot;
   quality: { status: string; completeness: string; counters: { observed: number; gaps: number; reconnects: number } };
   research: { event_count: number; error: string | null; output: Output };
 };
@@ -116,6 +117,7 @@ function StructureChart({ output, liveQuote, panelProps }: { panelProps?: PanelP
 
 export default function Home() {
   const [state, setState] = useState<State | null>(null);
+  const [quote, setQuote] = useState<QuoteSnapshot | null>(null);
   const [runs, setRuns] = useState<Run[]>([]);
   const [paper, setPaper] = useState<Paper | null>(null);
   const [reasons, setReasons] = useState<string[]>([]);
@@ -124,44 +126,153 @@ export default function Home() {
   const [selected, setSelected] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState<"live" | "reconnecting" | "offline">("offline");
+  const socketRef = useRef<WebSocket | null>(null);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectAttemptRef = useRef(0);
+  const refreshControllerRef = useRef<AbortController | null>(null);
+  const mountedRef = useRef(false);
+  const socketGenerationRef = useRef(0);
+
+  const clearReconnectTimer = useCallback(() => {
+    if (reconnectTimerRef.current !== null) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+  }, []);
+
   const refresh = useCallback(async (signal?: AbortSignal) => {
     const paths = ["/state", "/backtest/runs", "/paper/replay", "/operations/readiness", "/config"];
     const responses = await Promise.all(paths.map((p) => fetch(api+p, { cache: "no-store", signal })));
     if (responses.some((r) => !r.ok)) throw new Error("Unable to load current research state.");
     const [current, history, session, readiness, config] = await Promise.all(responses.map((r) => r.json()));
     if (signal?.aborted) return;
-    setState(current); setRuns(history.runs); setPaper(session); setReasons(readiness.reasons);
-    setParameters(Object.keys(config.parameter_sets)); setError(null);
+    setState(current);
+    setQuote((prior) => latestQuote(prior, current.quote));
+    setRuns(history.runs);
+    setPaper(session);
+    setReasons(readiness.reasons);
+    setParameters(Object.keys(config.parameter_sets));
+    setError(null);
+    setConnectionStatus((prior) => (prior === "offline" || prior === "reconnecting" ? "live" : prior));
   }, []);
 
+  const connect = useCallback(function openSocket() {
+    if (!mountedRef.current) return;
+    if (socketRef.current !== null) return;
+
+    const socket = new WebSocket(api.replace(/^http/, "ws") + "/ws/events");
+    const generation = ++socketGenerationRef.current;
+    socketRef.current = socket;
+
+    const scheduleReconnect = () => {
+      if (!mountedRef.current) return;
+      if (socketGenerationRef.current !== generation) return;
+      if (reconnectTimerRef.current !== null) return;
+
+      const delay = Math.min(5000, 1000 * (2 ** Math.min(reconnectAttemptRef.current, 4)));
+      reconnectAttemptRef.current += 1;
+      reconnectTimerRef.current = setTimeout(() => {
+        reconnectTimerRef.current = null;
+        if (!mountedRef.current) return;
+        if (socketGenerationRef.current !== generation) return;
+        if (socketRef.current !== null) return;
+        openSocket();
+      }, delay);
+    };
+
+    socket.onopen = () => {
+      if (!mountedRef.current || socketRef.current !== socket) return;
+      reconnectAttemptRef.current = 0;
+      clearReconnectTimer();
+      setConnectionStatus("live");
+      setError(null);
+      if (refreshControllerRef.current) {
+        refreshControllerRef.current.abort();
+      }
+      refreshControllerRef.current = new AbortController();
+      void refresh(refreshControllerRef.current.signal).catch(() => {
+        if (!mountedRef.current || socketRef.current !== socket) return;
+        setConnectionStatus("reconnecting");
+      });
+    };
+
+    socket.onmessage = (event) => {
+      if (socketRef.current !== socket) return;
+      try {
+        const message = JSON.parse(event.data);
+        if (message.schema_version === 2 && message.event_type === "state_snapshot") {
+          setState((prior) => !prior || prior.quote.stream_id !== message.stream_id || message.sequence >= prior.sequence ? message.payload : prior);
+          setQuote((prior) => latestQuote(prior, message.payload.quote));
+          setError(null);
+          setConnectionStatus("live");
+        } else if (message.schema_version === 2 && message.event_type === "quote_snapshot") {
+          setQuote((prior) => latestQuote(prior, message.payload));
+          setError(null);
+          setConnectionStatus("live");
+        }
+      } catch {
+        if (socketRef.current !== socket) return;
+        setError("An invalid update was received. Refreshing from the server.");
+        setConnectionStatus("reconnecting");
+      }
+    };
+
+    socket.onclose = () => {
+      if (socketRef.current !== socket) return;
+      socketRef.current = null;
+      if (!mountedRef.current) return;
+      setConnectionStatus("reconnecting");
+      scheduleReconnect();
+    };
+
+    socket.onerror = () => {
+      if (socketRef.current !== socket) return;
+      setConnectionStatus("reconnecting");
+      setError("Connection interrupted. Showing the last received snapshot.");
+      socket.close();
+    };
+  }, [clearReconnectTimer, refresh]);
+
   useEffect(() => {
-    let stopped = false, socket: WebSocket | null = null;
-    let retry: ReturnType<typeof setTimeout> | undefined;
-    let poll: ReturnType<typeof setTimeout> | undefined;
-    const controller = new AbortController();
-    const pull = async () => {
-      try { await refresh(controller.signal); }
-      catch { if (!stopped) setError("Connection interrupted. Showing the last received snapshot."); }
-      finally { if (!stopped) poll = setTimeout(() => void pull(), 2000); }
+    mountedRef.current = true;
+
+    const bootstrap = async () => {
+      try {
+        if (refreshControllerRef.current) {
+          refreshControllerRef.current.abort();
+        }
+        refreshControllerRef.current = new AbortController();
+        await refresh(refreshControllerRef.current.signal);
+        setConnectionStatus("live");
+      } catch {
+        setConnectionStatus("offline");
+        setError("Connection interrupted. Showing the last received snapshot.");
+      }
     };
-    const connect = () => {
-      if (stopped) return;
-      socket = new WebSocket(api.replace(/^http/, "ws")+"/ws/events");
-      socket.onopen = () => { void refresh(controller.signal).catch(() => undefined); };
-      socket.onmessage = (event) => {
-        try {
-          const message = JSON.parse(event.data);
-          if (message.schema_version === 2 && message.event_type === "state_snapshot") {
-            setState((prior) => !prior || prior.quote.stream_id !== message.stream_id || message.sequence >= prior.sequence ? message.payload : prior);
-          }
-        } catch { setError("An invalid update was received. Refreshing from the server."); }
-      };
-      socket.onclose = () => { if (!stopped) retry = setTimeout(connect, 2000); };
-      socket.onerror = () => socket?.close();
+
+    void bootstrap();
+    connect();
+
+    return () => {
+      mountedRef.current = false;
+      socketGenerationRef.current += 1;
+      clearReconnectTimer();
+      if (refreshControllerRef.current) {
+        refreshControllerRef.current.abort();
+        refreshControllerRef.current = null;
+      }
+      if (socketRef.current) {
+        const socket = socketRef.current;
+        socketRef.current = null;
+        socket.onopen = null;
+        socket.onmessage = null;
+        socket.onerror = null;
+        socket.onclose = null;
+        socket.close();
+      }
     };
-    void pull(); connect();
-    return () => { stopped = true; controller.abort(); clearTimeout(retry); clearTimeout(poll); socket?.close(); };
-  }, [refresh]);
+  }, [clearReconnectTimer, connect, refresh]);
 
   async function act(path: string, payload: object) {
     setBusy(true);
@@ -179,12 +290,12 @@ export default function Home() {
     <section className="intro"><h1>Point &amp; Figure <span> / X · O</span></h1>
       <p className="subtitle">{state?.research_mode === "live_observation" ? "Live observation" : "Recorded research / waiting for a configured feed"}. No broker orders.</p></section>
     {error && <p role="alert" className="warning">{error}</p>}
-    <section className="price-structure" aria-label="Price Structure"><p>{state?.quote.quote ? `Bid ${state.quote.quote.bid} / Ask ${state.quote.quote.ask} · ${state.quote.quote.event_time}` : "No live quote available"}</p>
-      <p>Feed: {state?.quote.status ?? "Unavailable"}{state?.quote.quote?.time_offset_seconds ? ` · Explicit feed time correction: −${state.quote.quote.time_offset_seconds}s · raw: ${state.quote.quote.raw_event_time}` : ""}</p><StructureChart output={output} liveQuote={state?.quote.quote ?? null} panelProps={{ symbol: output.event?.symbol ?? state?.quote.quote?.symbol ?? state?.quote.symbol, matrixStatus: state?.matrix_status, researchMode: state?.research_mode, connectionError: Boolean(error) }} /></section>
+    <section className="price-structure" aria-label="Price Structure"><p data-testid="live-quote" data-sequence={quote?.sequence}>{quote?.quote ? `Bid ${quote.quote.bid} / Ask ${quote.quote.ask} · ${quote.quote.event_time}` : "No live quote available"}</p>
+      <p>Feed: {connectionStatus === "live" ? "LIVE" : connectionStatus === "reconnecting" ? "RECONNECTING" : "OFFLINE"} · {quote?.status ?? "Unavailable"}{quote?.quote?.time_offset_seconds ? ` · Explicit feed time correction: −${quote.quote.time_offset_seconds}s · raw: ${quote.quote.raw_event_time}` : ""}</p><StructureChart output={output} liveQuote={quote?.quote ?? null} panelProps={{ symbol: output.event?.symbol ?? quote?.quote?.symbol ?? quote?.symbol, matrixStatus: state?.matrix_status, researchMode: state?.research_mode, connectionError: Boolean(error) }} /></section>
     <SignalIntelligence decision={output.signals?.decision}
-      symbol={output.event?.symbol ?? state?.quote.quote?.symbol ?? state?.quote.symbol}
-      matrix={output.matrix} matrixStatus={state?.matrix_status} feedStatus={state?.quote.status}
-      quoteTime={state?.quote.quote?.event_time} researchMode={state?.research_mode}
+      symbol={output.event?.symbol ?? quote?.quote?.symbol ?? quote?.symbol}
+      matrix={output.matrix} matrixStatus={state?.matrix_status} feedStatus={quote?.status}
+      quoteTime={quote?.quote?.event_time} researchMode={state?.research_mode}
       connectionError={Boolean(error)} regime={output.regime?.state} history={output.signals?.history} />
     <section><h2>Backtest Lab</h2><p>Results use recorded event prices. Compare runs only with matching data, costs and evaluation assumptions.</p>
       <label>Saved parameter set <select value={chosen} onChange={(e) => setChosen(e.target.value)}><option value="">Choose a configured set</option>{parameters.map((p) => <option key={p}>{p}</option>)}</select></label>
@@ -200,7 +311,7 @@ export default function Home() {
       {paper && paper.status !== "unavailable" && <div>{["pause", "resume", "kill"].map((action) => <button disabled={busy} key={action} onClick={() => void act("/paper/control", { action })}>{action === "kill" ? "Stop paper execution" : `${action} paper`}</button>)}</div>}
       {(paper?.ledger ?? []).slice(-10).map((l) => <p key={l.entry_id}>{l.detail} · {l.amount}</p>)}</section>
     <section><h2>System</h2><p>Storage: {state?.storage_backend ?? "Unavailable"} · Recorded events: {state?.research.event_count ?? 0}</p>
-      <p>Feed: {state?.quote.status ?? "Unavailable"} · Coverage: {state?.quality.completeness ?? "Unknown"}</p>
+      <p>Feed: {quote?.status ?? "Unavailable"} · Coverage: {state?.quality.completeness ?? "Unknown"}</p>
       <p>{reasons.length ? reasons.join(" · ") : "No readiness reasons received"}</p><p>Remote access disabled. Production hardening requires verified deployment and recovery evidence.</p></section>
     <footer><span>RESEARCH BOUNDARY</span><p>Replay and paper results are research artifacts, not live execution approval.</p></footer>
   </main>;
