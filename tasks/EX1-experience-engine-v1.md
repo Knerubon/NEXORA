@@ -54,7 +54,7 @@ See validation/handoff below. Self-review; independent review pending.
 - Horizon due = T0 + 5/15/30/60m. Eligible labels require event_time > T0 and received_at > T0,
   same scope; raw normalized facts persisted before any derived result. First eligible event
   at/after due supplies endpoint change with explicit actual time and delay. Excursions use
-  samples with event_time <= due only, never the late endpoint. No bar high/low excursion
+  samples with event_time <= due and received_at <= due only, never the late endpoint. No bar high/low excursion
   inference because current bar contract lacks interval start; retain OHLC as raw evidence.
 - Measurement reference E = midpoint of available valid entry zone; otherwise T0 selected
   price. R = E-stop only for BUY with stop < zone.low; SELL uses stop-E with stop > zone.high.
@@ -137,7 +137,7 @@ WAIT/unavailable decisions get market upward/downward excursions and endpoint pr
 no direction, MFE/MAE/R or trade result is fabricated.
 
 A horizon endpoint may be late: price_change describes its actual timestamp, while excursion
-and hit fields stop at the exact due time. The same late observation can be the endpoint of
+and hit fields use only facts with event_time and received_at at/before the exact due time. The same late observation can be the endpoint of
 several horizons. Empty in-window samples yield null excursions, zero sample_count and
 `no_in_window_samples`; observed extrema are lower bounds on a continuously sampled path.
 No extrapolation, intrabar extrema/path guessing, bid/ask fill assumptions, costs or P&L.
@@ -218,3 +218,33 @@ Changed scope: packages/nexora/experience (5 files), research/runtime.py, API ma
 three Experience test modules, requirements/architecture additive notes, and this task.
 Migration: reuse 007; no SQL schema change or data rewrite.
 Next action: open draft PR, inspect CI, then Rin performs independent review. Do not mark done.
+
+## PR #21 Rin review corrections (2026-09-21)
+
+Review: https://github.com/Knerubon/NEXORA/pull/21#issuecomment-5754354837
+Scope: horizon causal-prefix measurement and out-of-order lifecycle regression only.
+Each horizon reconstructs lifecycle from the initial frozen plan using only observations
+whose event_time AND received_at are <= due, preserving original journal receipt order.
+The late endpoint supplies endpoint price/change only, never in-window excursions or hits.
+A delayed market observation cannot backdate a plan hit before entry or a prior lifecycle
+hit. Raw facts remain retained; completed labels are never revised by later arrivals.
+This is a pre-approval correction to the draft V1 contract, not a new measurement feature.
+Validation (Windows / Python 3.13, same branch):
+- `.venv/Scripts/python -m pytest -q tests/test_experience.py tests/test_experience_api.py tests/test_experience_postgres.py`: 47 passed, 1 skipped (local PostgreSQL DSN unavailable).
+- `.venv/Scripts/python -m pytest -q`: 173 passed, 2 skipped (PostgreSQL), 2 dependency deprecation warnings.
+- `.venv/Scripts/ruff check .`: PASS.
+- `.venv/Scripts/mypy`: PASS, 95 source files.
+- `.venv/Scripts/ruff format --check packages/nexora/experience/engine.py packages/nexora/experience/service.py tests/test_experience.py`: PASS.
+- `.venv/Scripts/ruff format --check .`: same 15 pre-existing unformatted files outside this fix; not modified, not a CI gate.
+- `.venv/Scripts/python scripts/recovery_drill.py`: PASS (SQLite fresh-process recovery).
+- `.tools/Scripts/uv lock --check` and `.tools/Scripts/uv build`: PASS.
+- `git diff --check`: PASS.
+
+15 added regression cases cover Rin's delayed-entry timeline, receipt/market-time separation,
+backdated TP/stop rejection, exact-due inclusivity, causal-only lifecycle reconstruction,
+and original runtime journal replay at every timeline interruption. Existing future-injection
+and frozen-snapshot tests remain passing. No SQL/schema, Signal/P&F/Matrix, UI or API changes.
+CI including PostgreSQL and web validation will be linked on the PR for the pushed fix commit.
+Self-review; independent Rin re-review pending. No merge or tag operations performed.
+Existing draft-V1 artifacts are never overwritten: any conflicting pre-fix projection still
+fails visibly through the existing journal conflict guard; no silent historical migration.

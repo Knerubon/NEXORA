@@ -160,12 +160,21 @@ def measure(
     minutes: int,
     samples: list[dict[str, Any]],
     endpoint: NormalizedPriceEvent,
-    lifecycle: dict[str, Any],
 ) -> dict[str, Any]:
     due = experience.t0 + timedelta(minutes=minutes)
     window = [
-        r for r in samples if eligible(experience, r["event"]) and r["event"].event_time <= due
+        r
+        for r in samples
+        if eligible(experience, r["event"])
+        and r["event"].event_time <= due
+        and r["event"].received_at <= due
     ]
+    # Rebuild only from facts known within this horizon, in original receipt order.
+    # The late endpoint and the live lifecycle cannot supply historical plan facts.
+    lifecycle = initial_lifecycle(experience)
+    for row in window:
+        for state in advance(experience, lifecycle, row["event"]):
+            lifecycle = state
     prices = [r["event"].price for r in window]
     t0_price = Decimal(experience.context()["event"]["price"])
     entry, risk, _ = plan(experience)
@@ -202,12 +211,8 @@ def measure(
         "gap_observed": any(r["event"].is_gap for r in window),
         "completeness_values": sorted({r["completeness"] for r in window}),
         "coverage": "sampled_only" if window else "no_in_window_samples",
-        "plan_hits": {
-            name: hit if hit is not None and hit["event_time"] <= due else None
-            for name, hit in lifecycle["hits"].items()
-        },
-        "entry_observed_by_horizon": lifecycle["entered_at"] is not None
-        and lifecycle["entered_at"] <= due,
+        "plan_hits": lifecycle["hits"],
+        "entry_observed_by_horizon": lifecycle["entered_at"] is not None,
         "metric_scope": "t0_setup_observations_not_trade_pnl",
         "hypothetical_only": True,
     }
@@ -248,6 +253,13 @@ def advance(
         if Decimal(zone["low"]) <= event.price <= Decimal(zone["high"]):
             state["entered_at"] = event.event_time
             return [{**state, "state": "ENTRY_TRIGGERED"}, {**state, "state": "ACTIVE"}]
+        return []
+    # A late market timestamp cannot attach a hit before entry or a prior transition.
+    latest_fact = max(
+        [state["entered_at"]]
+        + [hit["event_time"] for hit in state["hits"].values() if hit is not None]
+    )
+    if event.event_time < latest_fact:
         return []
     is_buy = experience.action == "BUY"
     stop = Decimal(decision["invalidation_price"])

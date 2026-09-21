@@ -538,3 +538,133 @@ store.close()
         assert len(repository.outcomes(frozen.experience_id)) == 4
     finally:
         reopened.close()
+
+
+@pytest.mark.parametrize("restart_at", range(1, 7))
+def test_delayed_entry_horizon_prefix_and_restart(
+    store: SQLiteJournal, monkeypatch: pytest.MonkeyPatch, restart_at: int
+) -> None:
+    # Rin's independent timeline: no entry until +20, TP1 at +25.
+    value = output("BUY")
+    monkeypatch.setattr(ResearchPipeline, "process", lambda self, e: deepcopy(value))
+    config = RuntimeConfig(pipeline_config(), "USD/oz")
+    runtime = ResearchRuntime(config, store)
+    sequence = [
+        event(m, p)
+        for m, p in ((0, "100"), (4, "105"), (20, "100"), (25, "110"), (30, "111"), (60, "111"))
+    ]
+    for index, sample in enumerate(sequence, 1):
+        runtime.ingest(sample)
+        if index == restart_at:
+            runtime = ResearchRuntime(config, store)
+    repo = ExperienceRepository(store)
+    frozen = repo.all()[0]
+    rows = repo.outcomes(frozen.experience_id)
+    assert [r["horizon_minutes"] for r in rows] == [5, 15, 30, 60]
+    for row in rows[:2]:
+        assert row["entry_observed_by_horizon"] is False
+        assert row["plan_hits"] == {"TP1": None, "TP2": None, "invalidation": None}
+        assert row["sample_event_ids"] == ["sample:4"]
+        assert row["mfe"] == "5" and row["mae"] == "0"
+        assert row["endpoint_event_id"] == "sample:20"
+    for row in rows[2:]:
+        assert row["entry_observed_by_horizon"] is True
+        assert row["plan_hits"]["TP1"]["event_id"] == "sample:25"
+        assert row["plan_hits"]["TP2"] is None
+    lifecycle = repo.lifecycle(frozen.experience_id)
+    ResearchRuntime(config, store)
+    assert repo.outcomes(frozen.experience_id) == rows
+    assert repo.lifecycle(frozen.experience_id) == lifecycle
+    assert repo.get(frozen.experience_id) == frozen
+
+
+@pytest.mark.parametrize("restart_at", range(1, 9))
+def test_late_market_time_cannot_backdate_horizon_or_lifecycle(
+    store: SQLiteJournal, monkeypatch: pytest.MonkeyPatch, restart_at: int
+) -> None:
+    value = output("BUY")
+    monkeypatch.setattr(ResearchPipeline, "process", lambda self, e: deepcopy(value))
+    config = RuntimeConfig(pipeline_config(), "USD/oz")
+    runtime = ResearchRuntime(config, store)
+    # Receipt time is increasing. Entry market time +4 is not known until +20.
+    # Then an older +3 TP2 and +5 invalidation arrive after newer lifecycle facts.
+    timeline = (
+        (0, 0, "100"),
+        (2, 2, "105"),
+        (20, 4, "100"),
+        (21, 3, "120"),
+        (25, 25, "110"),
+        (26, 5, "89"),
+        (30, 30, "111"),
+        (60, 60, "111"),
+    )
+    for index, (received, market, price) in enumerate(timeline, 1):
+        sample = replace(event(received, price), event_time=T0 + timedelta(minutes=market))
+        runtime.ingest(sample)
+        if index == restart_at:
+            runtime = ResearchRuntime(config, store)
+    repo = ExperienceRepository(store)
+    frozen = repo.all()[0]
+    rows = repo.outcomes(frozen.experience_id)
+    for row in rows[:2]:
+        assert row["entry_observed_by_horizon"] is False
+        assert all(hit is None for hit in row["plan_hits"].values())
+        assert row["sample_event_ids"] == ["sample:2"]
+        assert row["mfe"] == "5" and row["mae"] == "0"
+        assert row["endpoint_event_id"] == "sample:25"
+    for row in rows[2:]:
+        assert row["entry_observed_by_horizon"] is True
+        assert row["plan_hits"]["TP1"]["event_id"] == "sample:25"
+        assert row["plan_hits"]["TP2"] is None
+        assert row["plan_hits"]["invalidation"] is None
+        # Raw late prices still contribute to later setup-relative excursions.
+        assert row["mfe"] == "20" and row["mae"] == "11"
+    lifecycle = repo.lifecycle(frozen.experience_id)
+    assert [r["state"] for r in lifecycle] == [
+        "SIGNAL_CREATED",
+        "ENTRY_TRIGGERED",
+        "ACTIVE",
+        "TP1",
+        "CLOSED",
+    ]
+    ResearchRuntime(config, store)
+    assert repo.outcomes(frozen.experience_id) == rows
+    assert repo.lifecycle(frozen.experience_id) == lifecycle
+    assert repo.get(frozen.experience_id) == frozen
+
+
+def test_measure_replays_only_causal_window(
+    store: SQLiteJournal, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nexora.experience import engine
+
+    observer = service(store)
+    observer.observe(event(0), output("BUY"))
+    frozen = observer.repository.all()[0]
+    advance = engine.advance
+    seen = []
+
+    def checked_advance(experience: Any, previous: Any, sample: NormalizedPriceEvent) -> Any:
+        assert sample.event_time <= T0 + timedelta(minutes=5)
+        assert sample.received_at <= T0 + timedelta(minutes=5)
+        seen.append(sample.identity_key)
+        return advance(experience, previous, sample)
+
+    monkeypatch.setattr(engine, "advance", checked_advance)
+    samples = [
+        {"event": sample, "completeness": "unknown"}
+        for sample in (
+            event(1),
+            event(5, "110"),
+            event(20, "120"),
+            replace(event(21, "89"), event_time=T0 + timedelta(minutes=3)),
+        )
+    ]
+    row = engine.measure(frozen, 5, samples, event(25, "150"))
+    assert seen == ["sample:1", "sample:5"]
+    assert row["entry_observed_by_horizon"] is True
+    assert row["plan_hits"]["TP1"]["event_id"] == "sample:5"
+    assert row["plan_hits"]["TP2"] is None
+    assert row["plan_hits"]["invalidation"] is None
+    assert row["mfe"] == D("10") and row["mae"] == D("0")
+    assert row["price_change"] == D("50")

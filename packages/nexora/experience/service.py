@@ -76,7 +76,6 @@ class ExperienceService:
                     minutes,
                     self._samples[eid],
                     event,
-                    self._states[eid],
                 )
                 self.journal.append(f"experience:v1:{eid}:outcomes", str(minutes), outcome)
                 self._completed[eid].add(minutes)
