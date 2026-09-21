@@ -94,3 +94,7 @@ paths reserved, no checkpoint implementation added; PR21 integration requires Ri
 blockers: no local code/test failure; deployment/migration and independent review pending.
 next_action: Rin reviews draft diff/baseline and migration plan before any stable deployment.
 No merge, tags, automatic migration or production source update.
+
+- Implementation commit: `927e647`.
+- Draft review: [PR #23](https://github.com/Knerubon/NEXORA/pull/23).
+  Independent Rin review pending; no merge, tags or deployment.
