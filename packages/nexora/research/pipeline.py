@@ -68,11 +68,18 @@ class ResearchPipeline:
         self._output: dict[str, Any] = {}
 
     def process(self, event: NormalizedPriceEvent) -> dict[str, Any]:
+        return self._process(event, emit_snapshot=True)
+
+    def replay(self, event: NormalizedPriceEvent) -> None:
+        """Advance every engine normally without serializing unused intermediate output."""
+        self._process(event, emit_snapshot=False)
+
+    def _process(self, event: NormalizedPriceEvent, *, emit_snapshot: bool) -> dict[str, Any]:
         identity = canonical_hash(event)
         if event.identity_key in self._seen:
             if self._seen[event.identity_key] != identity:
                 raise ValueError("event_identity_conflict")
-            return self.snapshot()
+            return self.snapshot() if emit_snapshot else {}
         if event.is_duplicate or event.is_out_of_order:
             raise ValueError("noncanonical_event")
         if event.symbol != self.config.signals.symbol:
@@ -98,21 +105,19 @@ class ResearchPipeline:
         structure = self.structure.snapshot()
         regime = self.regime.classify(structure, matrix)
         signals = self.signals.evaluate(structure=structure, regime=regime, matrix=matrix)
-        self._output = canonical_serialize(
-            {
-                "config_version": self.config.version,
-                "event": event,
-                "matrix": matrix,
-                "structure": structure,
-                "regime": regime,
-                "signals": signals,
-                "columns": pnf.columns,
-                "transitions": pnf.transitions,
-            }
-        )
+        self._output = {
+            "config_version": self.config.version,
+            "event": event,
+            "matrix": matrix,
+            "structure": structure,
+            "regime": regime,
+            "signals": signals,
+            "columns": pnf.columns,
+            "transitions": pnf.transitions,
+        }
         self._seen[event.identity_key] = identity
         self._last = event
-        return self.snapshot()
+        return self.snapshot() if emit_snapshot else {}
 
     def snapshot(self) -> dict[str, Any]:
         return dict(canonical_serialize(self._output))

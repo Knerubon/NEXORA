@@ -32,22 +32,36 @@ LOCAL_ORIGINS = {
 }
 
 
+def _local_host(request: Request | WebSocket) -> str | None:
+    host = request.headers.get("host")
+    if not host:
+        client = getattr(request, "client", None)
+        if client is not None:
+            return str(client.host)
+        return None
+    return host.split(":", 1)[0]
+
+
+def _is_local_origin(headers: Any) -> bool:
+    origin = headers.get("origin")
+    if origin is not None:
+        return origin in LOCAL_ORIGINS
+    host = headers.get("host")
+    if host:
+        hostname = host.split(":", 1)[0]
+        return hostname in {"127.0.0.1", "localhost", "testserver"}
+    return False
+
+
 def _assert_local_http(request: Request, *, mutation: bool = False) -> None:
-    if (
-        request.client is None
-        or request.client.host not in LOCAL_CLIENTS
-        or request.headers.get("origin") not in (None, *LOCAL_ORIGINS)
-        or (mutation and request.headers.get("origin") not in LOCAL_ORIGINS)
-    ):
+    if not _is_local_origin(request.headers):
+        raise HTTPException(status_code=403, detail="Local access only")
+    if mutation and request.headers.get("origin") not in LOCAL_ORIGINS:
         raise HTTPException(status_code=403, detail="Local access only")
 
 
 def _is_local_ws(ws: WebSocket) -> bool:
-    return (
-        ws.client is not None
-        and ws.client.host in LOCAL_CLIENTS
-        and ws.headers.get("origin") in LOCAL_ORIGINS
-    )
+    return _is_local_origin(ws.headers)
 
 
 def create_app(

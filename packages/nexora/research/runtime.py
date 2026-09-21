@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from threading import RLock
 from typing import Any
@@ -35,11 +36,15 @@ class ResearchRuntime:
     def _rebuild(self) -> None:
         self.engine = ResearchPipeline(self.config.pipeline)
         self._events: list[NormalizedPriceEvent] = []
-        for row in self.journal.read(self.stream):
+        for row in self.journal.iter_read(self.stream):
             event = decode(NormalizedPriceEvent, row["event"])
-            self.engine.process(event)
+            self.engine.replay(event)
             self._events.append(event)
             self._paper_event(event, str(row.get("completeness", "unknown")), row["output"])
+            if len(self._events) % 1000 == 0:
+                logging.getLogger("uvicorn.error").info(
+                    "Research recovery: replayed %d events", len(self._events)
+                )
 
     def ingest(self, event: NormalizedPriceEvent, *, completeness: str = "unknown") -> None:
         with self._lock:
