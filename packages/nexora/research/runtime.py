@@ -8,6 +8,7 @@ from threading import RLock
 from typing import Any
 
 from nexora.artifacts import canonical_hash, decode
+from nexora.experience import ExperienceService
 from nexora.market_data.models import NormalizedPriceEvent
 from nexora.paper.session import PaperSession, PaperSessionConfig
 from nexora.research import PipelineConfig, ResearchPipeline
@@ -35,18 +36,31 @@ class ResearchRuntime:
 
     def _rebuild(self) -> None:
         self.engine = ResearchPipeline(self.config.pipeline)
+        self.experience = ExperienceService(self.journal, self.config, self.stream)
         self._events: list[NormalizedPriceEvent] = []
         for row in self.journal.iter_read(self.stream):
             event = decode(NormalizedPriceEvent, row["event"])
             self.engine.replay(event)
             self._events.append(event)
             self._paper_event(event, str(row.get("completeness", "unknown")), row["output"])
+            self.experience.observe(
+                event,
+                row["output"],
+                completeness=str(row.get("completeness", "unknown")),
+                metadata=row.get("observation_metadata"),
+            )
             if len(self._events) % 1000 == 0:
                 logging.getLogger("uvicorn.error").info(
                     "Research recovery: replayed %d events", len(self._events)
                 )
 
-    def ingest(self, event: NormalizedPriceEvent, *, completeness: str = "unknown") -> None:
+    def ingest(
+        self,
+        event: NormalizedPriceEvent,
+        *,
+        completeness: str = "unknown",
+        observation_metadata: dict[str, Any] | None = None,
+    ) -> None:
         with self._lock:
             try:
                 if event.units != self.config.units:
@@ -60,12 +74,23 @@ class ResearchRuntime:
                 inserted = self.journal.append(
                     self.stream,
                     event.identity_key,
-                    {"event": event, "output": output, "completeness": completeness},
+                    {
+                        "event": event,
+                        "output": output,
+                        "completeness": completeness,
+                        "observation_metadata": observation_metadata,
+                    },
                     expected_count=len(self._events),
                 )
                 if inserted:
                     self._events.append(event)
                 self._paper_event(event, completeness, output)
+                self.experience.observe(
+                    event,
+                    output,
+                    completeness=completeness,
+                    metadata=observation_metadata,
+                )
                 self.error = None
             except Exception:
                 self.error = "research_processing_failed"
