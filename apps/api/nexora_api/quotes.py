@@ -3,6 +3,7 @@
 import importlib
 import os
 import threading
+import time
 from collections import deque
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -207,6 +208,7 @@ class QuoteService:
         self.lock = threading.Lock()
         self.stop_event = threading.Event()
         self.thread: threading.Thread | None = None
+        self.observer_thread: threading.Thread | None = None
         quality_symbol = symbol or "unconfigured"
         self.quality_monitor = MarketDataQualityMonitor(QualityConfig(symbol=quality_symbol))
         self.current = Snapshot(
@@ -261,18 +263,46 @@ class QuoteService:
                 quote=quote,
             )
             self._history.append(self.current)
-        if quote is not None and status == "live" and self.on_quote is not None:
+        if (
+            self.thread is None
+            and quote is not None
+            and status == "live"
+            and self.on_quote is not None
+        ):
             self.on_quote(quote)
 
     def start(self) -> None:
+        if self.thread is not None:
+            return
+        self.stop_event.clear()
         self.thread = threading.Thread(target=self._run, name="nexora-quotes", daemon=True)
+        self.observer_thread = threading.Thread(
+            target=self._observe, name="nexora-quote-observer", daemon=True
+        )
         self.thread.start()
+        self.observer_thread.start()
+
+    def _observe(self) -> None:
+        # Preserve sampled research observation, with one consumer and no queue.
+        # Slow journal/recovery work must never block the latest-price reader.
+        previous: tuple[object, ...] | None = None
+        while not self.stop_event.is_set():
+            started = time.monotonic()
+            snapshot = self.snapshot()
+            quote = snapshot.quote
+            if quote is not None and snapshot.status == "live" and self.on_quote is not None:
+                identity = (quote.symbol, quote.event_time, quote.bid, quote.ask)
+                if identity != previous and quote.event_time <= quote.received_at:
+                    self.on_quote(quote)
+                    previous = identity
+            self.stop_event.wait(max(0, 1 - (time.monotonic() - started)))
 
     def _run(self) -> None:
         try:
             while not self.stop_event.is_set():
+                started = time.monotonic()
                 self.poll()
-                self.stop_event.wait(1)
+                self.stop_event.wait(max(0, 0.2 - (time.monotonic() - started)))
         finally:
             self.source.close()
 
@@ -280,6 +310,8 @@ class QuoteService:
         self.stop_event.set()
         if self.thread is not None:
             self.thread.join(timeout=12)
+        if self.observer_thread is not None:
+            self.observer_thread.join()
 
 
 def configured_service() -> QuoteService:

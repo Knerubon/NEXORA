@@ -88,9 +88,33 @@ def create_app(
             feed.on_quote = lambda quote: observe_quote(engine, quote)
         if start_worker:
             feed.start()
+        application.state.published = await asyncio.to_thread(state_payload)
+        application.state.publication = 0
+
+        async def publish_state() -> None:
+            while True:
+                # One shared, sequential job. Never hold the ASGI event loop or
+                # quote delivery behind research locks, serialization or storage.
+                await asyncio.sleep(1)
+                pending = asyncio.create_task(asyncio.to_thread(state_payload))
+                try:
+                    application.state.published = await asyncio.shield(pending)
+                except asyncio.CancelledError:
+                    # A cancelled to_thread await does not stop its worker.
+                    # Finish that single read before closing the journal.
+                    await pending
+                    raise
+                application.state.publication += 1
+
+        publisher = asyncio.create_task(publish_state())
         try:
             yield
         finally:
+            publisher.cancel()
+            try:
+                await publisher
+            except asyncio.CancelledError:
+                pass
             if start_worker:
                 await asyncio.to_thread(feed.stop)
             feed.on_quote = None
@@ -301,15 +325,14 @@ def create_app(
             await ws.close(code=1008)
             return
         await ws.accept()
-        previous = ""
+        publication = -1
+        app.state.active_sockets = getattr(app.state, "active_sockets", 0) + 1
         try:
             while True:
-                payload = state_payload()
-                fingerprint = canonical_hash(payload)
-                if fingerprint != previous:
-                    if quotes_only:
-                        await asyncio.wait_for(ws.send_json(payload["quote"]), timeout=5)
-                    else:
+                if not quotes_only and publication != app.state.publication:
+                    payload = app.state.published
+                    publication = app.state.publication
+                    if payload is not None:
                         # Full snapshots recover from reconnects and missed deltas.
                         await asyncio.wait_for(
                             ws.send_json(
@@ -323,7 +346,24 @@ def create_app(
                             ),
                             timeout=5,
                         )
-                    previous = fingerprint
+                # A lightweight heartbeat carries the current observation,
+                # including unchanged/stale event_time; it is not a market tick.
+                quote = app.state.quotes.snapshot().model_dump(mode="json")
+                if quotes_only:
+                    await asyncio.wait_for(ws.send_json(quote), timeout=5)
+                else:
+                    await asyncio.wait_for(
+                        ws.send_json(
+                            {
+                                "schema_version": 2,
+                                "event_type": "quote_snapshot",
+                                "sequence": quote["sequence"],
+                                "stream_id": quote["stream_id"],
+                                "payload": quote,
+                            }
+                        ),
+                        timeout=5,
+                    )
                 try:
                     message = await asyncio.wait_for(ws.receive(), timeout=0.25)
                     if message["type"] == "websocket.disconnect":
@@ -332,6 +372,8 @@ def create_app(
                     pass
         except (WebSocketDisconnect, OSError, TimeoutError):
             return
+        finally:
+            app.state.active_sockets -= 1
 
     @app.websocket("/ws/events")
     async def events(ws: WebSocket) -> None:

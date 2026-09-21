@@ -37,6 +37,21 @@ Backtest uses first observed prices at/after decision delay and holding interval
 
 State/history contracts are schema 2. `/ws/events` sends authoritative `state_snapshot` envelopes containing quotes, P&F transitions, matrix, structure, regime and signals; clients replace state on reconnect rather than guessing missed deltas. Quote-only streaming remains available. This is a transport clarification of FR-07, not removal of its data channels. Dashboard charts show the last calculation separately from feed readiness.
 
+Real-time quote delivery additionally sends schema-2 `quote_snapshot` envelopes on
+the same `/ws/events` connection every 250 ms. MT5 latest-quote reads target 200 ms;
+the one research observer retains its one-second sampled cadence independently of
+the reader. Slow research/persistence cannot hold the quote reader or publisher.
+Research snapshots use one shared sequential background publisher. There is no
+unbounded quote queue, per-client research polling job, or second browser socket.
+Quote `sequence` counts observations, including heartbeat/repeated/stale reads;
+only source `event_time` identifies market time. No prices or timestamps are
+interpolated. Duplicate observations do not create research events, and quotes
+with event time ahead of receipt or behind the last accepted event are rejected
+before ingest, preserving the engine's chronology rules without triggering replay.
+The UI applies quote snapshots independently and ignores older observations from
+delayed REST/research responses. This is sampled observation with unknown coverage,
+not a claim of complete tick capture; all P&F and strategy rules remain unchanged.
+
 `POST /backtest/runs` accepts `parameter_set`; `POST /paper/control` accepts `pause`, `resume`, `kill`. Mutations require an allowed local Origin and local client. `/risk/replay` and `/paper/replay` retain their old routes but now read persisted session results instead of creating fixture executions. `/health` is process liveness only; `/operations/readiness` reports actual initialization/freshness/storage reasons and explicitly unverified hardening. A ready local observation scope is never production approval.
 
 ## Persistence and recovery
