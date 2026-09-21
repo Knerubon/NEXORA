@@ -49,7 +49,13 @@ def configured_backtests() -> dict[str, BacktestConfig]:
 def observe_quote(runtime: ResearchRuntime, quote: Quote) -> None:
     """Quote polling is observation with unknown coverage, never full tick capture."""
     try:
+        # Reject invalid chronology before ingest's expensive recovery path.
+        # Keep the source timestamp intact; a later poll may become eligible.
+        if quote.event_time > quote.received_at:
+            return
         events = runtime.events()
+        if events and quote.event_time < events[-1].event_time:
+            return
         identity = "quote:" + canonical_hash(
             (
                 quote.symbol,

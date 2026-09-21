@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import json
 import sqlite3
+from collections.abc import Iterator
 from pathlib import Path
 from threading import RLock
 from typing import Any, Protocol
@@ -19,6 +21,7 @@ class Journal(Protocol):
         self, stream: str, key: str, payload: Any, *, expected_count: int | None = None
     ) -> bool: ...
     def read(self, stream: str) -> tuple[dict[str, Any], ...]: ...
+    def iter_read(self, stream: str) -> Iterator[dict[str, Any]]: ...
     def close(self) -> None: ...
 
 
@@ -74,6 +77,28 @@ class SQLiteJournal:
             ).fetchall()
             return _verified(rows)
 
+    def iter_read(self, stream: str) -> Iterator[dict[str, Any]]:
+        """Verify bounded pages through a fixed high-water mark in journal order."""
+        with self._lock:
+            end = self.connection.execute(
+                "SELECT COALESCE(MAX(sequence),0) FROM research_journal WHERE stream=?",
+                (stream,),
+            ).fetchone()[0]
+        after = 0
+        while after < end:
+            with self._lock:
+                rows = self.connection.execute(
+                    "SELECT sequence,content_hash,payload FROM research_journal NOT INDEXED "
+                    "WHERE stream=? AND sequence>? AND sequence<=? "
+                    "ORDER BY sequence LIMIT 32",
+                    (stream, after, end),
+                ).fetchall()
+            if not rows:
+                break
+            for sequence, digest, payload in rows:
+                yield _verify(digest, payload)
+                after = sequence
+
     def backup(self, destination: Path) -> None:
         if destination.exists():
             raise ValueError("backup_destination_exists")
@@ -88,14 +113,18 @@ class SQLiteJournal:
         self.connection.close()
 
 
+def _verify(digest: str, payload: str) -> dict[str, Any]:
+    value = json.loads(payload)
+    # JSON-decoded values already contain only canonical primitive/container types.
+    # sort_keys handles nested dictionaries without a second recursive Python copy.
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"))
+    if hashlib.sha256(encoded.encode()).hexdigest() != digest:
+        raise ValueError("journal_corrupt")
+    return value  # type: ignore[no-any-return]
+
+
 def _verified(rows: Any) -> tuple[dict[str, Any], ...]:
-    result = []
-    for digest, payload in rows:
-        value = json.loads(payload)
-        if canonical_hash(value) != digest:
-            raise ValueError("journal_corrupt")
-        result.append(value)
-    return tuple(result)
+    return tuple(_verify(digest, payload) for digest, payload in rows)
 
 
 class PostgresJournal:
@@ -148,6 +177,28 @@ class PostgresJournal:
                 (stream,),
             ).fetchall()
             return _verified(rows)
+
+    def iter_read(self, stream: str) -> Iterator[dict[str, Any]]:
+        """Verify bounded pages through a fixed high-water mark in journal order."""
+        with self._lock:
+            end = self.connection.execute(
+                "SELECT COALESCE(MAX(sequence),0) FROM research_journal WHERE stream=%s",
+                (stream,),
+            ).fetchone()[0]
+        after = 0
+        while after < end:
+            with self._lock:
+                rows = self.connection.execute(
+                    "SELECT sequence,content_hash,payload FROM research_journal "
+                    "WHERE stream=%s AND sequence>%s AND sequence<=%s "
+                    "ORDER BY sequence LIMIT 32",
+                    (stream, after, end),
+                ).fetchall()
+            if not rows:
+                break
+            for sequence, digest, payload in rows:
+                yield _verify(digest, payload)
+                after = sequence
 
     def close(self) -> None:
         self.connection.close()
