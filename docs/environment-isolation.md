@@ -8,14 +8,15 @@ brain, storage and logs. No strategy, P&F, Matrix, Signal or Experience formula 
 
 - `D:\NEXORA\NEXORA`: existing stable worktree; do not edit it during development.
 - `D:\NEXORA\NEXORA-DEV`: development feature worktree.
-- This branch starts at `f5f388f` (merged PR22 realtime fixes), before PR21.
-  Current main already contains PR21. Nothing in PR21 was modified/reverted; integration
-  onto current main is a separate Rin review/merge decision, not performed here.
+- Rebased on current main `130f260` (including PR21 and PR22), as requested by Rin.
+  Experience is included unchanged. No domain/time semantics are altered by isolation.
+  Main itself is not modified; final Rin approval, merge and deployment remain pending.
 
 Exact worktree setup (only if the destination/branch do not already exist):
 
 ```powershell
-git -C D:\NEXORA\NEXORA worktree add D:\NEXORA\NEXORA-DEV -b codex/environment-isolation-v1 f5f388f
+git -C D:\NEXORA\NEXORA fetch --no-tags origin
+git -C D:\NEXORA\NEXORA worktree add D:\NEXORA\NEXORA-DEV codex/environment-isolation-v1
 Set-Location D:\NEXORA\NEXORA-DEV
 uv sync --locked --extra api --extra postgres
 npm --prefix apps/web ci
@@ -102,8 +103,20 @@ Do not run bare uvicorn/npm commands as a substitute for the supported launcher.
 - Shared MT5 read-only input is allowed; terminal availability/host resources remain
   shared failure domains. No guarantee that the external terminal isolates concurrent clients.
 - No shared writable databases, journal, engine state, Experience memory, checkpoint,
-  caches or logs. If Experience is integrated later it follows its owning runtime journal;
-  this branch deliberately does not modify or introduce PR21 implementation.
+  caches or logs. Experience uses its owning runtime journal (including raw observations,
+  frozen snapshots, lifecycle and outcome streams); its implementation matches main.
+
+## Time semantics preserved
+
+DEV and PROD must preserve identical existing MT5 normalization and offset semantics.
+Copy the verified `NEXORA_MT5_PATH`, symbol and `NEXORA_MT5_TIME_OFFSET_SECONDS` exactly;
+never silently reset an explicit offset to zero when moving from legacy `.env`.
+The current correction subtracts the configured offset from raw event time, retaining
+raw time and offset provenance; the observed 10800-second workaround is feed-specific,
+not a timezone default. Do not auto-detect offsets, change clocks, rewrite timestamps,
+or change trading/event/Experience time rules in PR23. See
+[ADR-019](decisions/ADR-019-explicit-feed-time-correction.md) and the
+[proposed Time Semantics task](../tasks/TS1-time-semantics-proposal.md).
 
 ## Existing data and PostgreSQL migration
 
@@ -114,7 +127,10 @@ backup (SQLite backup API, including WAL state), initialize an empty PROD root u
 `-Action describe`, restore the verified backup into that root's storage while stopped,
 then start and verify config, event counts and readiness. Never copy a live .sqlite file
 alone or change historical/config semantics. Do not point DEV at the old PROD journal.
-This migration is documented, not executed by this task.
+This migration is documented, not executed by this task. The required operator gates,
+verification evidence, soak and rollback procedure are in the
+[migration/rollback checklist](environment-migration-checklist.md). All checkboxes are
+unexecuted; this PR does not authorize a production cutover.
 
 PostgreSQL requires separate databases and least-privilege roles. Before enabling a
 local DSN, an administrator provisions this identity table in each database, using

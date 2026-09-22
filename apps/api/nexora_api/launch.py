@@ -162,7 +162,9 @@ def run_action(settings: Environment, action: str) -> None:
                     stdout=log,
                     stderr=log,
                     stdin=subprocess.DEVNULL,
-                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+                    creationflags=(
+                        getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+                    ),
                 )
             identity = psutil.Process(process.pid)
             records.append(
