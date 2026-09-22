@@ -146,7 +146,7 @@ def test_two_bearish_one_bullish_is_bearish_lean() -> None:
 # D. full bullish alignment
 
 
-def test_full_bullish_alignment_with_buy_action_is_confirmed() -> None:
+def test_full_bullish_alignment_with_buy_action_is_direction_confirmed() -> None:
     structure = _structure(
         pivots=(
             ("low", "99.0", "confirmed"),
@@ -163,7 +163,7 @@ def test_full_bullish_alignment_with_buy_action_is_confirmed() -> None:
 
     context = derive_decision_context(decision=snapshot.decision, matrix=matrix)
     assert context.bias == "BULLISH"
-    assert context.state == "CONFIRMED"
+    assert context.state == "DIRECTION_CONFIRMED"
     assert (context.alignment.aligned, context.alignment.total) == (3, 3)
     assert context.reasons == () and context.waiting_for == ()
 
@@ -171,7 +171,7 @@ def test_full_bullish_alignment_with_buy_action_is_confirmed() -> None:
 # E. full bearish alignment
 
 
-def test_full_bearish_alignment_with_sell_action_is_confirmed() -> None:
+def test_full_bearish_alignment_with_sell_action_is_direction_confirmed() -> None:
     structure = _structure(
         pivots=(
             ("high", "111.0", "confirmed"),
@@ -188,7 +188,7 @@ def test_full_bearish_alignment_with_sell_action_is_confirmed() -> None:
 
     context = derive_decision_context(decision=snapshot.decision, matrix=matrix)
     assert context.bias == "BEARISH"
-    assert context.state == "CONFIRMED"
+    assert context.state == "DIRECTION_CONFIRMED"
     assert (context.alignment.aligned, context.alignment.total) == (3, 3)
 
 

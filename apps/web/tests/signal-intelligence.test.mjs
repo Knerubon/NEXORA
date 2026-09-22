@@ -100,6 +100,9 @@ test('decision context renders backend-owned bias, state and alignment without f
   assert.match(html, /Bias ⓘ<\/h3>\s*<strong class="up">Bullish lean<\/strong>/);
   assert.match(html, /State<\/span> <strong>Developing<\/strong>/);
   assert.match(html, /Alignment<\/span> <strong>2 \/ 3<\/strong>/);
+  const confirmed = render(decision, {decisionContext: {...context, bias: 'BULLISH', state: 'DIRECTION_CONFIRMED'}});
+  assert.match(confirmed, /State<\/span> <strong>Direction confirmed<\/strong>/);
+  assert.ok(!confirmed.includes('>Confirmed<'));
 });
 test('WHY WAIT reasons and waiting-for render only for WAIT decisions, reusing backend text verbatim', () => {
   const context = {bias: 'BULLISH_LEAN', state: 'DEVELOPING', alignment: {aligned: 2, total: 3},
@@ -109,7 +112,7 @@ test('WHY WAIT reasons and waiting-for render only for WAIT decisions, reusing b
   assert.match(html, /<h4>Why WAIT\?<\/h4><ul><li>Matrix disagreement detected\.<\/li><li>SLOW conflicts with FAST\/MEDIUM\.<\/li><\/ul>/);
   assert.match(html, /<h4>Waiting for<\/h4><ul><li>Structural confirmation\.<\/li><\/ul>/);
 
-  const buyHtml = render({...decision, action: 'BUY'}, {decisionContext: {...context, bias: 'BULLISH', state: 'CONFIRMED'}});
+  const buyHtml = render({...decision, action: 'BUY'}, {decisionContext: {...context, bias: 'BULLISH', state: 'DIRECTION_CONFIRMED'}});
   assert.ok(!buyHtml.includes('Why WAIT?') && !buyHtml.includes('Waiting for'));
 
   const noReasons = render(decision, {decisionContext: {...context, reasons: [], waiting_for: []}});
@@ -139,7 +142,7 @@ test('floating summary uses identical independent current strengths and an hones
   assert.match(html, /Bias: <strong class="">Unavailable<\/strong>/);
   const cooldown = renderToStaticMarkup(createElement(exports.MatrixSummary, { decision: {...decision, strength_available: false} }));
   assert.ok(!cooldown.includes('ring-value'));
-  const context = { bias: 'BEARISH', state: 'CONFIRMED', alignment: { aligned: 3, total: 3 }, reasons: [], waiting_for: [] };
+  const context = { bias: 'BEARISH', state: 'DIRECTION_CONFIRMED', alignment: { aligned: 3, total: 3 }, reasons: [], waiting_for: [] };
   const withBias = renderToStaticMarkup(createElement(exports.MatrixSummary, { decision, decisionContext: context, symbol: 'XAUUSD' }));
   assert.match(withBias, /Bias: <strong class="down">Bearish<\/strong>/);
 });

@@ -23,7 +23,7 @@ export type SignalDecision = {
 // computes bias/state/alignment itself; it renders these fields verbatim.
 export type DecisionContext = {
   bias: "BULLISH" | "BULLISH_LEAN" | "MIXED" | "BEARISH_LEAN" | "BEARISH" | "UNAVAILABLE";
-  state: "DEVELOPING" | "CONFIRMED" | "UNAVAILABLE";
+  state: "DEVELOPING" | "DIRECTION_CONFIRMED" | "UNAVAILABLE";
   alignment: { aligned: number; total: number };
   reasons: string[];
   waiting_for: string[];
@@ -48,7 +48,7 @@ const biasLabels: Record<DecisionContext["bias"], string> = {
   BEARISH_LEAN: "Bearish lean", BEARISH: "Bearish", UNAVAILABLE: "Unavailable",
 };
 const stateLabels: Record<DecisionContext["state"], string> = {
-  DEVELOPING: "Developing", CONFIRMED: "Confirmed", UNAVAILABLE: "Unavailable",
+  DEVELOPING: "Developing", DIRECTION_CONFIRMED: "Direction confirmed", UNAVAILABLE: "Unavailable",
 };
 function biasClass(bias?: DecisionContext["bias"]) {
   if (bias === "BULLISH" || bias === "BULLISH_LEAN") return "up";

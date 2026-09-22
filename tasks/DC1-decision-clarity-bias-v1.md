@@ -67,8 +67,12 @@ warming up). Disagreement — even a tie — is `MIXED`, never `UNAVAILABLE`. A 
 
 Only states provable from a single snapshot are implemented:
 
-- `CONFIRMED`: bias is `BULLISH` and decision action is `BUY`, or bias is `BEARISH` and
-  action is `SELL` — full matrix alignment and the engine's own decision agree.
+- `DIRECTION_CONFIRMED`: bias is `BULLISH` and decision action is `BUY`, or bias is
+  `BEARISH` and decision action is `SELL` — the deterministic Matrix direction agrees with
+  the existing Signal action. Renamed from an earlier draft's `CONFIRMED`: that name could
+  be read as a fully confirmed trade setup, which this state does not claim. Structure,
+  Pattern, Trendline, and temporal Signal Stability are not part of this state and do not
+  feed into it.
 - `DEVELOPING`: bias has a directional lean (`BULLISH`/`BULLISH_LEAN`/`BEARISH`/`BEARISH_LEAN`)
   but the decision has not (yet) confirmed that direction as BUY/SELL.
 - `UNAVAILABLE`: bias is `MIXED` or `UNAVAILABLE` — no coherent direction to characterize.
@@ -115,8 +119,8 @@ Backend (`tests/test_decision_context.py`, 12 tests): all-unavailable; zero-know
 unavailable (not mixed); 2-bullish/1-bearish → BULLISH_LEAN with WAIT preserved (task's own
 example, run through the real `SignalEngine` for the WAIT-preserved half and through the
 pure function directly for the exact bias/alignment split); the mirrored BEARISH_LEAN case;
-full bullish alignment → BULLISH/CONFIRMED via a real BUY decision; full bearish alignment →
-BEARISH/CONFIRMED via a real SELL decision; a genuine 1X/1O tie → MIXED, not UNAVAILABLE;
+full bullish alignment → BULLISH/DIRECTION_CONFIRMED via a real BUY decision; full bearish
+alignment → BEARISH/DIRECTION_CONFIRMED via a real SELL decision; a genuine 1X/1O tie → MIXED, not UNAVAILABLE;
 cooldown WAIT surfaces the cooldown reason; insufficient-input WAIT (missing structure
 pivots) while the matrix itself is fully aligned — shows the honest matrix-derived bias even
 though the overall decision is blocked by something else; range-regime WAIT surfaces the
@@ -164,3 +168,13 @@ Commands run in `D:\NEXORA\NEXORA-CLARITY` (worktree, branch `claude/decision-cl
 Self-review; independent Rin review pending. No merge, deploy, or data migration performed.
 No restart of the currently running NEXORA screen/API was needed or performed — all work was
 done in the isolated worktree.
+
+## Revision: CONFIRMED renamed to DIRECTION_CONFIRMED
+
+Rin requested this correction before merge: `CONFIRMED` could be read as a fully confirmed
+trade setup, which Decision Clarity V1 does not justify (Structure, Pattern, Trendline, and
+temporal Signal Stability are not part of this state). Renamed the value everywhere to
+`DIRECTION_CONFIRMED`, meaning only "the current deterministic Matrix direction agrees with
+the existing Signal action." No BUY/SELL/WAIT logic, confirmation rules, or SignalEngine
+scoring/thresholds changed — this is a rename plus documentation/test update only. `DEVELOPING`
+and `UNAVAILABLE` are unchanged. Kept: `DEVELOPING`, `DIRECTION_CONFIRMED`, `UNAVAILABLE`.

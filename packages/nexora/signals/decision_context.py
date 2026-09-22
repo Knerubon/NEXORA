@@ -14,7 +14,7 @@ from nexora.matrix.models import MatrixSnapshot
 from nexora.signals.models import SignalDecision
 
 Bias = Literal["BULLISH", "BULLISH_LEAN", "MIXED", "BEARISH_LEAN", "BEARISH", "UNAVAILABLE"]
-DecisionState = Literal["DEVELOPING", "CONFIRMED", "UNAVAILABLE"]
+DecisionState = Literal["DEVELOPING", "DIRECTION_CONFIRMED", "UNAVAILABLE"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,14 +85,18 @@ def _bias(matrix: MatrixSnapshot) -> tuple[Bias, int]:
 def _state(*, bias: Bias, action: str) -> DecisionState:
     """Only states provable from a single snapshot are implemented.
 
+    DIRECTION_CONFIRMED means only that the Matrix direction agrees with the
+    Signal action - not a fully confirmed trade setup. Structure, Pattern,
+    Trendline and temporal Signal Stability are not part of this state.
+
     ACTIVE/WEAKENING/INVALIDATED require tracking a specific trade's lifecycle
     across snapshots, which does not exist yet; that is deferred to a future
     Signal Stability task rather than fabricated here.
     """
     if bias == "BULLISH" and action == "BUY":
-        return "CONFIRMED"
+        return "DIRECTION_CONFIRMED"
     if bias == "BEARISH" and action == "SELL":
-        return "CONFIRMED"
+        return "DIRECTION_CONFIRMED"
     if bias in ("MIXED", "UNAVAILABLE"):
         return "UNAVAILABLE"
     return "DEVELOPING"
