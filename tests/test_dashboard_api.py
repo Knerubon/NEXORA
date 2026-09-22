@@ -67,6 +67,14 @@ def test_dashboard_state_config_quality_and_history_endpoints() -> None:
     assert state.json()["backtest_lab_status"] == "empty"
     assert state.json()["matrix_status"] == "unavailable"
     assert state.json()["paper_trading_status"] == "unavailable"
+    assert state.json()["decision_context"] == {
+        "schema_version": 1,
+        "bias": "UNAVAILABLE",
+        "state": "UNAVAILABLE",
+        "alignment": {"aligned": 0, "total": 0},
+        "reasons": [],
+        "waiting_for": [],
+    }
     assert config.json()["local_only"] is True
     assert len(history.json()["quote_history"]) == 2
     assert len(history.json()["quality_history"]) == 2

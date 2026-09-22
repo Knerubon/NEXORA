@@ -19,9 +19,20 @@ export type SignalDecision = {
   negative_evidence: SignalEvidence[];
 };
 
+// Backend-derived only (Decision Clarity + Bias V1). The frontend never
+// computes bias/state/alignment itself; it renders these fields verbatim.
+export type DecisionContext = {
+  bias: "BULLISH" | "BULLISH_LEAN" | "MIXED" | "BEARISH_LEAN" | "BEARISH" | "UNAVAILABLE";
+  state: "DEVELOPING" | "DIRECTION_CONFIRMED" | "UNAVAILABLE";
+  alignment: { aligned: number; total: number };
+  reasons: string[];
+  waiting_for: string[];
+};
+
 export type PanelProps = {
   history?: { signal_id: string; side: string; status: string; decision_time: string; reasons: string[]; source_refs: string[] }[];
   decision?: SignalDecision;
+  decisionContext?: DecisionContext;
   symbol?: string;
   matrix?: { alignment: string; resolutions: { name: string; direction: string; status: string }[] };
   matrixStatus?: string;
@@ -31,6 +42,19 @@ export type PanelProps = {
   connectionError?: boolean;
   regime?: { label: string; reason: string };
 };
+
+const biasLabels: Record<DecisionContext["bias"], string> = {
+  BULLISH: "Bullish", BULLISH_LEAN: "Bullish lean", MIXED: "Mixed",
+  BEARISH_LEAN: "Bearish lean", BEARISH: "Bearish", UNAVAILABLE: "Unavailable",
+};
+const stateLabels: Record<DecisionContext["state"], string> = {
+  DEVELOPING: "Developing", DIRECTION_CONFIRMED: "Direction confirmed", UNAVAILABLE: "Unavailable",
+};
+function biasClass(bias?: DecisionContext["bias"]) {
+  if (bias === "BULLISH" || bias === "BULLISH_LEAN") return "up";
+  if (bias === "BEARISH" || bias === "BEARISH_LEAN") return "down";
+  return "";
+}
 
 const components: Record<string, string> = {
   pnf: "P&F", structure: "Structure", support_resistance: "S&R",
@@ -67,18 +91,18 @@ export function MatrixResolutions({ matrix }: Pick<PanelProps, "matrix">) {
         </div>);
 }
 
-export function MatrixSummary({ decision: d, symbol, matrix, matrixStatus, connectionError, researchMode }: PanelProps) {
+export function MatrixSummary({ decision: d, decisionContext: c, symbol, matrix, matrixStatus, connectionError, researchMode }: PanelProps) {
   return <div className="matrix-summary">
     <header><strong>{symbol ?? "Symbol unavailable"}</strong><span>{connectionError ? "Snapshot only" : (matrixStatus ?? "unavailable").toUpperCase()}</span></header>
     {(researchMode !== "live_observation" || connectionError) && <small>Recorded / last received calculation</small>}
     <MatrixResolutions matrix={matrix} />
     <div className="strength-pair"><Strength side="BUY" value={d?.buy_strength} available={d?.strength_available} /><Strength side="SELL" value={d?.sell_strength} available={d?.strength_available} /></div>
-    <p>Decision <strong className={`decision-${d?.action.toLowerCase() ?? "unavailable"}`}>{d?.action ?? "Unavailable"}</strong> · Bias: Unavailable</p>
+    <p>Decision <strong className={`decision-${d?.action.toLowerCase() ?? "unavailable"}`}>{d?.action ?? "Unavailable"}</strong> · Bias: <strong className={biasClass(c?.bias)}>{biasLabels[c?.bias ?? "UNAVAILABLE"]}</strong></p>
     <small>Independent evidence strength · not win probability</small>
   </div>;
 }
 
-export function SignalIntelligence({ decision: d, symbol, matrix, matrixStatus, feedStatus, quoteTime,
+export function SignalIntelligence({ decision: d, decisionContext: c, symbol, matrix, matrixStatus, feedStatus, quoteTime,
   researchMode, connectionError, regime, history }: PanelProps) {
   const positive = d?.positive_evidence ?? [];
   const negative = d?.negative_evidence ?? [];
@@ -104,10 +128,17 @@ export function SignalIntelligence({ decision: d, symbol, matrix, matrixStatus, 
         <small>Independent evidence strengths; not win probability. They need not sum to 100.</small>
       </div>
       <div className="market-panel">
-        <h3>Short-term Bias</h3><strong>Unavailable</strong><small>No short-term bias supplied.</small>
+        <h3 title="Backend-derived from matrix resolution directions only; never computed in the browser.">Bias ⓘ</h3>
+        <strong className={biasClass(c?.bias)}>{biasLabels[c?.bias ?? "UNAVAILABLE"]}</strong>
+        <p><span>State</span> <strong>{stateLabels[c?.state ?? "UNAVAILABLE"]}</strong></p>
+        <p><span>Alignment</span> <strong>{c ? `${c.alignment.aligned} / ${c.alignment.total}` : "Unavailable"}</strong></p>
         <p><span>Regime</span> <strong>{regime?.label ?? "Unavailable"}</strong></p>
         {regime && <small>{regime.reason}</small>}
         <p className="pattern-summary">Pattern: {d?.patterns.length ? <>{d.patterns[0].pattern_type.replaceAll("_", " ")} · {d.patterns[0].direction} · {d.patterns[0].relation}{d.patterns.length > 1 ? ` (+${d.patterns.length - 1} in setup)` : ""}</> : d ? "None reported" : "Unavailable"}</p>
+        {d?.action === "WAIT" && c && (c.reasons.length > 0 || c.waiting_for.length > 0) && <div className="wait-context">
+          {c.reasons.length > 0 && <><h4>Why WAIT?</h4><ul>{c.reasons.map((reason, i) => <li key={i}>{reason}</li>)}</ul></>}
+          {c.waiting_for.length > 0 && <><h4>Waiting for</h4><ul>{c.waiting_for.map((item, i) => <li key={i}>{item}</li>)}</ul></>}
+        </div>}
       </div>
     </div>
     <div className="analysis-summary">
