@@ -37,7 +37,12 @@ type Paper = { status: string; accepted: number; rejected: number; fills: unknow
 const metric = (value: string | null) => value === null ? "Undefined" : Number(value).toLocaleString("en", { maximumFractionDigits: 4 });
 
 const environment = environmentDisplay(process.env.NEXT_PUBLIC_NEXORA_ENV);
-const api = process.env.NEXT_PUBLIC_API_BASE_URL ?? environment.api;
+// Same-origin gateway path (REMOTE1): works unchanged whether this page is
+// opened at home (http://127.0.0.1:3000) or through the secure remote tunnel
+// (https://<external host>) - the browser never needs to know the backend's
+// own host/port. See next.config.mjs's rewrites() and
+// tasks/REMOTE1-secure-remote-access.md.
+const api = "/api/nexora";
 
 function StructureChart({ output, liveQuote, panelProps }: { panelProps?: PanelProps; output: Output; liveQuote?: { symbol: string; bid: string; ask: string } | null }) {
   const [zoom, setZoom] = useState(120);
@@ -165,7 +170,12 @@ export default function Home() {
     if (!mountedRef.current) return;
     if (socketRef.current !== null) return;
 
-    const socket = new WebSocket(api.replace(/^http/, "ws") + "/ws/events");
+    // wss:// when the page itself is https:// (remote tunnel), ws:// for
+    // local http:// - never hard-codes a host, so it works unchanged through
+    // the same-origin gateway locally or remotely. Avoids the mixed-content
+    // failure of a ws:// socket from an https:// page.
+    const protocol = typeof window !== "undefined" && window.location.protocol === "https:" ? "wss" : "ws";
+    const socket = new WebSocket(`${protocol}://${window.location.host}/api/nexora/ws/events`);
     const generation = ++socketGenerationRef.current;
     socketRef.current = socket;
 

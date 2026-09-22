@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -35,7 +36,16 @@ LOCAL_CLIENTS = {"127.0.0.1", "::1", "testclient"}
 
 def _local_origins() -> set[str]:
     port = Environment.resolve().web_port
-    return {f"http://{host}:{port}" for host in ("127.0.0.1", "localhost")}
+    origins = {f"http://{host}:{port}" for host in ("127.0.0.1", "localhost")}
+    # Requests proxied through the Next.js gateway (apps/web/app/next.config.mjs)
+    # arrive here over loopback with the browser's original Origin forwarded
+    # unchanged; TrustedHostMiddleware already sees the rewritten loopback Host.
+    # This is the only way a non-loopback Origin is ever accepted, and it is
+    # opt-in: unset by default, so remote access stays off unless configured.
+    external = os.environ.get("NEXORA_EXTERNAL_ORIGIN")
+    if external:
+        origins.add(external)
+    return origins
 
 
 def _local_host(request: Request | WebSocket) -> str | None:
