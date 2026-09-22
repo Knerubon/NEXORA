@@ -10,12 +10,14 @@ from typing import Any, cast
 
 from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from nexora.artifacts import canonical_hash, canonical_serialize
+from nexora.artifacts import canonical_hash, canonical_serialize, decode
 from nexora.backtest import BacktestLabService
 from nexora.backtest.datasets import manifest_for
 from nexora.backtest.models import BacktestConfig
 from nexora.experience import ExperienceRepository
+from nexora.matrix import MatrixSnapshot
 from nexora.research.runtime import ResearchRuntime
+from nexora.signals import SignalDecision, derive_decision_context
 from nexora.storage import Journal
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
@@ -187,6 +189,13 @@ def create_app(
         matrix = output.get("matrix", {})
         structure = output.get("structure", {})
         regime = output.get("regime", {}).get("state", {})
+        decision_payload = output.get("signals", {}).get("decision")
+        decision_context = canonical_serialize(
+            derive_decision_context(
+                decision=decode(SignalDecision, decision_payload) if decision_payload else None,
+                matrix=decode(MatrixSnapshot, matrix) if matrix else None,
+            )
+        )
         try:
             backtest_status = "ready" if lab.list_runs() else "empty"
             app.state.journal.read("readiness-probe")
@@ -214,6 +223,7 @@ def create_app(
             "research_mode": "live_observation" if fresh else "recorded_or_unavailable",
             "storage_backend": app.state.journal.backend,
             "storage_available": storage_available,
+            "decision_context": decision_context,
         }
 
     @app.get("/config")

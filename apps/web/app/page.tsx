@@ -2,7 +2,7 @@
 
 import { environmentDisplay } from "./environment";
 
-import { SignalIntelligence, type SignalDecision, type PanelProps } from "./signal-intelligence";
+import { SignalIntelligence, type SignalDecision, type DecisionContext, type PanelProps } from "./signal-intelligence";
 
 import { MatrixFloat } from "./matrix-float";
 import { latestQuote, type QuoteSnapshot } from "./live-quote";
@@ -26,6 +26,7 @@ type State = {
   quote: QuoteSnapshot;
   quality: { status: string; completeness: string; counters: { observed: number; gaps: number; reconnects: number } };
   research: { event_count: number; error: string | null; output: Output };
+  decision_context?: DecisionContext;
 };
 type Run = { run_id: string; mode: string; status: string; dataset_id: string; config_hash: string;
   metrics: { trade_count: number; win_rate: string; expectancy: string; profit_factor: string | null;
@@ -294,8 +295,8 @@ export default function Home() {
       <p className="subtitle">{state?.research_mode === "live_observation" ? "Live observation" : "Recorded research / waiting for a configured feed"}. No broker orders.</p></section>
     {error && <p role="alert" className="warning">{error}</p>}
     <section className="price-structure" aria-label="Price Structure"><p data-testid="live-quote" data-sequence={quote?.sequence}>{quote?.quote ? `Bid ${quote.quote.bid} / Ask ${quote.quote.ask} · ${quote.quote.event_time}` : "No live quote available"}</p>
-      <p>Feed: {connectionStatus === "live" ? "LIVE" : connectionStatus === "reconnecting" ? "RECONNECTING" : "OFFLINE"} · {quote?.status ?? "Unavailable"}{quote?.quote?.time_offset_seconds ? ` · Explicit feed time correction: −${quote.quote.time_offset_seconds}s · raw: ${quote.quote.raw_event_time}` : ""}</p><StructureChart output={output} liveQuote={quote?.quote ?? null} panelProps={{ symbol: output.event?.symbol ?? quote?.quote?.symbol ?? quote?.symbol, matrixStatus: state?.matrix_status, researchMode: state?.research_mode, connectionError: Boolean(error) }} /></section>
-    <SignalIntelligence decision={output.signals?.decision}
+      <p>Feed: {connectionStatus === "live" ? "LIVE" : connectionStatus === "reconnecting" ? "RECONNECTING" : "OFFLINE"} · {quote?.status ?? "Unavailable"}{quote?.quote?.time_offset_seconds ? ` · Explicit feed time correction: −${quote.quote.time_offset_seconds}s · raw: ${quote.quote.raw_event_time}` : ""}</p><StructureChart output={output} liveQuote={quote?.quote ?? null} panelProps={{ symbol: output.event?.symbol ?? quote?.quote?.symbol ?? quote?.symbol, decisionContext: state?.decision_context, matrixStatus: state?.matrix_status, researchMode: state?.research_mode, connectionError: Boolean(error) }} /></section>
+    <SignalIntelligence decision={output.signals?.decision} decisionContext={state?.decision_context}
       symbol={output.event?.symbol ?? quote?.quote?.symbol ?? quote?.symbol}
       matrix={output.matrix} matrixStatus={state?.matrix_status} feedStatus={quote?.status}
       quoteTime={quote?.quote?.event_time} researchMode={state?.research_mode}

@@ -78,17 +78,42 @@ test('explainability respects polarity, cautions and WAIT without treating posit
   assert.match(wait, /bullish evidence/);
   assert.match(wait, /bearish evidence/);
 });
-test('readiness and quote status come from backend; bias stays unavailable even with aligned matrix', () => {
+test('readiness and quote status come from backend; bias stays honestly unavailable without a backend decision context', () => {
   const props = {symbol: 'XAUUSD-STD', matrixStatus: 'unavailable', feedStatus: 'stale', quoteTime: '2026-09-18T20:56:59Z',
     matrix: {alignment: 'aligned_bearish', resolutions: [{name: 'fast', direction: 'O', status: 'ready'}, {name: 'medium', direction: 'none', status: 'warmup'}]},
     regime: {label: 'trend', reason: 'trend_slope_threshold'}};
   const html = render(decision, props);
-  for (const text of ['XAUUSD-STD', 'Matrix: UNAVAILABLE', 'Feed: stale', 'Recorded / last received', 'FAST', 'warmup', 'Short-term Bias</h3><strong>Unavailable', 'not readiness to BUY or SELL', 'not timeframes']) assert.ok(html.includes(text), text);
+  for (const text of ['XAUUSD-STD', 'Matrix: UNAVAILABLE', 'Feed: stale', 'Recorded / last received', 'FAST', 'warmup', 'not readiness to BUY or SELL', 'not timeframes']) assert.ok(html.includes(text), text);
+  // No decisionContext was supplied, even though the raw matrix prop shows a clear
+  // aligned_bearish reading: the frontend must not derive bias itself from it.
+  assert.match(html, /Bias ⓘ<\/h3>\s*<strong class="">Unavailable<\/strong>/);
+  assert.ok(!html.includes('BEARISH'));
   const ready = render(decision, {...props, matrixStatus: 'ready', researchMode: 'live_observation', feedStatus: 'live'});
   assert.match(ready, /Matrix: READY/);
   assert.ok(!ready.includes('Recorded / last received'));
   const disconnected = render(decision, {...props, matrixStatus: 'ready', feedStatus: 'live', connectionError: true});
   assert.ok(!disconnected.includes('Matrix: READY') && !disconnected.includes('Feed: live'));
+});
+test('decision context renders backend-owned bias, state and alignment without frontend inference', () => {
+  const context = {bias: 'BULLISH_LEAN', state: 'DEVELOPING', alignment: {aligned: 2, total: 3}, reasons: [], waiting_for: []};
+  const html = render(decision, {decisionContext: context});
+  assert.match(html, /Bias ⓘ<\/h3>\s*<strong class="up">Bullish lean<\/strong>/);
+  assert.match(html, /State<\/span> <strong>Developing<\/strong>/);
+  assert.match(html, /Alignment<\/span> <strong>2 \/ 3<\/strong>/);
+});
+test('WHY WAIT reasons and waiting-for render only for WAIT decisions, reusing backend text verbatim', () => {
+  const context = {bias: 'BULLISH_LEAN', state: 'DEVELOPING', alignment: {aligned: 2, total: 3},
+    reasons: ['Matrix disagreement detected.', 'SLOW conflicts with FAST/MEDIUM.'],
+    waiting_for: ['Structural confirmation.']};
+  const html = render(decision, {decisionContext: context});
+  assert.match(html, /<h4>Why WAIT\?<\/h4><ul><li>Matrix disagreement detected\.<\/li><li>SLOW conflicts with FAST\/MEDIUM\.<\/li><\/ul>/);
+  assert.match(html, /<h4>Waiting for<\/h4><ul><li>Structural confirmation\.<\/li><\/ul>/);
+
+  const buyHtml = render({...decision, action: 'BUY'}, {decisionContext: {...context, bias: 'BULLISH', state: 'CONFIRMED'}});
+  assert.ok(!buyHtml.includes('Why WAIT?') && !buyHtml.includes('Waiting for'));
+
+  const noReasons = render(decision, {decisionContext: {...context, reasons: [], waiting_for: []}});
+  assert.ok(!noReasons.includes('wait-context'));
 });
 test('dashboard keeps chart first, uses current decision and removes duplicate Matrix views', () => {
   const page = readFileSync(new URL('../app/page.tsx', import.meta.url), 'utf8');
@@ -108,11 +133,15 @@ test('responsive panel provides shrinkable columns, wrapped metadata and keyboar
   assert.equal((html.match(/<summary>/g) ?? []).length, 2);
 });
 
-test('floating summary uses identical independent current strengths and unavailable bias', () => {
+test('floating summary uses identical independent current strengths and an honest bias default', () => {
   const html = renderToStaticMarkup(createElement(exports.MatrixSummary, { decision, symbol: 'XAUUSD', matrixStatus: 'ready' }));
-  for (const text of ['78/100', '31/100', 'WAIT', 'Bias: Unavailable', 'XAUUSD', 'READY', 'Recorded / last received']) assert.ok(html.includes(text), text);
+  for (const text of ['78/100', '31/100', 'WAIT', 'XAUUSD', 'READY', 'Recorded / last received']) assert.ok(html.includes(text), text);
+  assert.match(html, /Bias: <strong class="">Unavailable<\/strong>/);
   const cooldown = renderToStaticMarkup(createElement(exports.MatrixSummary, { decision: {...decision, strength_available: false} }));
   assert.ok(!cooldown.includes('ring-value'));
+  const context = { bias: 'BEARISH', state: 'CONFIRMED', alignment: { aligned: 3, total: 3 }, reasons: [], waiting_for: [] };
+  const withBias = renderToStaticMarkup(createElement(exports.MatrixSummary, { decision, decisionContext: context, symbol: 'XAUUSD' }));
+  assert.match(withBias, /Bias: <strong class="down">Bearish<\/strong>/);
 });
 test('full analysis includes deterministic reasons and recent backend signal history', () => {
   const html = render(decision, {history: [{signal_id:'a', side:'SELL', status:'confirmed', decision_time:'2026-09-20T10:00:00Z', reasons:['Recorded reason'], source_refs:['ref-1']}]});
