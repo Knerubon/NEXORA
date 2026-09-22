@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from nexora_api.environment import MARKER, Environment
 from nexora_api.main import create_app
 from nexora_api.research import configured_journal
+from starlette.websockets import WebSocketDisconnect
 
 
 def settings(tmp_path: Path, name: str) -> Environment:
@@ -133,6 +134,42 @@ def test_api_exposes_environment_and_rejects_cross_origin(monkeypatch: pytest.Mo
         assert client.get("/health").json()["environment"] == "production"
         assert client.get("/config", headers={"origin": "http://localhost:3100"}).status_code == 200
         assert client.get("/state", headers={"origin": "http://localhost:3000"}).status_code == 403
+
+
+def test_external_origin_is_opt_in_and_unset_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """REMOTE1: an arbitrary external Origin stays rejected unless explicitly configured."""
+    monkeypatch.delenv("NEXORA_EXTERNAL_ORIGIN", raising=False)
+    with TestClient(create_app(start_worker=False), base_url="http://localhost") as client:
+        rejected = client.get("/state", headers={"origin": "https://nexora.example.com"})
+    assert rejected.status_code == 403
+
+
+def test_external_origin_is_accepted_only_when_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NEXORA_EXTERNAL_ORIGIN", "https://nexora.example.com")
+    with TestClient(create_app(start_worker=False), base_url="http://localhost") as client:
+        allowed = client.get("/state", headers={"origin": "https://nexora.example.com"})
+        still_rejected = client.get("/state", headers={"origin": "https://attacker.example.com"})
+        local_still_works = client.get("/config", headers={"origin": "http://localhost:3000"})
+    assert allowed.status_code == 200
+    assert still_rejected.status_code == 403
+    assert local_still_works.status_code == 200
+
+
+def test_external_origin_websocket_requires_configured_origin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NEXORA_EXTERNAL_ORIGIN", "https://nexora.example.com")
+    with TestClient(create_app(start_worker=False), base_url="http://localhost") as client:
+        with client.websocket_connect(
+            "/ws/events", headers={"origin": "https://nexora.example.com"}
+        ) as ws:
+            message = ws.receive_json()
+        assert message["event_type"] == "state_snapshot"
+        with pytest.raises(WebSocketDisconnect):
+            with client.websocket_connect(
+                "/ws/events", headers={"origin": "https://attacker.example.com"}
+            ):
+                pass
 
 
 def test_environment_file_selected_not_shared(

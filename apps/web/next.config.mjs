@@ -20,5 +20,19 @@ export default function config(phase) {
     const built = fs.readFileSync(path.join(web, ".next", "BUILD_ID"), "utf8");
     if (!built.startsWith(`${environment}-`)) throw new Error("build_environment_mismatch");
   }
-  return { turbopack: { root: code }, generateBuildId: async () => `${environment}-${randomUUID()}`, env: { NEXT_PUBLIC_NEXORA_ENV: environment, NEXT_PUBLIC_API_BASE_URL: expectedApi } };
+  return {
+    turbopack: { root: code },
+    generateBuildId: async () => `${environment}-${randomUUID()}`,
+    env: { NEXT_PUBLIC_NEXORA_ENV: environment, NEXT_PUBLIC_API_BASE_URL: expectedApi },
+    // Same-origin gateway (REMOTE1): the browser never sees the backend's own
+    // host/port, local or remote. Verified against this Next.js version to
+    // proxy both REST and WebSocket upgrades correctly; see
+    // docs/remote-access.md and tasks/REMOTE1-secure-remote-access.md.
+    async rewrites() {
+      return [
+        { source: "/api/nexora", destination: expectedApi },
+        { source: "/api/nexora/:path*", destination: `${expectedApi}/:path*` },
+      ];
+    },
+  };
 }
