@@ -49,10 +49,11 @@ Implemented in a new isolated worktree/branch, never in the protected dirty work
 - `apps/web/tests/gateway.test.mjs` (untracked): source-pattern assertions matching
   the above.
 
-Preserved verbatim, read-only, for reference:
-[tasks/evidence/REMOTE1-original-dirty-gateway-work.patch](evidence/REMOTE1-original-dirty-gateway-work.patch),
-[tasks/evidence/REMOTE1-original-next.config.mjs.orig](evidence/REMOTE1-original-next.config.mjs.orig),
-[tasks/evidence/REMOTE1-original-gateway.test.mjs.orig](evidence/REMOTE1-original-gateway.test.mjs.orig).
+A verbatim patch and file copies of this original work were reviewed during the
+audit but are intentionally **not** committed into the repository — they were a
+local, uncommitted experiment in the protected worktree, not something this PR
+should carry forward as tracked history. This section, and the rest of this
+document, records what it contained, what was reused, what was rejected, and why.
 
 ### Baseline vs current main
 
@@ -521,8 +522,9 @@ Run in `D:\NEXORA\NEXORA-REMOTE`:
 ## Execution record
 
 - `git fetch origin`; confirmed `origin/main` at `33fc471` includes PR #23/#24.
-- Protected worktree audited read-only; preserved as patch + file copies under
-  `tasks/evidence/`; confirmed unchanged via `git status` at the end of this task.
+- Protected worktree audited read-only (its diff and untracked files reviewed
+  in place, not copied into the repository); confirmed unchanged via `git status`
+  throughout and at the end of this task.
 - New worktree `D:\NEXORA\NEXORA-REMOTE` created from `origin/main`.
 - Empirical WebSocket-through-Next.js-rewrite and Host/Origin-header reproductions
   run in a separate scratch location, cleaned up completely (processes stopped,
