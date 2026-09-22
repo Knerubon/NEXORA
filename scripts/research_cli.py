@@ -11,24 +11,29 @@ from nexora.artifacts import canonical_hash, decode
 from nexora.backtest import BacktestConfig, BacktestRunner, BacktestRunStore
 from nexora.backtest.datasets import load_dataset
 from nexora.research.runtime import ResearchRuntime, RuntimeConfig
-from nexora.storage import Journal, PostgresJournal, SQLiteJournal
+from nexora_api.environment import Environment
+from nexora_api.research import configured_journal
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset", type=Path, required=True)
     parser.add_argument("--runtime-config", type=Path, required=True)
-    parser.add_argument("--journal", type=Path, default=Path("data/research.sqlite"))
+    parser.add_argument("--journal", type=Path, default=None)
     parser.add_argument("--backtest-config", type=Path)
     args = parser.parse_args()
+    settings = Environment.resolve()
+    for source in (args.runtime_config, args.backtest_config):
+        if source and not (
+            source.resolve().is_relative_to(settings.code)
+            or source.resolve().is_relative_to(settings.root)
+        ):
+            raise ValueError("configuration_outside_environment")
     config = decode(RuntimeConfig, json.loads(args.runtime_config.read_text(encoding="utf-8")))
     dataset, events = load_dataset(args.dataset)
-    journal: Journal
-    if conninfo := os.environ.get("NEXORA_POSTGRES_DSN"):
-        journal = PostgresJournal(conninfo)
-    else:
-        args.journal.parent.mkdir(parents=True, exist_ok=True)
-        journal = SQLiteJournal(args.journal)
+    if args.journal:
+        os.environ["NEXORA_JOURNAL_PATH"] = str(args.journal.resolve())
+    journal = configured_journal()
     try:
         runtime = ResearchRuntime(config, journal)
         for event in events:

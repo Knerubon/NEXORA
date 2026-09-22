@@ -11,4 +11,5 @@ def isolated_runtime_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Non
     for name in tuple(os.environ):
         if name.startswith("NEXORA_") and not name.startswith("NEXORA_TEST_"):
             monkeypatch.delenv(name)
-    monkeypatch.setenv("NEXORA_JOURNAL_PATH", str(tmp_path / "research.sqlite"))
+    monkeypatch.setenv("NEXORA_RUNTIME_ROOT", str(tmp_path / "runtime"))
+    monkeypatch.setattr("nexora_api.environment.REPOSITORY", tmp_path / "code")

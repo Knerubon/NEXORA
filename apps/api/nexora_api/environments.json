@@ -1,0 +1,4 @@
+{
+  "development": { "api_host": "127.0.0.1", "api_port": 8000, "web_port": 3000, "label": "DEV" },
+  "production": { "api_host": "127.0.0.1", "api_port": 8100, "web_port": 3100, "label": "PROD" }
+}

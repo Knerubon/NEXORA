@@ -104,3 +104,10 @@ Schema/migrations เป็นงาน P2
 ## Connected research runtime (FIX1)
 
 See [configuration, recorded-data import and remaining release gates](research-runtime.md). Default startup contains no sample backtests and no configured paper session.
+
+## DEV/PROD isolation
+
+Use the [environment isolation guide](environment-isolation.md) for environment-specific
+configuration, safe worktrees and startup scripts. The legacy bare startup examples above
+are historical; new isolated deployments use `scripts/nexora.ps1`. Do not reuse the existing
+live runtime journal for DEV. Legacy `.env` settings require explicit operator migration.

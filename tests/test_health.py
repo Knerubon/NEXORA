@@ -8,6 +8,7 @@ def test_health_reports_liveness_without_claiming_readiness() -> None:
     assert response.status_code == 200
     assert response.json() == {
         "status": "ok",
+        "environment": "development",
         "mode": "research",
         "readiness": "/operations/readiness",
     }
