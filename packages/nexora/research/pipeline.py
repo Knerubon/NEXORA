@@ -7,6 +7,7 @@ from typing import Any
 
 from nexora.adaptive_box import AdaptiveBoxConfig, AdaptiveBoxSizer, AdaptivePnfRunner
 from nexora.artifacts import canonical_hash, canonical_serialize
+from nexora.entry_readiness import evaluate_entry_readiness
 from nexora.market_data.models import NormalizedPriceEvent
 from nexora.market_regime import MarketRegimeEngine, RegimeConfig
 from nexora.matrix import MatrixEngine, MatrixResolutionConfig
@@ -109,6 +110,9 @@ class ResearchPipeline:
         trendline = self.trendline.snapshot()
         regime = self.regime.classify(structure, matrix)
         signals = self.signals.evaluate(structure=structure, regime=regime, matrix=matrix)
+        entry_readiness = evaluate_entry_readiness(
+            decision=signals.decision, trendline=trendline, config_version=self.config.version
+        )
         self._output = {
             "config_version": self.config.version,
             "event": event,
@@ -117,6 +121,7 @@ class ResearchPipeline:
             "trendline": trendline,
             "regime": regime,
             "signals": signals,
+            "entry_readiness": entry_readiness,
             "columns": pnf.columns,
             "transitions": pnf.transitions,
         }

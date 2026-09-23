@@ -98,6 +98,7 @@ def freeze(
         "matrix": output.get("matrix"),
         "structure": output.get("structure"),
         "trendline": output.get("trendline"),
+        "entry_readiness": output.get("entry_readiness"),
         "regime": output.get("regime"),
         "pnf": {"columns": output.get("columns"), "transitions": output.get("transitions")},
         "runtime_config": config,
