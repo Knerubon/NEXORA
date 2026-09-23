@@ -540,3 +540,104 @@ Run in `D:\NEXORA\NEXORA-REMOTE`:
 Self-review; independent Rin review pending. No merge, deploy, tunnel provisioning,
 or PROD data migration performed. No currently-running NEXORA screen/API was
 restarted or otherwise disturbed by this task.
+
+## Addendum — PR #26 (peer-IP trust) disproved; replaced with identity-header trust
+
+After this PR, live production testing with Tailscale Serve (`fon.tail39afa4.ts.net`
+→ `127.0.0.1:3100`) surfaced a real gap: guarded WebSocket connections proxied
+through Tailscale Serve were rejected. **PR #26** attempted a fix: trust exactly
+one configured local peer address, `NEXORA_LOCAL_TAILSCALE_IP`, added only to the
+WebSocket check. It validated successfully from the home PC itself.
+
+**It was wrong.** Real-device testing (an actual iPhone, Wi-Fi off, over 5G, through
+the real `fon.tail39afa4.ts.net` → Tailscale Serve → Next.js → FastAPI path)
+disproved its core assumption: Tailscale Serve does not source proxied connections
+from the home machine's own tailnet address. It preserves **the connecting
+device's own** tailnet identity end-to-end. The iPhone presented as its own address
+(`100.79.209.92`), not the home machine's (`100.94.248.31`); a second device (an
+iPad) presented as a third, different address. A single hardcoded peer can never
+generalize to this — and the same real-device test showed **guarded REST endpoints
+were equally broken** through the external path, something PR #26 never touched or
+tested (its own validation only ever exercised the unguarded `/health` route and
+loopback-simulated REST calls, never a guarded route through the real external URL).
+
+### Root cause, confirmed against Tailscale's own source
+
+Fetched `ipn/ipnlocal/serve.go` directly from `github.com/tailscale/tailscale`.
+Tailscale Serve is a standard Go `httputil.ReverseProxy`. Its `Rewrite` hook runs
+two functions, uniformly for HTTP and WebSocket upgrades alike (no special-casing
+exists for WS in this code path):
+
+```go
+func addProxyForwardedHeaders(r *httputil.ProxyRequest) {
+	r.Out.Header.Set("X-Forwarded-Host", r.In.Host)
+	if r.In.TLS != nil { r.Out.Header.Set("X-Forwarded-Proto", "https") }
+	if c, ok := serveHTTPContextKey.ValueOk(r.Out.Context()); ok {
+		r.Out.Header.Set("X-Forwarded-For", c.SrcAddr.Addr().String())
+	}
+}
+
+func (b *LocalBackend) addTailscaleIdentityHeaders(r *httputil.ProxyRequest) {
+	r.Out.Header.Del("Tailscale-User-Login") // clear any client-supplied value first
+	r.Out.Header.Del("Tailscale-User-Name")
+	// ...
+	node, user, ok := b.WhoIs("tcp", c.SrcAddr)
+	if !ok { return }
+	if node.IsTagged() { return }
+	r.Out.Header.Set("Tailscale-User-Login", encTailscaleHeaderValue(user.LoginName))
+	// ...
+}
+```
+
+`X-Forwarded-For` explains the observed peer-address behavior (this app's
+`ws.client.host`/`request.client.host` is, and always was, `X-Forwarded-For` — not
+raw socket info — because uvicorn's `ProxyHeadersMiddleware` defaults to
+`proxy_headers=True`, `forwarded_allow_ips="127.0.0.1,::1"`, and the immediate hop
+from Next.js's rewrite to FastAPI is always loopback). `Tailscale-User-Login` is
+**deleted from any client-supplied value, then set from Tailscale's own
+cryptographic `WhoIs` resolution** — not spoofable by the connecting client.
+
+### Empirical verification (real iPhone, real spoof test)
+
+A standalone, throwaway diagnostic server (outside any NEXORA worktree, never
+committed) was mounted at a temporary, additional Tailscale Serve path (`/diag`,
+alongside — never replacing — the production `/` → `:3100` mapping) to capture
+exactly the headers needed, then torn down completely afterward.
+
+- **Spoof test**: `curl -H "Tailscale-User-Login: attacker@example.invalid"`
+  through the real external URL. The diagnostic server received the *real*
+  authenticated login instead — the forged value never survived.
+- **Real iPhone, HTTP** (Wi-Fi off, 5G, Tailscale connected): `Tailscale-User-Login`
+  present, `Tailscale-Headers-Info` present, `X-Forwarded-For` matched the phone's
+  own tailnet address exactly, `X-Forwarded-Proto: https`. (`Origin` absent — this
+  was a plain Safari navigation, not a `fetch()` call; NEXORA's real REST calls in
+  `page.tsx` are all `fetch()`, which does send `Origin`.)
+- **Real iPhone, WebSocket**: identical identity headers present, plus `Origin`
+  present (the browser `WebSocket` API always sends it) — upgrade succeeded,
+  closed normally (code 1000) after the diagnostic reply.
+
+This diagnostic intentionally bypassed Next.js (it was a separate, parallel Serve
+path straight to the throwaway server) to isolate Tailscale Serve's own behavior
+from Next.js's. Header survival through the *additional* Next.js rewrite hop that
+the real `/api/nexora/*` path uses was therefore a mandatory **live pre-merge
+validation gate** for the replacement PR, not something inferred from this
+diagnostic alone — see that PR's own validation record.
+
+### Replacement design (implemented in the PR that supersedes #26)
+
+- `NEXORA_LOCAL_TAILSCALE_IP` removed entirely — no per-device IP is configured or
+  enumerated anywhere.
+- A new shared helper, `_is_trusted_transport(peer, headers)`, used by **both**
+  `_assert_local_http` and `_is_local_ws` (fixing REST, which PR #26 never did):
+  trusted if the peer is in the existing `LOCAL_CLIENTS` (unchanged local
+  behavior), **or** if `NEXORA_EXTERNAL_ORIGIN` is configured and a non-empty
+  `Tailscale-User-Login` header is present. Whitespace-only or absent is treated
+  as no identity — fails closed. No CIDR/range trust of any kind.
+  `NEXORA_EXTERNAL_ORIGIN` is still independently required for Origin, exactly as
+  before — transport trust and Origin validation remain two separate, both-required
+  checks, for REST and WebSocket alike.
+- `NEXORA_EXTERNAL_ORIGIN` is the only configuration remote access needs — no new
+  variable was introduced, and none is required per-device.
+
+PR #26 was closed without merging (branch preserved as audit history, not
+deleted) once this diagnosis was confirmed.
