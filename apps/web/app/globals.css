@@ -211,3 +211,24 @@ h1 { font-size: 20px; letter-spacing: -.4px; white-space: nowrap; }
   .is-focused .chart-body { overflow: auto; }
 }
 @media(max-width:540px) { .decision-details { grid-template-columns: minmax(0, 1fr); } }
+
+/* Chart Visual Intelligence V1: layer controls and backend-evidence popup. */
+.chart-layers { display: flex; flex-wrap: wrap; gap: 4px; margin-left: auto; }
+.chart-layers button { margin: 0; padding: 4px 10px; min-height: 32px; font-size: 12px; border-radius: 16px; cursor: pointer; }
+.chart-layers button[aria-pressed="true"] { background: #eef2ff; border-color: #818cf8; color: #312e81; }
+.chart-layers button[aria-pressed="false"] { color: #8a94a3; text-decoration: line-through; }
+.pnf-scroll [role="button"]:focus-visible { outline: 2px solid #147b62; }
+.overlay-popup { position: absolute; z-index: 3; width: 280px; max-width: calc(100% - 16px); box-sizing: border-box; padding: 10px 12px; background: #fff; border: 1px solid #dce2e8; border-radius: 10px; box-shadow: 0 6px 20px #17212e26; font-size: 12px; transform: translateY(12px); }
+.overlay-popup.is-above { transform: translateY(calc(-100% - 12px)); }
+.overlay-popup-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.overlay-popup-head button { margin: 0; padding: 0 8px; min-height: 28px; min-width: 28px; font-size: 16px; line-height: 1; cursor: pointer; }
+.overlay-popup dl { margin: 0; display: grid; gap: 3px; }
+.overlay-popup dl div { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 8px; }
+.overlay-popup dt { color: #697586; }
+.overlay-popup dd { margin: 0; overflow-wrap: anywhere; }
+.overlay-source { margin: 8px 0 0; color: #697586; font-size: 11px; }
+@media (max-width: 540px) {
+  .overlay-popup { left: 8px !important; right: 8px; top: 8px !important; width: auto; max-width: none; max-height: 60%; overflow: auto; transform: none; }
+  .overlay-popup.is-above { transform: none; }
+  .chart-layers { margin-left: 0; }
+}
