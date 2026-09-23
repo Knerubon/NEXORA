@@ -540,3 +540,29 @@ Run in `D:\NEXORA\NEXORA-REMOTE`:
 Self-review; independent Rin review pending. No merge, deploy, tunnel provisioning,
 or PROD data migration performed. No currently-running NEXORA screen/API was
 restarted or otherwise disturbed by this task.
+
+## Addendum — external WebSocket rejected through Tailscale Serve
+
+Real-device testing after PROD was live-wired to MT5 (separate follow-up task)
+found the external `wss://` path fails while local `ws://` and external `https://`
+REST both work. Root-caused with server-log correlation (a single controlled
+external WS attempt): FastAPI's access log shows the peer as
+`100.94.248.31:0 - "WebSocket /ws/events" 403`, immediately followed by
+`connection rejected (403 Forbidden)` — the identical request path that, for REST,
+reaches FastAPI as a genuine `127.0.0.1` loopback peer (Next.js's rewrite makes a
+fresh outbound loopback connection for ordinary HTTP). `100.94.248.31` was
+confirmed via `tailscale ip -4` / `tailscale status --self` to be this specific
+home machine's own tailnet interface address, not the phone's or any other remote
+peer's. For the WebSocket upgrade specifically, Tailscale Serve's proxying reaches
+FastAPI with that address as the observed peer instead of loopback; REST is
+unaffected. `_is_local_ws()`'s `ws.client.host in LOCAL_CLIENTS` check
+(`{"127.0.0.1", "::1", "testclient"}`) therefore rejects it before the Origin check
+(the one already made configurable via `NEXORA_EXTERNAL_ORIGIN`) is ever reached.
+
+Fixed with a second, independent, opt-in variable: `NEXORA_LOCAL_TAILSCALE_IP`,
+scoped to `_is_local_ws()` only (REST needed no change — it already works). See
+the PR that introduces it for the exact design, tests, and validation; this
+document's REST/WebSocket-gateway description above remains accurate for the
+Next.js-rewrite layer, which was not the defect. Both the trusted-peer check and
+the Origin check must still be independently satisfied for an external WebSocket
+connection to be accepted; neither on its own is sufficient.

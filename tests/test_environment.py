@@ -172,6 +172,109 @@ def test_external_origin_websocket_requires_configured_origin(
                 pass
 
 
+TAILSCALE_PEER = "100.94.248.31"
+EXTERNAL_ORIGIN = "https://nexora.example.com"
+
+
+def _client_from(peer: str) -> TestClient:
+    return TestClient(create_app(start_worker=False), base_url="http://localhost", client=(peer, 0))
+
+
+def test_local_tailscale_ip_unset_leaves_loopback_ws_accepted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("NEXORA_LOCAL_TAILSCALE_IP", raising=False)
+    with _client_from("127.0.0.1") as client:
+        with client.websocket_connect("/ws/events") as ws:
+            message = ws.receive_json()
+        assert message["event_type"] == "state_snapshot"
+
+
+def test_local_tailscale_ip_unset_rejects_tailscale_style_peer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("NEXORA_LOCAL_TAILSCALE_IP", raising=False)
+    with _client_from(TAILSCALE_PEER) as client:
+        with pytest.raises(WebSocketDisconnect):
+            with client.websocket_connect("/ws/events"):
+                pass
+
+
+def test_local_tailscale_ip_accepts_only_the_exact_configured_peer_and_origin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NEXORA_LOCAL_TAILSCALE_IP", TAILSCALE_PEER)
+    monkeypatch.setenv("NEXORA_EXTERNAL_ORIGIN", EXTERNAL_ORIGIN)
+    with _client_from(TAILSCALE_PEER) as client:
+        with client.websocket_connect("/ws/events", headers={"origin": EXTERNAL_ORIGIN}) as ws:
+            message = ws.receive_json()
+        assert message["event_type"] == "state_snapshot"
+
+
+def test_local_tailscale_ip_configured_peer_wrong_origin_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NEXORA_LOCAL_TAILSCALE_IP", TAILSCALE_PEER)
+    monkeypatch.setenv("NEXORA_EXTERNAL_ORIGIN", EXTERNAL_ORIGIN)
+    with _client_from(TAILSCALE_PEER) as client:
+        with pytest.raises(WebSocketDisconnect):
+            with client.websocket_connect(
+                "/ws/events", headers={"origin": "https://attacker.example.com"}
+            ):
+                pass
+
+
+def test_local_tailscale_ip_wrong_peer_correct_origin_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NEXORA_LOCAL_TAILSCALE_IP", TAILSCALE_PEER)
+    monkeypatch.setenv("NEXORA_EXTERNAL_ORIGIN", EXTERNAL_ORIGIN)
+    with _client_from("100.1.2.3") as client:
+        with pytest.raises(WebSocketDisconnect):
+            with client.websocket_connect("/ws/events", headers={"origin": EXTERNAL_ORIGIN}):
+                pass
+
+
+def test_local_tailscale_ip_does_not_trust_the_whole_cgnat_range(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Configuring one address must never imply trusting all of 100.64.0.0/10."""
+    monkeypatch.setenv("NEXORA_LOCAL_TAILSCALE_IP", TAILSCALE_PEER)
+    monkeypatch.setenv("NEXORA_EXTERNAL_ORIGIN", EXTERNAL_ORIGIN)
+    with _client_from("100.64.0.1") as client:
+        with pytest.raises(WebSocketDisconnect):
+            with client.websocket_connect("/ws/events", headers={"origin": EXTERNAL_ORIGIN}):
+                pass
+
+
+@pytest.mark.parametrize(
+    "malformed",
+    [
+        "",
+        "   ",
+        "not-an-ip",
+        "fon.tail39afa4.ts.net",
+        "100.64.0.0/10",
+        "100.94.248.31,100.1.2.3",
+        "999.999.999.999",
+    ],
+)
+def test_local_tailscale_ip_malformed_value_fails_closed(
+    monkeypatch: pytest.MonkeyPatch, malformed: str
+) -> None:
+    monkeypatch.setenv("NEXORA_LOCAL_TAILSCALE_IP", malformed)
+    monkeypatch.setenv("NEXORA_EXTERNAL_ORIGIN", EXTERNAL_ORIGIN)
+    with _client_from(TAILSCALE_PEER) as client:
+        with pytest.raises(WebSocketDisconnect):
+            with client.websocket_connect("/ws/events", headers={"origin": EXTERNAL_ORIGIN}):
+                pass
+    # A malformed value must not disturb genuinely local access either.
+    with _client_from("127.0.0.1") as client:
+        with client.websocket_connect("/ws/events") as ws:
+            message = ws.receive_json()
+        assert message["event_type"] == "state_snapshot"
+
+
 def test_environment_file_selected_not_shared(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

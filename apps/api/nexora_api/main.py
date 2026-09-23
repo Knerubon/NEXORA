@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -82,9 +83,34 @@ def _assert_local_http(request: Request, *, mutation: bool = False) -> None:
         raise HTTPException(status_code=403, detail="Local access only")
 
 
+def _trusted_ws_clients() -> frozenset[str]:
+    """LOCAL_CLIENTS, plus one explicitly configured peer, opt-in and unset by default.
+
+    A Tailscale-Serve-proxied WebSocket upgrade reaches this process with the
+    home machine's own tailnet interface address as the observed peer, not a
+    loopback address - unlike REST, which is reverse-proxied by Next.js as a
+    fresh loopback connection. NEXORA_LOCAL_TAILSCALE_IP names that one address
+    explicitly; it grants no trust on its own; the Origin check in
+    _is_local_ws still applies independently. Unset or malformed input grants
+    no additional trust - this never widens LOCAL_CLIENTS itself.
+    """
+    clients = set(LOCAL_CLIENTS)
+    configured = os.environ.get("NEXORA_LOCAL_TAILSCALE_IP", "").strip()
+    if configured:
+        try:
+            ipaddress.ip_address(configured)
+        except ValueError:
+            pass
+        else:
+            clients.add(configured)
+    return frozenset(clients)
+
+
 def _is_local_ws(ws: WebSocket) -> bool:
     return (
-        ws.client is not None and ws.client.host in LOCAL_CLIENTS and _is_local_origin(ws.headers)
+        ws.client is not None
+        and ws.client.host in _trusted_ws_clients()
+        and _is_local_origin(ws.headers)
     )
 
 
