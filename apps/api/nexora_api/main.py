@@ -69,11 +69,40 @@ def _is_local_origin(headers: Any) -> bool:
     return False
 
 
+def _tailscale_identity(headers: Any) -> str | None:
+    """The tailnet login Tailscale Serve's own WhoIs resolved for this request.
+
+    Empirically verified (real iPhone, over 5G, against this exact Serve
+    instance): Tailscale Serve deletes any client-supplied
+    Tailscale-User-Login before proxying, then sets its own value from a
+    WhoIs lookup of the authenticated tailnet peer - never the client's.
+    A client cannot forge this by supplying the header itself.
+    """
+    login = headers.get("tailscale-user-login")
+    if login is None:
+        return None
+    login = login.strip()
+    return login or None
+
+
+def _is_trusted_transport(peer: Any, headers: Any) -> bool:
+    """LOCAL_CLIENTS, or - only when remote access is configured - a
+    request carrying a genuine Tailscale identity. Opt-in: unset
+    NEXORA_EXTERNAL_ORIGIN means only the existing loopback path exists,
+    unchanged. No device IP is ever enumerated; any authenticated tailnet
+    user reaching us through Serve is trusted at the transport layer, with
+    Origin validated independently by the caller.
+    """
+    if peer is not None and peer.host in LOCAL_CLIENTS:
+        return True
+    if os.environ.get("NEXORA_EXTERNAL_ORIGIN") and _tailscale_identity(headers) is not None:
+        return True
+    return False
+
+
 def _assert_local_http(request: Request, *, mutation: bool = False) -> None:
-    if (
-        request.client is None
-        or request.client.host not in LOCAL_CLIENTS
-        or not _is_local_origin(request.headers)
+    if not _is_trusted_transport(request.client, request.headers) or not _is_local_origin(
+        request.headers
     ):
         raise HTTPException(status_code=403, detail="Local access only")
     if mutation and (
@@ -83,9 +112,7 @@ def _assert_local_http(request: Request, *, mutation: bool = False) -> None:
 
 
 def _is_local_ws(ws: WebSocket) -> bool:
-    return (
-        ws.client is not None and ws.client.host in LOCAL_CLIENTS and _is_local_origin(ws.headers)
-    )
+    return _is_trusted_transport(ws.client, ws.headers) and _is_local_origin(ws.headers)
 
 
 def create_app(

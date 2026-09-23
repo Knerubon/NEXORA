@@ -172,6 +172,159 @@ def test_external_origin_websocket_requires_configured_origin(
                 pass
 
 
+EXTERNAL_ORIGIN = "https://nexora.example.com"
+IDENTITY_HEADER = "tailscale-user-login"
+IDENTITY_VALUE = "alice@example.com"
+
+
+def _client_from(peer: str) -> TestClient:
+    return TestClient(create_app(start_worker=False), base_url="http://localhost", client=(peer, 0))
+
+
+# 1-2: local loopback REST/WS remain accepted, with no identity header at all.
+
+
+def test_loopback_rest_accepted_without_identity_header(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NEXORA_EXTERNAL_ORIGIN", EXTERNAL_ORIGIN)
+    with _client_from("127.0.0.1") as client:
+        response = client.get("/state", headers={"origin": "http://localhost:3000"})
+    assert response.status_code == 200
+
+
+def test_loopback_ws_accepted_without_identity_header(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NEXORA_EXTERNAL_ORIGIN", EXTERNAL_ORIGIN)
+    with _client_from("127.0.0.1") as client:
+        with client.websocket_connect("/ws/events") as ws:
+            message = ws.receive_json()
+        assert message["event_type"] == "state_snapshot"
+
+
+# 3-4: external origin + Tailscale identity + correct Origin -> REST and WS accepted.
+
+
+def test_remote_rest_accepted_with_identity_and_correct_origin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NEXORA_EXTERNAL_ORIGIN", EXTERNAL_ORIGIN)
+    with _client_from("100.79.209.92") as client:
+        response = client.get(
+            "/state", headers={"origin": EXTERNAL_ORIGIN, IDENTITY_HEADER: IDENTITY_VALUE}
+        )
+    assert response.status_code == 200
+
+
+def test_remote_ws_accepted_with_identity_and_correct_origin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NEXORA_EXTERNAL_ORIGIN", EXTERNAL_ORIGIN)
+    with _client_from("100.79.209.92") as client:
+        with client.websocket_connect(
+            "/ws/events", headers={"origin": EXTERNAL_ORIGIN, IDENTITY_HEADER: IDENTITY_VALUE}
+        ) as ws:
+            message = ws.receive_json()
+        assert message["event_type"] == "state_snapshot"
+
+
+# 5-6: external origin configured, correct Origin, but NO identity -> rejected.
+
+
+def test_remote_rest_rejected_without_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NEXORA_EXTERNAL_ORIGIN", EXTERNAL_ORIGIN)
+    with _client_from("100.79.209.92") as client:
+        response = client.get("/state", headers={"origin": EXTERNAL_ORIGIN})
+    assert response.status_code == 403
+
+
+def test_remote_ws_rejected_without_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NEXORA_EXTERNAL_ORIGIN", EXTERNAL_ORIGIN)
+    with _client_from("100.79.209.92") as client:
+        with pytest.raises(WebSocketDisconnect):
+            with client.websocket_connect("/ws/events", headers={"origin": EXTERNAL_ORIGIN}):
+                pass
+
+
+# 7: whitespace-only identity -> rejected, not silently trusted.
+
+
+@pytest.mark.parametrize("whitespace_identity", ["", "   ", "\t"])
+def test_whitespace_identity_rejected(
+    monkeypatch: pytest.MonkeyPatch, whitespace_identity: str
+) -> None:
+    monkeypatch.setenv("NEXORA_EXTERNAL_ORIGIN", EXTERNAL_ORIGIN)
+    with _client_from("100.79.209.92") as client:
+        response = client.get(
+            "/state", headers={"origin": EXTERNAL_ORIGIN, IDENTITY_HEADER: whitespace_identity}
+        )
+    assert response.status_code == 403
+
+
+# 8: valid identity, wrong Origin -> rejected. Transport trust alone is not enough.
+
+
+def test_valid_identity_wrong_origin_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NEXORA_EXTERNAL_ORIGIN", EXTERNAL_ORIGIN)
+    with _client_from("100.79.209.92") as client:
+        response = client.get(
+            "/state",
+            headers={"origin": "https://attacker.example.com", IDENTITY_HEADER: IDENTITY_VALUE},
+        )
+    assert response.status_code == 403
+
+
+# 9: valid identity, but NEXORA_EXTERNAL_ORIGIN unset -> remote path fully disabled.
+
+
+def test_valid_identity_without_external_origin_configured_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("NEXORA_EXTERNAL_ORIGIN", raising=False)
+    with _client_from("100.79.209.92") as client:
+        response = client.get(
+            "/state", headers={"origin": EXTERNAL_ORIGIN, IDENTITY_HEADER: IDENTITY_VALUE}
+        )
+    assert response.status_code == 403
+
+
+# 10: an arbitrary non-loopback peer with no identity -> rejected.
+
+
+def test_arbitrary_non_loopback_peer_without_identity_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NEXORA_EXTERNAL_ORIGIN", EXTERNAL_ORIGIN)
+    with _client_from("203.0.113.7") as client:
+        response = client.get("/state", headers={"origin": EXTERNAL_ORIGIN})
+    assert response.status_code == 403
+
+
+# 11: a peer inside the Tailscale CGNAT range with no identity -> still rejected.
+# Proves the design never trusts 100.64.0.0/10 by IP membership alone.
+
+
+def test_cgnat_range_peer_without_identity_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NEXORA_EXTERNAL_ORIGIN", EXTERNAL_ORIGIN)
+    with _client_from("100.100.100.100") as client:
+        rest = client.get("/state", headers={"origin": EXTERNAL_ORIGIN})
+        with pytest.raises(WebSocketDisconnect):
+            with client.websocket_connect("/ws/events", headers={"origin": EXTERNAL_ORIGIN}):
+                pass
+    assert rest.status_code == 403
+
+
+# 12: existing mutation/origin protections remain green.
+
+
+def test_mutation_still_requires_origin_even_with_valid_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NEXORA_EXTERNAL_ORIGIN", EXTERNAL_ORIGIN)
+    with _client_from("100.79.209.92") as client:
+        no_origin = client.post(
+            "/paper/control", json={"action": "pause"}, headers={IDENTITY_HEADER: IDENTITY_VALUE}
+        )
+    assert no_origin.status_code == 403
+
+
 def test_environment_file_selected_not_shared(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
