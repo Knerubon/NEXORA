@@ -28,7 +28,7 @@ Valid iff `anchor_b.price > anchor_a.price` (higher low).
 **Bearish Resistance Line anchors:** `anchor_a = highs[-2]`, `anchor_b = highs[-1]`.
 Valid iff `anchor_b.price < anchor_a.price` (lower high).
 
-**No backward search:** anchor candidates are always exactly the two most recent same-kind pivots at the moment of evaluation. If that pair does not satisfy the higher-low/lower-high test, no line is formed — the engine never scans further back (`lows[-3]`, `lows[-4]`, …) looking for a pair that would validate. Re-evaluation happens exactly once per newly confirmed same-kind pivot.
+**No backward search:** anchor candidates are always exactly the two most recent same-kind pivots at the moment of evaluation. If that pair does not satisfy the higher-low/lower-high test, no line is formed — the engine never scans further back (`lows[-3]`, `lows[-4]`, …) looking for a pair that would validate. The formation/replacement check is re-applied on every processed transition (idempotently — it is a no-op whenever the latest pair is invalid, unreplaceable, or identical to the current line's own anchors), not only on the transition that confirms a new pivot; observable behavior is unaffected either way since only a genuinely new, valid, replacement-eligible pair ever changes state.
 
 **Determinism:** `structure.pivots` is already a proven-deterministic function of the processed P&F state, so `lows[-2:]`/`highs[-2:]` are trivially deterministic. Same processed state ⇒ same anchors ⇒ same line.
 
@@ -120,15 +120,33 @@ The prior draft's `invalidated` state had exactly one use — the terminal outco
 
 A fresh valid same-kind anchor pair (Decision 2) may create a new line whenever the previous line is in `broken`, `retest_held`, or `retest_failed` (replacement need not wait for a retest to resolve). The previous line is stamped `state="replaced"`; its `retest_outcome` (`"held"`, `"failed"`, or `"none"`) is left exactly as it already was — never reset, never recomputed. No other field on the replaced line is ever mutated. A wholly new `TrendlineLine` record represents the new line; the old record's geometry (`anchor_a`, `anchor_b`, `slope`, `break_column`, etc.) is frozen forever.
 
+### Same-transition precedence (frozen, post-review addendum)
+
+A transition can, in principle, cause two eligible events at once: it can resolve a pending retest (`retesting → retest_held`/`retest_failed`) **and** a fresh valid same-kind anchor pair can already be available (ingested earlier in that same transition's processing step, from a pivot confirmed by this same transition). Without an explicit rule, the engine could silently replace the line on the very same transition that resolved it, meaning the resolved state (`retest_held`/`retest_failed`) would never appear as the *current* line in any snapshot — only recoverable by inspecting `history` after the fact.
+
+**This is frozen as forbidden.** The rule:
+
+1. Evaluate the current line's lifecycle for this transition (break / touch / retest-entry / retest-resolution), exactly as Decisions 4–6 define.
+2. If a `retesting → retest_held`/`retest_failed` resolution happens **on this transition**, publish it — the resolved state and outcome must be the current line in the snapshot produced for this transition. Do **not** replace during this same transition, even if a fresh valid same-kind anchor pair is already available.
+3. Replacement from `retest_held`/`retest_failed` may occur only on a **later** transition — one whose transition-processing sequence number is strictly greater than the sequence number of the transition that resolved the retest. The next transition does not need to confirm a *new* pivot if a valid replacement pair already became available at or before the resolving transition — sequence order is what gates eligibility, not pivot freshness.
+
+This ordering is enforced using the engine's own monotonic transition-processing sequence number (incremented once per processed transition, identical in kind to `StructureEngine`'s own `_sequence` convention) — never wall-clock time. Given a deterministic event stream, this sequence is itself deterministic, so replacement timing replays identically (same event stream ⇒ same replacement timing).
+
+This rule applies **only** to the `retesting → retest_held`/`retest_failed → replaced` path. It does not change or restrict the already-frozen `active → broken → replaced` path: Decision 8's "replacement need not wait for a retest to resolve" continues to mean a `broken` line may be replaced immediately, including on the very same transition that broke it — that composition was already an intended reading of Decision 8 and remains unchanged. Only a resolution and a replacement are forbidden from sharing a transition.
+
+**Why:** `RETEST_HELD`/`RETEST_FAILED` must be observable as deterministic current state for at least the snapshot of the transition that produced it. Downstream consumers (Entry Readiness, Experience observation, frontend rendering, AI structured input, future research consumers) must not be required to inspect `history` to discover that a retest resolution occurred.
+
 ## Decision 9 — State model
 
 ```python
 TrendlineKind = Literal["bullish_support", "bearish_resistance"]
 TrendlineLifecycleState = Literal[
-    "forming", "active", "broken", "retesting", "retest_held", "retest_failed", "replaced"
+    "active", "broken", "retesting", "retest_held", "retest_failed", "replaced"
 ]
 RetestOutcome = Literal["held", "failed", "none"]
 ```
+
+No `"forming"` state exists in V1: a `TrendlineLine` record only ever exists once both anchors are already valid (Decision 2), and that first row below goes directly from *(none)* to `active` — there is no intermediate materialized state for "one pivot confirmed, waiting for a second." (An earlier draft included `"forming"` for possible future/consumer use; it was removed post-review as unreachable dead code, per the same reasoning that removed `"invalidated"` in Decision 7 — nothing in this engine can ever construct a line in that state. If a future phase needs an observable "line is forming" signal, that is a new, separate decision.)
 
 | From state | Trigger | To state |
 |---|---|---|
@@ -136,10 +154,10 @@ RetestOutcome = Literal["held", "failed", "none"]
 | `active` | `0 ≤ distance < box` on correct side | `active` (+ `touch_columns` appended) |
 | `active` | transition crosses line (Decision 4) | `broken` |
 | `broken` | `|distance| < box` | `retesting` |
-| `broken` | fresh valid anchor pair | old → `replaced` (`retest_outcome="none"`); new → `active` |
+| `broken` | fresh valid anchor pair | old → `replaced` (`retest_outcome="none"`); new → `active` — may occur on the same transition that produced `broken` (unrestricted; see Decision 8) |
 | `retesting` | `distance` beyond `±box`, confirming side | `retest_held` |
 | `retesting` | `distance` beyond `±box`, reclaiming side | `retest_failed` |
-| `retest_held` / `retest_failed` | fresh valid anchor pair | old → `replaced` (`retest_outcome` preserved); new → `active` |
+| `retest_held` / `retest_failed` | fresh valid anchor pair | old → `replaced` (`retest_outcome` preserved); new → `active` — **only on a later transition than the one that resolved the retest** (see Decision 8's same-transition precedence addendum) |
 
 ## Decision 10 — No-lookahead invariant
 
@@ -162,7 +180,8 @@ Trendline structured state (including `retest_outcome`) may be added to Experien
 - Zero changes to P&F construction, Adaptive Box formulas, Matrix, Regime, Signal, Risk, Paper, Backtest, Experience Engine semantics, MT5 adapter, or REMOTE1/Tailscale.
 - All arithmetic is exact `Decimal`; no floating-point epsilon anywhere in this model.
 - `retest_held` vs. `retest_failed` is now a durable, machine-queryable distinction (not free-text), enabling future Experience/research analysis without committing to any live-decision feedback in V1.
+- **Known V1 limitation:** replaced-line `history` has no retention/eviction policy — it grows by one entry per replacement for the life of the engine, unbounded (the same, already-accepted pattern as `StructureEngine`'s own `pivots`/`levels`). `TrendlineEngine.process()` mutates state only; callers call `snapshot()` separately to materialize output, which keeps the per-transition cost from paying for this growing copy on every transition regardless of whether the caller reads it — but the `snapshot()` call itself, when made, remains O(history size). A bounded-retention or checkpoint strategy is explicitly out of scope for this fix and left to a future task.
 
 ## Validation expected in Phase 1
 
-Prefix invariance (no-lookahead) · anchor tie-break exactness (including the negative "no backward search" case) · exact Decimal slope/projection arithmetic on fixture pivot pairs · break-before-touch ordering including small-penetration-is-still-break · touch/retest boundary fixtures at `box − ε`, `box`, `box + ε` in Decimal terms (no float epsilon) · bullish and bearish `retest_held`/`retest_failed` resolution · sticky `retest_outcome` surviving `replaced` · replacement chaining from `broken`, `retest_held`, and `retest_failed` · Adaptive-box-change fixtures confirming projection is unaffected while tolerance width rescales · incremental `process()` sequence equals full `replay()` + `snapshot()`.
+Prefix invariance (no-lookahead) · anchor tie-break exactness (including the negative "no backward search" case) · exact Decimal slope/projection arithmetic on fixture pivot pairs · break-before-touch ordering including small-penetration-is-still-break · touch/retest boundary fixtures at `box − ε`, `box`, `box + ε` in Decimal terms (no float epsilon) · bullish and bearish `retest_held`/`retest_failed` resolution · sticky `retest_outcome` surviving `replaced` · replacement chaining from `broken`, `retest_held`, and `retest_failed` · Adaptive-box-change fixtures confirming projection is unaffected while tolerance width rescales · incremental `process()` sequence equals full `replay()` + `snapshot()` · the same-transition precedence rule (a retest resolution and its eventual replacement must land on different, ordered transitions, proven via the engine's own transition sequence, not wall-clock time) · the equal-`column_id` anchor guard is a tested, safe no-op that cannot corrupt an existing line · at least one end-to-end lifecycle test driven entirely by real `StructureEngine`-style pivot ingestion (formation → touch → break → retest entry → retest resolution → replacement).

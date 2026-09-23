@@ -9,7 +9,6 @@ from typing import Literal
 
 TrendlineKind = Literal["bullish_support", "bearish_resistance"]
 TrendlineLifecycleState = Literal[
-    "forming",
     "active",
     "broken",
     "retesting",
@@ -43,6 +42,7 @@ class TrendlineLine:
     break_transition_id: str | None
     retest_column: int | None
     retest_resolved_column: int | None
+    retest_resolved_sequence: int | None
     retest_outcome: RetestOutcome
     replaced_by_line_id: str | None
     age_columns: int

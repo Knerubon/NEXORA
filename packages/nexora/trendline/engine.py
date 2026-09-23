@@ -5,6 +5,15 @@ stream -- this engine never rediscovers pivots on its own. Every decision
 (anchor selection, projection, break, touch, retest) is a pure function of
 transitions/pivots already processed as of the current step: appending a
 future transition can never rewrite a previously recorded ``TrendlineLine``.
+
+Same-transition precedence (ADR-020, frozen): a retest resolution
+(``retesting`` -> ``retest_held``/``retest_failed``) is never replaced on the
+same transition that produced it, even if a fresh valid same-kind anchor
+pair is already available. The resolved state must be observable as the
+current line for at least the snapshot of the resolving transition.
+Replacement eligibility begins strictly on a later transition -- tracked via
+``TrendlineLine.retest_resolved_sequence`` compared against the engine's own
+monotonic transition-processing sequence, never wall-clock time.
 """
 
 from __future__ import annotations
@@ -38,16 +47,21 @@ class TrendlineEngine:
     _active_bearish: TrendlineLine | None = field(default=None, init=False, repr=False)
     _history: list[TrendlineLine] = field(default_factory=list, init=False, repr=False)
 
-    def process(self, transition: PnfTransition, structure: StructureSnapshot) -> TrendlineSnapshot:
+    def process(self, transition: PnfTransition, structure: StructureSnapshot) -> None:
+        """Mutate engine state for one transition. Call `snapshot()` separately to read it.
+
+        Split from snapshot construction so a caller processing several transitions per
+        event (e.g. a multi-box gap fill) doesn't pay for an O(history) tuple copy on every
+        intermediate transition it never reads.
+        """
         if transition.symbol != self.symbol:
-            return self.snapshot()
+            return
         self._sequence += 1
         self._column_by_transition[transition.identity_key] = transition.column_id
         self._ingest_new_pivots(structure)
         self._active_bullish = self._evaluate_line(self._active_bullish, transition)
         self._active_bearish = self._evaluate_line(self._active_bearish, transition)
         self._try_form_or_replace(transition)
-        return self.snapshot()
 
     def snapshot(self) -> TrendlineSnapshot:
         return TrendlineSnapshot(
@@ -139,6 +153,7 @@ class TrendlineEngine:
             retest_outcome=outcome,
             projected_price_at_latest_column=projected,
             retest_resolved_column=column,
+            retest_resolved_sequence=self._sequence,
             age_columns=age,
             evidence=(*line.evidence, f"retest_{outcome}@col{column}"),
         )
@@ -163,6 +178,15 @@ class TrendlineEngine:
                 continue
             if current is not None:
                 if current.state not in _REPLACEABLE_STATES:
+                    continue
+                if (
+                    current.retest_resolved_sequence is not None
+                    and self._sequence <= current.retest_resolved_sequence
+                ):
+                    # H1 (ADR-020 same-transition precedence): a retest resolution must be
+                    # observable as the current line for at least the transition that
+                    # produced it. Replacement eligibility begins strictly on a later
+                    # transition (self._sequence > retest_resolved_sequence).
                     continue
                 if (
                     current.anchor_a.source_pivot_id == anchor_a.source_pivot_id
@@ -204,6 +228,7 @@ class TrendlineEngine:
             break_transition_id=None,
             retest_column=None,
             retest_resolved_column=None,
+            retest_resolved_sequence=None,
             retest_outcome="none",
             replaced_by_line_id=None,
             age_columns=column - anchor_b.column_id,
