@@ -56,7 +56,7 @@ not a claim of complete tick capture; all P&F and strategy rules remain unchange
 
 ## Persistence and recovery
 
-The journal stores immutable accepted events, full output artifacts, run/config data and ordered paper proposals/controls. Replay rebuilds risk and paper together; content hashes detect accidental corruption, not a hostile database administrator. One writer per runtime is supported; optimistic count checks reject stale concurrent writers. Restart the affected worker to load another writer's committed state. Do not run multiple API workers against one session.
+The journal stores immutable accepted events, full output artifacts, run/config data and ordered paper proposals/controls. The API restores research state from a verified, disposable checkpoint in the environment's `checkpoints` directory and replays only later journal rows, falling back to full replay on any doubt; `NEXORA_RESEARCH_CHECKPOINTS=off` forces full replay ([ADR-022](decisions/ADR-022-startup-recovery-checkpoint-v1.md)). Replay rebuilds risk and paper together; content hashes detect accidental corruption, not a hostile database administrator. One writer per runtime is supported; optimistic count checks reject stale concurrent writers. Restart the affected worker to load another writer's committed state. Do not run multiple API workers against one session.
 
 [Migration 007](../infra/migrations/007_research_journal.sql) adds the journal without dropping historical tables. Provision on a private PostgreSQL instance; current adapter creates the table if missing, so startup requires schema creation rights. A migration-only least-privilege deployment needs further hardening. CI's ephemeral loopback PostgreSQL uses trust solely for isolated synthetic tests; that configuration must never be copied into deployment.
 
@@ -73,7 +73,7 @@ Default drill uses isolated synthetic data. Operator mode refuses an existing ba
 - Real PostgreSQL backup/restore, crash/restart and retained-artifact integrity on the Windows target; least-privilege roles, schema migration/rollback and retention policy.
 - Real MT5 disconnect/reconnect/gaps and capture completeness; sampled quote polling cannot certify a lossless dataset.
 - Authenticated encrypted remote access and adversarial network tests before enabling any remote route.
-- Measured capacity and bounded engine/journal retention/checkpoint strategy. Operational quote/quality histories are bounded; full research histories are intentionally retained and not yet load-certified.
+- Measured capacity and bounded engine/journal retention. Checkpoint-assisted recovery (ADR-022) bounds restart replay but not journal growth: each research row still stores cumulative output. Operational quote/quality histories are bounded; full research histories are intentionally retained and not yet load-certified.
 - Reviewed strategy parameters, held-out/walk-forward research, instrument units and portfolio/partial-close risk semantics before claiming realistic paper execution.
 
 These are open acceptance gates, not passes inferred from the existence of code or successful unit tests.
