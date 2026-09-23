@@ -178,7 +178,7 @@ No AI Analyst exists in NEXORA today. `evaluate_entry_readiness` has zero AI dep
 
 ## Decision 14 — Out of scope for V1
 
-This ADR is a design document only and changes no code. When implemented in a future task, Phase 2 backend work must not touch: `packages/nexora/signals/` (beyond the one-line pipeline read of `signals.decision`), `packages/nexora/trendline/`, `packages/nexora/pnf/`, `packages/nexora/matrix/`, `packages/nexora/market_regime/`, `packages/nexora/risk/`, `apps/web/`, `apps/api/nexora_api/main.py` (REMOTE1/Tailscale trust code and existing endpoints), REMOTE1 infrastructure, the running PROD instance, or any release tag. No Entry Readiness frontend overlay, no AI Analyst/LLM provider, no auto-trading, no order placement, no position sizing, and no new Signal strategy are implemented under this ADR.
+This ADR is implemented in the same PR (PR #29). Implementation in this PR must not touch: `packages/nexora/signals/` (beyond the one-line pipeline read of `signals.decision`), `packages/nexora/trendline/`, `packages/nexora/pnf/`, `packages/nexora/matrix/`, `packages/nexora/market_regime/`, `packages/nexora/risk/`, `apps/web/`, `apps/api/nexora_api/main.py` (REMOTE1/Tailscale trust code and existing endpoints), REMOTE1 infrastructure, the running PROD instance, or any release tag. No Entry Readiness frontend overlay, no AI Analyst/LLM provider, no auto-trading, no order placement, no position sizing, and no new Signal strategy are implemented under this ADR.
 
 ## Consequences
 
