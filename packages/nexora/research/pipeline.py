@@ -13,6 +13,7 @@ from nexora.matrix import MatrixEngine, MatrixResolutionConfig
 from nexora.pnf import PnfConfig
 from nexora.signals import ResearchSignal, SignalConfig, SignalEngine
 from nexora.structure import StructureEngine
+from nexora.trendline import TrendlineEngine
 
 
 @dataclass(frozen=True)
@@ -61,6 +62,7 @@ class ResearchPipeline:
             stale_after_events=config.stale_after_events,
         )
         self.structure = StructureEngine(config.signals.symbol)
+        self.trendline = TrendlineEngine(config.signals.symbol)
         self.regime = MarketRegimeEngine(config.regime)
         self.signals = SignalEngine(config.signals)
         self._seen: dict[str, str] = {}
@@ -101,8 +103,10 @@ class ResearchPipeline:
         matrix = self.matrix.process(event, now=event.received_at)
         pnf = runner.pnf_engine.state_for(event.symbol)
         for transition in pnf.transitions[before:]:
-            self.structure.process(transition)
+            structure_step = self.structure.process(transition)
+            self.trendline.process(transition, structure_step)
         structure = self.structure.snapshot()
+        trendline = self.trendline.snapshot()
         regime = self.regime.classify(structure, matrix)
         signals = self.signals.evaluate(structure=structure, regime=regime, matrix=matrix)
         self._output = {
@@ -110,6 +114,7 @@ class ResearchPipeline:
             "event": event,
             "matrix": matrix,
             "structure": structure,
+            "trendline": trendline,
             "regime": regime,
             "signals": signals,
             "columns": pnf.columns,

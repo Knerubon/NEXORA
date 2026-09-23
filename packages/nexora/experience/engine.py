@@ -97,6 +97,7 @@ def freeze(
         "latest_signal_context": latest,
         "matrix": output.get("matrix"),
         "structure": output.get("structure"),
+        "trendline": output.get("trendline"),
         "regime": output.get("regime"),
         "pnf": {"columns": output.get("columns"), "transitions": output.get("transitions")},
         "runtime_config": config,
