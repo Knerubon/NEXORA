@@ -177,6 +177,9 @@ def create_app(
             if start_worker:
                 await asyncio.to_thread(feed.stop)
             feed.on_quote = None
+            if engine is not None:
+                # After the feed stops: a warm restart then replays no journal delta.
+                await asyncio.to_thread(engine.checkpoint)
             if journal is None:
                 store.close()
 

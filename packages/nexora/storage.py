@@ -79,12 +79,16 @@ class SQLiteJournal:
 
     def iter_read(self, stream: str) -> Iterator[dict[str, Any]]:
         """Verify bounded pages through a fixed high-water mark in journal order."""
+        for _, value in self.iter_rows(stream):
+            yield value
+
+    def iter_rows(self, stream: str, *, after: int = 0) -> Iterator[tuple[int, dict[str, Any]]]:
+        """Verified (sequence, payload) pairs strictly after `after`, in journal order."""
         with self._lock:
             end = self.connection.execute(
                 "SELECT COALESCE(MAX(sequence),0) FROM research_journal WHERE stream=?",
                 (stream,),
             ).fetchone()[0]
-        after = 0
         while after < end:
             with self._lock:
                 rows = self.connection.execute(
@@ -96,8 +100,34 @@ class SQLiteJournal:
             if not rows:
                 break
             for sequence, digest, payload in rows:
-                yield _verify(digest, payload)
+                yield sequence, _verify(digest, payload)
                 after = sequence
+
+    def row_identity(self, stream: str, sequence: int) -> tuple[str, str] | None:
+        """(event_key, content_hash) of one exact row, used to anchor recovery checkpoints."""
+        with self._lock:
+            row = self.connection.execute(
+                "SELECT event_key,content_hash FROM research_journal WHERE sequence=? AND stream=?",
+                (sequence, stream),
+            ).fetchone()
+        return None if row is None else (str(row[0]), str(row[1]))
+
+    def count_through(self, stream: str, sequence: int) -> int:
+        with self._lock:
+            return int(
+                self.connection.execute(
+                    "SELECT COUNT(*) FROM research_journal WHERE stream=? AND sequence<=?",
+                    (stream, sequence),
+                ).fetchone()[0]
+            )
+
+    def sequence_of(self, stream: str, key: str) -> int | None:
+        with self._lock:
+            row = self.connection.execute(
+                "SELECT sequence FROM research_journal WHERE stream=? AND event_key=?",
+                (stream, key),
+            ).fetchone()
+        return None if row is None else int(row[0])
 
     def backup(self, destination: Path) -> None:
         if destination.exists():
