@@ -1,6 +1,6 @@
 # ADR-023 — NEXORA Feature Lifecycle V1 (ACTIVE / SHADOW / DISABLED)
 
-Status: **proposed — revision 2, NOT accepted** (architecture sync with merged ADR-022; awaiting Rin architecture review; Quant review for any decisional ACTIVE promotion, Decision 7)
+Status: **accepted for Phase 2** (Rin architecture review 2026-09-24, on revision 2 at `14f30ae`; Q-FL3 and Q-FL4 resolved below). Quant review is still required for any decisional ACTIVE promotion (Decision 7).
 Date: 2026-09-24
 Workstream: Track D — `claude/pnf-pattern-engine-v1` (DEV-PNF acting as ARCHITECT for the proposal)
 Base: `origin/main` `4f69e9c` (revision 1 was drafted on `e2ba8ba`, before ADR-022 merged)
@@ -216,7 +216,7 @@ There are no environment-conditional code defaults. Policy is expressed by which
 - DEV: may name a features file selecting SHADOW, or analytical ACTIVE where permitted.
 - PROD: `NEXORA_FEATURES_CONFIG` stays unset (everything DISABLED) until a feature is validated and a human approves a PROD change. This track changes no PROD configuration.
 - DEV and PROD checkpoints are separate by ADR-022 Decision 6. A features file change in one environment only invalidates that environment's checkpoint (Decision 11).
-- Open question Q-FL3: should `NEXORA_ENV=production` additionally refuse any non-DISABLED lifecycle unless an explicit allow-list is approved?
+- Q-FL3 (resolved for V1): no separate PROD allow-list. The registry `max_lifecycle` and fail-closed validation are the guard (see Questions).
 
 ## Decision 9 — Global Safe Mode compatibility (design only, not implemented)
 
@@ -272,5 +272,5 @@ Global Safe Mode implementation; a runtime (non-restart) lifecycle switch or API
 
 - **Q-FL1 — resolved (revision 2).** Use a separate `NEXORA_FEATURES_CONFIG` in V1 (Decision 6a). Lifecycle config never enters `PipelineConfig`, so DISABLED/SHADOW/analytical ACTIVE changes do not create a new research stream or Experience scope. Decision-affecting config of a future decisional feature must enter the reproducible identity contract before use (Decision 7).
 - **Q-FL2 — resolved (revision 2).** Track B / ADR-022 has merged, so the old sequencing question is settled. The design follows ADR-022's JSON architecture: config is never persisted, only bounded feature state is, and `feature_config_hash` is validated before adoption with a full-replay fallback (Decision 11). The actual checkpoint integration is a coordinated Phase 2 task (Decision 11d).
-- **Q-FL3 — OPEN. ARCHITECT DECISION REQUIRED.** Production allow-list / defence in depth: should `NEXORA_ENV=production` refuse any non-DISABLED lifecycle unless an explicit, human-approved allow-list names it (Decision 8)?
-- **Q-FL4 — reframed (revision 2).** Non-decisional (analytical) ACTIVE is permitted per feature by its accepted ADR's `max_lifecycle` and stays outside `PipelineConfig`. Decisional ACTIVE requires reproducible decision identity (hashed config), plus consumer, semantics, rollback and safety boundary in an accepted ADR, before use (Decision 7). Remaining for review: confirm this split.
+- **Q-FL3 — resolved for V1 (Rin, 2026-09-24).** No second, independent PROD allow-list in V1. The guard is the registry `max_lifecycle` fixed by each feature's accepted ADR, plus fail-closed lifecycle validation. A requested lifecycle above `max_lifecycle` fails validation/startup (`feature_lifecycle_not_permitted`). It is never silently downgraded.
+- **Q-FL4 — accepted (Rin, 2026-09-24).** Non-decisional (analytical) ACTIVE may expose production-visible analytical output, has no trading authority, is permitted per feature by its accepted ADR's `max_lifecycle`, and stays outside `PipelineConfig`. Decisional ACTIVE requires an accepted ADR defining consumer and decision semantics, reproducible decision identity (hashed config), rollback and safety boundaries, before use (Decision 7).

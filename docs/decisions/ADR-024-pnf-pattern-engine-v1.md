@@ -1,6 +1,6 @@
 # ADR-024 — P&F Pattern Engine V1
 
-Status: **proposed — revision 2, NOT accepted** (architecture sync with merged ADR-022; awaiting Rin architecture review; Quant review required for Q-PE1–Q-PE3 and before any catalogue formula in Decision 12 is frozen)
+Status: **architecture accepted for Phase 2** (Rin architecture review 2026-09-24, on revision 2 at `14f30ae`). Pattern Engine V1 stays DISABLED/SHADOW only. Classic P&F formulas (Decision 12) remain Quant-gated. Q-PE1–Q-PE3 remain open for Quant.
 Date: 2026-09-24
 Workstream: Track D — `claude/pnf-pattern-engine-v1`, worktree `D:\NEXORA\NEXORA-PATTERN-ENGINE`, role DEV-PNF
 Base: `origin/main` `4f69e9c` (revision 1 was drafted on `e2ba8ba`, before ADR-022 merged)
@@ -268,6 +268,17 @@ A breakout that belongs to a formally defined classic pattern stays inside that 
 | `current`: confirmed `PatternResult` per enabled unit | ≤ 1 per unit | Expires results on window shift (Decision 6) |
 
 The exact field list is frozen in the Phase 2 implementation PR against this table. ADR-022's `COVERED_FIELDS` contract test then enforces that every engine attribute is either serialized here or reconstructed from configuration.
+
+**Phase 2A field list** (`PatternEngineState`, `packages/nexora/patterns/models.py`), the only mutable engine attribute:
+
+- `state_version` (1) — the section version above;
+- `sequence`;
+- `pivot_count` + `last_pivot_id` — the last consumed pivot. The count locates it without scanning; the id cross-checks the Structure pivot at that position;
+- `window` — ≤ 6 `WindowPivot` (pivot + resolved `column_id`, `None` = unresolved and never guessed);
+- `pending` — ≤ 2 `(transition_id, column_id)`. StructureEngine confirms the centre of its last three transitions (ADR-009), so only the previous and the current transition can still become a pivot source;
+- `current` — ≤ 1 confirmed result per unit.
+
+Engine attributes `symbol`, `resolution`, `price_tolerance`, `features` and the per-unit descriptors are configuration and are rebuilt at construction. The state is replaced atomically per transition, so a rejected step leaves no partial state.
 
 **13d. What is never serialized.** Feature config, lifecycles, `feature_config_hash`, `max_lifecycle`, algorithm descriptors, parameters and `parameters_hash`, and the price tolerance (read from `SignalConfig`). All of these are reconstructed from startup configuration. Per-step health is also not state: it is recomputed every step. The per-event `changed` set and the published snapshot are pipeline output, restored through ADR-022's pipeline `_output` (whose `_OUTPUT_SCHEMA` gains the `pattern_engine` key), not through the engine section.
 
