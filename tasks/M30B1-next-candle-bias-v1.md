@@ -40,9 +40,26 @@ Draft [ADR-026](../docs/decisions/ADR-026-m30-next-candle-bias-v1.md).
 
 ## Unblock condition
 
-Rin approves ADR-026, or requests changes. Quant answers Q-M3, Q-M4 and Q-M8. Architect answers Q-M1, Q-M2, Q-M5, Q-M6 and Q-M7.
+Rin final approval of ADR-026 rev 2 unblocks Phase 2A. Quant still needs to answer Q-M3, Q-M4 and Q-M8. Phase 2B needs ADR-023 acceptance and Track B coordination.
+
+## Rin architecture review — rev 2 (2026-09-24)
+
+Frozen Architect decisions, recorded in ADR-026 Decision 0:
+- **Q-M1:** Pure Core may be built before ADR-023 is accepted, limited to models, candles, freeze, evaluate and pure tests.
+- **Q-M2:** lifecycle is DISABLED → SHADOW → ACTIVE. ACTIVE is analytical output only, with no decision authority.
+- **Q-M5:** no edits to Track B `runtime.py` or `checkpoint_state.py`. Phase 2A (pure) and 2B (integration) are split, with an explicit checkpoint schema version.
+- **Q-M6:** provenance records `LIVE_GENERATED` / `REPLAY_GENERATED`, and reports never pool them silently.
+- **Q-M7:** M30 consumes the upstream time contract and owns no broker offset logic.
+
+Added contracts:
+- Candle Identity (5A)
+- Algorithm Identity with journal uniqueness (5B)
+- Freeze-before-write crash contract (12A)
+
+Still open: Q-M3, Q-M4 and Q-M8 (Quant).
 
 ## Execution record
 
-- 2026-09-24: worktree created from origin/main 4f69e9c. The docs-only draft ADR and this task record were committed locally. Nothing was pushed and no PR was opened. Self-review only; independent review pending.
+- 2026-09-24 rev 1: worktree created from origin/main 4f69e9c. The docs-only draft ADR and this task record were committed locally. Nothing was pushed and no PR was opened. Self-review only; independent review pending.
 - The main worktree `D:\NEXORA\NEXORA` has pre-existing uncommitted changes that are not from this task (AGENTS.md, apps/api/nexora_api/main.py, apps/web/{app/page.tsx,package.json,next.config.mjs,tests/gateway.test.mjs}). They were left untouched.
+- 2026-09-24 rev 2: ADR-026 revised per Rin's review. Docs only, local commit, not pushed, no PR. Self-review; Rin's final review is pending.
