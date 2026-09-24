@@ -31,14 +31,18 @@ export type PatternEvidence = {
   start_time: string; confirmation_time: string;
 };
 export type OverlayTransition = { column_id: number; to_price: string; identity_key?: string };
+export type OverlayColumn = { column_id: number };
 export type OverlayInput = {
+  columns?: readonly OverlayColumn[];
   transitions?: readonly OverlayTransition[];
   trendline?: TrendlineSnapshot | null;
   signals?: { decision?: { patterns?: readonly Partial<PatternEvidence>[] } | null } | null;
 };
 
 export type Point = { column: number; price: number };
-export type TrendlineOverlay = { key: string; line: TrendlineLine; from: Point; to: Point; latestColumn: number };
+// `projectedColumn` is the latest backend P&F column when the segment ends at
+// projected_price_at_latest_column; null when it fails closed at anchor_b.
+export type TrendlineOverlay = { key: string; line: TrendlineLine; from: Point; to: Point; projectedColumn: number | null };
 export type BreakOverlay = { key: string; line: TrendlineLine; column: number; price: number; transitionId: string };
 export type PatternOverlay = { key: string; pattern: PatternEvidence; columns: number[]; priceLow: number; priceHigh: number };
 export type OverlayModel = { trendlines: TrendlineOverlay[]; breaks: BreakOverlay[]; patterns: PatternOverlay[] };
@@ -55,18 +59,30 @@ function activeLines(trendline: TrendlineSnapshot | null | undefined): Trendline
   return [trendline?.active_bullish, trendline?.active_bearish].filter((l): l is TrendlineLine => Boolean(l && l.line_id));
 }
 
-export function trendlineOverlays(trendline: TrendlineSnapshot | null | undefined): TrendlineOverlay[] {
+// TrendlineEngine re-projects only these states on every transition
+// (trendline/engine.py _evaluate_line); other states keep a frozen projection.
+const PROJECTED_STATES = new Set(["active", "broken", "retesting"]);
+
+export function latestColumnId(columns: readonly OverlayColumn[] | undefined): number | null {
+  const id = columns?.at(-1)?.column_id;
+  return isColumn(id) ? id : null;
+}
+
+export function trendlineOverlays(trendline: TrendlineSnapshot | null | undefined, columns: readonly OverlayColumn[] | undefined): TrendlineOverlay[] {
+  const latest = latestColumnId(columns);
   const result: TrendlineOverlay[] = [];
   for (const line of activeLines(trendline)) {
     const a = line.anchor_a, b = line.anchor_b;
-    const aPrice = finite(a?.price), projected = finite(line.projected_price_at_latest_column);
-    if (aPrice === null || projected === null || !isColumn(a?.column_id) || !isColumn(b?.column_id) || !isColumn(line.age_columns)) continue;
-    // ADR-020: age_columns = (column of the last evaluated transition) - anchor_b.column_id,
-    // and projected_price_at_latest_column is the engine's projection at that column.
-    // Both segment ends are therefore backend points; no slope is evaluated here.
-    const latestColumn = b.column_id + line.age_columns;
-    result.push({ key: `trendline:${line.line_id}`, line, latestColumn,
-      from: { column: a.column_id, price: aPrice }, to: { column: latestColumn, price: projected } });
+    const aPrice = finite(a?.price), bPrice = finite(b?.price), projected = finite(line.projected_price_at_latest_column);
+    if (aPrice === null || bPrice === null || !isColumn(a?.column_id) || !isColumn(b?.column_id)) continue;
+    const from = { column: a.column_id, price: aPrice };
+    // End at (latest backend P&F column, projected_price_at_latest_column). If the
+    // latest column is unavailable or the projection is not current, fail closed:
+    // draw only the anchor_a -> anchor_b segment. No column id is extrapolated.
+    const current = latest !== null && latest >= b.column_id && projected !== null && PROJECTED_STATES.has(line.state);
+    result.push({ key: `trendline:${line.line_id}`, line, from,
+      to: current ? { column: latest, price: projected } : { column: b.column_id, price: bPrice },
+      projectedColumn: current ? latest : null });
   }
   return result;
 }
@@ -112,7 +128,7 @@ export function patternOverlays(patterns: readonly Partial<PatternEvidence>[] | 
 
 export function buildOverlayModel(output: OverlayInput): OverlayModel {
   return {
-    trendlines: trendlineOverlays(output.trendline),
+    trendlines: trendlineOverlays(output.trendline, output.columns),
     breaks: breakOverlays(output.trendline, output.transitions),
     patterns: patternOverlays(output.signals?.decision?.patterns, output.transitions),
   };

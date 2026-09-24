@@ -29,8 +29,8 @@ const findItem = (model: OverlayModel, layers: OverlayLayers, key: string) => {
 export function useChartOverlays(output: OverlayInput, initialLayers: OverlayLayers = DEFAULT_LAYERS) {
   const [layers, setLayers] = useState(initialLayers);
   const [inspection, setInspection] = useState<Inspection | null>(null);
-  const { trendline, transitions, signals } = output;
-  const model = useMemo(() => buildOverlayModel({ trendline, transitions, signals }), [trendline, transitions, signals]);
+  const { columns, trendline, transitions, signals } = output;
+  const model = useMemo(() => buildOverlayModel({ columns, trendline, transitions, signals }), [columns, trendline, transitions, signals]);
   // Evidence gone from the latest snapshot (or its layer hidden): close, never show stale evidence.
   if (inspection && !findItem(model, layers, inspection.key)) setInspection(null);
   const toggle = useCallback((layer: keyof OverlayLayers) => setLayers((prior) => ({ ...prior, [layer]: !prior[layer] })), []);
@@ -150,7 +150,7 @@ function details(item: TrendlineOverlay | BreakOverlay | PatternOverlay): { titl
   return { title: `Trendline: ${readable(l.kind)}`, rows: [
     ["State", l.state],
     ["Anchor A", `column ${l.anchor_a.column_id} · ${l.anchor_a.price}`], ["Anchor B", `column ${l.anchor_b.column_id} · ${l.anchor_b.price}`],
-    ["Projected price", `${l.projected_price_at_latest_column} at column ${item.latestColumn}`],
+    ["Projected price", item.projectedColumn === null ? `${l.projected_price_at_latest_column} (not drawn: no current projection at the latest column)` : `${l.projected_price_at_latest_column} at latest column ${item.projectedColumn}`],
     ["Touch columns", l.touch_columns.length ? l.touch_columns.join(", ") : "none"],
     ["Break column", l.break_column === null ? "none" : String(l.break_column)],
     ["Retest outcome", l.retest_outcome], ["Evidence", l.evidence.join(" · ") || "—"], ["Config", l.config_version],

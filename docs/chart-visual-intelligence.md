@@ -16,7 +16,10 @@ The live P&F chart (`apps/web/app/page.tsx` → `StructureChart`) renders existi
 | Pattern column position | `PatternEvidence.source_data_reference` → `transitions[].identity_key` → `column_id` | `PnfTransition` | Identity lookup only |
 
 Geometry:
-- A trendline is drawn from `anchor_a (column_id, price)` to `(anchor_b.column_id + age_columns, projected_price_at_latest_column)`. Per ADR-020, `age_columns` is measured from `anchor_b` to the last evaluated transition's column, and the projection is the engine's price at that column. Both endpoints are backend values, so no slope is evaluated in the browser.
+- A trendline is drawn from `anchor_a (column_id, price)` to `(latest backend P&F column, projected_price_at_latest_column)`. The latest column is the last entry of `research.output.columns`, the same structure-resolution P&F state the TrendlineEngine consumes. `age_columns` is never used for coordinates.
+- **Fail-closed rule.** In two cases the segment ends at `anchor_b`, so both endpoints are backend anchors and no column id is extrapolated:
+  - the latest column cannot be resolved (missing, non-integer, or before `anchor_b`);
+  - `projected_price_at_latest_column` is not a current projection. TrendlineEngine re-projects only `active`, `broken` and `retesting` lines on each transition. `retest_held`, `retest_failed` and `replaced` keep the projection frozen at the resolution column (`trendline/engine.py` `_evaluate_line`). ADR-020 does not name the column of that projection; a future `projected_column` field would remove this frontend assumption.
 - Overlay prices use the X/O glyph convention: price `p` is drawn at the centre of the display row above `y(p)`.
 - P&F `column_id` increases by exactly 1 per column. An anchor left of the 60-column window therefore gets a negative x, and a clip path hides the off-window part.
 
@@ -48,7 +51,7 @@ The popup gives no AI interpretation and no trading recommendation. It closes on
 
 ## Realtime
 
-Overlays consume the existing `StructureChart` `output` prop, fed by the single existing `/api/nexora/ws/events` connection. They open no additional WebSocket, do no polling and run no fetch loop; a test asserts this statically. The overlay model is memoized on `trendline`, `transitions` and `signals`.
+Overlays consume the existing `StructureChart` `output` prop, fed by the single existing `/api/nexora/ws/events` connection. They open no additional WebSocket, do no polling and run no fetch loop; a test asserts this statically. The overlay model is memoized on `columns`, `trendline`, `transitions` and `signals`.
 
 ## Regression invariant
 

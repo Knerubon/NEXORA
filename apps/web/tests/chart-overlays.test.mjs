@@ -24,16 +24,57 @@ test('defaults: every visual layer is ON and controls reflect layer state', () =
   assert.equal(count(off, /aria-pressed="false"/g), 3);
 });
 
-test('trendline: renders the backend segment anchor_a -> projected price at the latest evaluated column', () => {
-  const [line] = model.trendlineOverlays(overlayOutput().trendline);
-  assert.deepEqual([line.from, line.to, line.latestColumn], [{ column: 2, price: 102 }, { column: 7, price: 107 }, 7]);
-  const group = overlayGroup(svg(overlayOutput()));
-  const drawn = group.match(/<g data-overlay="trendline"[\s\S]*?<\/g>/)[0];
+const trendLine = markup => overlayGroup(markup).match(/<g data-overlay="trendline"[\s\S]*?<\/g>/)?.[0];
+const visibleLine = markup => trendLine(markup).match(/<line[^>]*stroke="#2563eb"[^>]*>/)[0];
+
+test('trendline: endpoint is (latest backend P&F column, projected_price_at_latest_column)', () => {
+  const output = overlayOutput();
+  const [line] = model.trendlineOverlays(output.trendline, output.columns);
+  assert.equal(model.latestColumnId(output.columns), output.columns.at(-1).column_id);
+  assert.deepEqual([line.from, line.to, line.projectedColumn], [{ column: 2, price: 102 }, { column: 7, price: 107 }, 7]);
+  const drawn = trendLine(svg(output));
   assert.match(drawn, /data-kind="bullish_support" data-state="retesting"/);
-  const visible = drawn.match(/<line[^>]*stroke="#2563eb"[^>]*>/)[0];
-  assert.equal(attr(visible, 'x1'), 120);
-  assert.equal(attr(visible, 'x2'), 270);
+  const visible = visibleLine(svg(output));
+  assert.equal(attr(visible, 'x1'), 90 + 1 * 30);
+  assert.equal(attr(visible, 'x2'), 90 + 6 * 30);
   assert.equal(attr(visible, 'y1') - attr(visible, 'y2'), (107 - 102) * 26);
+});
+
+test('trendline: age_columns never drives an x coordinate', () => {
+  for (const age_columns of [0, 3, 99, -5]) {
+    const output = overlayOutput();
+    output.trendline.active_bullish.age_columns = age_columns;
+    assert.deepEqual(model.trendlineOverlays(output.trendline, output.columns)[0].to, { column: 7, price: 107 });
+    assert.equal(attr(visibleLine(svg(output)), 'x2'), 270);
+  }
+  assert.equal(count(modelSource, /age_columns/g), 1, 'only the TrendlineLine type declaration mentions age_columns');
+  assert.doesNotMatch(overlaySource, /age_columns/);
+});
+
+test('trendline: a new P&F column moves the endpoint to that actual column', () => {
+  const output = overlayOutput();
+  output.columns.push({ column_id: 8, direction: 'O', open_price: '107', close_price: '105' });
+  output.transitions.push({ column_id: 8, direction: 'O', from_price: '107', to_price: '105', effective_box_size: '1', boxes_moved: 2, identity_key: 'fixture-t8' });
+  output.trendline.active_bullish.projected_price_at_latest_column = '108';
+  assert.deepEqual(model.trendlineOverlays(output.trendline, output.columns)[0].to, { column: 8, price: 108 });
+  assert.equal(attr(visibleLine(svg(output)), 'x2'), 90 + 7 * 30);
+});
+
+test('trendline: missing latest column or non-current projection fails closed without extrapolation', () => {
+  const output = overlayOutput();
+  const anchorOnly = { column: 4, price: 104 };
+  for (const columns of [undefined, [], [{ column_id: 'x' }], [{ column_id: 3 }], [{ column_id: 7.5 }]]) {
+    const [line] = model.trendlineOverlays(output.trendline, columns);
+    assert.deepEqual([line.to, line.projectedColumn], [anchorOnly, null]);
+  }
+  for (const state of ['retest_held', 'retest_failed', 'replaced']) {
+    const resolved = overlayOutput(); resolved.trendline.active_bullish.state = state;
+    const [line] = model.trendlineOverlays(resolved.trendline, resolved.columns);
+    assert.deepEqual([line.to, line.projectedColumn], [anchorOnly, null], state);
+    assert.equal(attr(visibleLine(svg(resolved)), 'x2'), 90 + 3 * 30);
+  }
+  const bad = overlayOutput(); bad.trendline.active_bullish.projected_price_at_latest_column = 'not-a-price';
+  assert.deepEqual(model.trendlineOverlays(bad.trendline, bad.columns)[0].to, anchorOnly);
 });
 
 test('trendline: absent evidence draws nothing; hidden when the layer is OFF; historical lines never drawn', () => {
@@ -41,19 +82,19 @@ test('trendline: absent evidence draws nothing; hidden when the layer is OFF; hi
   output.trendline = { ...output.trendline, active_bullish: null, history: [output.trendline.active_bullish] };
   assert.doesNotMatch(svg(output), /data-overlay="trendline/);
   assert.doesNotMatch(svg(overlayOutput(), { ...model.DEFAULT_LAYERS, trendline: false }), /data-overlay="trendline/);
-  assert.deepEqual(model.trendlineOverlays(null), []);
-  const broken = overlayOutput().trendline;
-  broken.active_bullish.projected_price_at_latest_column = 'not-a-price';
-  assert.deepEqual(model.trendlineOverlays(broken), []);
+  assert.deepEqual(model.trendlineOverlays(null, overlayOutput().columns), []);
 });
 
-test('trendline: anchors left of the 60-column window are clipped, not repositioned', () => {
+test('trendline: anchors left of the 60-column window are clipped; endpoint stays on the latest column', () => {
   const output = overlayOutput();
   output.columns = Array.from({ length: 70 }, (_, i) => ({ column_id: i + 1, direction: i % 2 ? 'O' : 'X', open_price: '100', close_price: '101' }));
   const drawn = overlayGroup(svg(output));
-  assert.match(drawn, /<clipPath id="pnf-overlay-clip">/);
+  assert.match(drawn, /<clipPath id="pnf-overlay-clip"><rect x="75" y="13"/);
   assert.match(drawn, /<g clip-path="url\(#pnf-overlay-clip\)">/);
-  assert.equal(attr(drawn.match(/<line[^>]*stroke="#2563eb"[^>]*>/)[0], 'x1'), 90 + (2 - 11) * 30);
+  const visible = visibleLine(svg(output));
+  assert.equal(attr(visible, 'x1'), 90 + (2 - 11) * 30);
+  assert.ok(attr(visible, 'x1') < 75, 'anchor is outside the clip rect');
+  assert.equal(attr(visible, 'x2'), 90 + (70 - 11) * 30);
 });
 
 test('layer toggles are render-only: backend output is never mutated by any layer combination', () => {
@@ -115,6 +156,11 @@ test('trendline break: marker at the recorded break transition only, labelled "T
   const [mark] = model.breakOverlays(overlayOutput().trendline, overlayOutput().transitions);
   assert.deepEqual([mark.column, mark.price, mark.transitionId], [6, 103, 'fixture-t6']);
   const group = overlayGroup(svg(overlayOutput()));
+  const diamond = group.match(/<g data-overlay="trendline-break"[\s\S]*?<path d="M ([\d.-]+) ([\d.-]+)/);
+  assert.equal(Number(diamond[1]), 90 + 5 * 30);
+  const levelY = svg(overlayOutput()).match(/<rect x="0" y="([\d.-]+)" width="\d+" height="26" fill="#527dea"/)[1];
+  // Break box centre = cy(103) = y(103) - 13; the support band at 104 starts at y(104) - 13 = y(103) - 39.
+  assert.equal(Number(diamond[2]) + 9, Number(levelY) + 26);
   assert.equal(count(group, /data-overlay="trendline-break"/g), 1);
   assert.match(group, />Trendline break<\/text>/);
   assert.doesNotMatch(group, /▲|▼|Breakout|Breakdown/);
@@ -143,7 +189,7 @@ test('popup: shows the backend evidence of the inspected item and nothing when t
   for (const text of ['Pattern: double bottom', 'double_bottom', 'bullish', 'confirmation', '102 – 108', 'pattern_double_bottom', 'p8a-pattern-v1', 'interim pattern visualization source'])
     assert.ok(pattern.includes(text), text);
   const line = popup(current, 'trendline:fixture-line-bull-1');
-  for (const text of ['Trendline: bullish support', 'retesting', 'column 2 · 102', 'column 4 · 104', '107 at column 7', 'break@col6', 'fixture-config-v1'])
+  for (const text of ['Trendline: bullish support', 'retesting', 'column 2 · 102', 'column 4 · 104', '107 at latest column 7', 'break@col6', 'fixture-config-v1'])
     assert.ok(line.includes(text), text);
   assert.match(popup(current, 'break:fixture-line-bull-1:fixture-t6'), /Trendline break[\s\S]*Break column<\/dt><dd>6/);
   assert.doesNotMatch(pattern + line, /\b(BUY|SELL)\b/);
@@ -157,7 +203,7 @@ test('realtime: successive snapshots update overlays with stable keys and no dup
   const next = overlayOutput();
   next.columns.push({ column_id: 8, direction: 'O', open_price: '107', close_price: '105' });
   next.transitions.push({ column_id: 8, direction: 'O', from_price: '107', to_price: '105', effective_box_size: '1', boxes_moved: 2, identity_key: 'fixture-t8' });
-  Object.assign(next.trendline.active_bullish, { age_columns: 4, projected_price_at_latest_column: '108' });
+  next.trendline.active_bullish.projected_price_at_latest_column = '108';
   const a = model.buildOverlayModel(first), b = model.buildOverlayModel(next);
   assert.deepEqual(model.overlayKeys(a), model.overlayKeys(b));
   assert.equal(new Set(model.overlayKeys(b)).size, model.overlayKeys(b).length);
