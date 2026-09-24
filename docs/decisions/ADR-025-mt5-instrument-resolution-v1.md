@@ -1,14 +1,14 @@
 # ADR-025 — MT5 multi-broker instrument resolution V1
 
-Status: **DRAFT rev 2 — NOT ACCEPTED.** Decisions D1–D5 are resolved per Rin's Phase 1
-resolution. Remaining architect questions (§14) and one Quant decision (§7) are open.
-Awaiting Rin's final architecture review. No implementation may start until accepted.
+Status: **DRAFT rev 3 — NOT ACCEPTED.** D1–D5 and A1–A3 are resolved per Rin's decisions.
+Q-Q1 (Quant, §7) and A4 (§14) remain open. Awaiting Rin's final ADR review. No implementation may
+start until this ADR and ADR-003 Amendment 1 are accepted.
 
 Workstream: MT5 Multi-Broker V1 — branch `claude/mt5-multi-broker-v1`,
 worktree `D:\NEXORA\NEXORA-MT5-BROKER`, base `origin/main` 4f69e9c (unchanged since rev 1).
 
-Related: [ADR-003](ADR-003-local-price-preview.md) (read-only MT5 boundary — **authoritative,
-not amended**), [ADR-004](ADR-004-market-data.md), [ADR-013](ADR-013-web-dashboard-realtime-contract.md),
+Related: [ADR-003](ADR-003-local-price-preview.md) (read-only MT5 boundary — authoritative;
+narrowly amended by its **Amendment 1**, drafted with this ADR, §4.3), [ADR-004](ADR-004-market-data.md), [ADR-013](ADR-013-web-dashboard-realtime-contract.md),
 [ADR-019](ADR-019-explicit-feed-time-correction.md) (legacy feed offset),
 [ADR-022](ADR-022-startup-recovery-checkpoint-v1.md) (checkpoints),
 [environment isolation](../environment-isolation.md).
@@ -131,28 +131,33 @@ because they could not be told apart.
 | Terminal installation used | verified (process exe + `terminal_info().path`) |
 | Terminal company string | verified (`terminal_info().company`) |
 | Symbol semantic contract + price grid | verified per symbol (§3, §6) |
-| Connected trade server / account | **not verifiable** without `account_info()`; not read |
-| Whether `company` reflects the connected server rather than the terminal's distributor | **not verified**; needs a DEV read-only probe before acceptance of implementation (§12) |
+| Connected trade server / account | **not verified** — `account_info()` is prohibited; see accepted limitation below |
+| Whether `company` reflects the connected server rather than the terminal's distributor | **not verified**; the DEV read-only discovery probe (§12) records what it shows, and it is never treated as server identity |
 | Market hours / server timezone | not available; offset is declared (§8) |
 
-Residual risk: one terminal installation re-logged into a different server of the same company,
-with identical symbol metadata, is undetectable in V1. Operational rule: **one dedicated
-terminal installation per `broker_id`**. Any detectable metadata change still fails closed.
-Accepting this residual risk is open question A2 (§14).
+**Accepted V1 limitation (A2 — RESOLVED, Rin):** NEXORA V1 cannot prove that the connected
+account or trade server has not changed while the same MT5 terminal installation and company
+identity remain unchanged. **"Same company / different trade server" is an accepted V1
+limitation.** It is not solved by reading `account_info().server`. V1 broker verification rests
+only on: declared `broker_id`, `terminal_info().company`, `terminal_info().path`, the running MT5
+executable path, the exact symbol, the semantic instrument metadata, the price grid and `feed_id`.
+API, UI, docs and provenance must describe this as *terminal and symbol-contract verification*.
+They must never present it as verified broker-server or account identity. Operational rule:
+**one dedicated terminal installation per `broker_id`.** Any detectable change still fails closed.
 
-### 4.3 ADR-003 compatibility
+### 4.3 ADR-003 compatibility (A1 — RESOLVED, Rin: accept with narrow amendment)
 
-- No `account_info`, `login`, `positions_*`, `orders_*`, `history_*`, `order_*`, `symbol_select`,
-  `market_book_*` or `copy_*` call is introduced. No credential, login, account number, balance,
-  equity, position or order is read.
-- `terminal_info()` fields read: `connected`, `company`, `path` only. `community_*`, `mqid`,
-  `data_path`, `commondata_path` and all other fields are never read or copied.
-- ADR-003's data line says "terminal_info (read connected only)". Reading `company` and `path`
-  is terminal metadata, not account data, but it is a literal extension of that line.
-  Rev 2 treats ADR-003 as authoritative and does **not** amend it. Rin must rule whether this
-  read is within ADR-003's intent (open question A1). If it is not, binding mode can only
-  verify the terminal path, broker identity cannot be established, and binding mode stays
-  unavailable (fail closed). Legacy mode then keeps reading `connected` only.
+- ADR-003 **Amendment 1** (drafted in `ADR-003-local-price-preview.md` together with this ADR,
+  effective only when this ADR is accepted) permits exactly three `terminal_info()` fields:
+  `connected`, `company`, `path`. `company` and `path` are terminal identity metadata, not
+  account identity. Until the amendment is accepted, ADR-003's "connected only" rule stands and
+  binding mode must not be implemented.
+- Every other `terminal_info()` field stays prohibited (`community_*`, `mqid`, `data_path`,
+  `commondata_path`, …) unless another accepted ADR explicitly permits it.
+- `account_info()` stays prohibited. No `login`, server, balance, equity, positions, orders,
+  history or credentials are read. No `symbol_select`, `market_book_*` or `order_*` call is introduced.
+- Legacy mode reads `terminal_info().company` only for its in-memory reconnect fingerprint
+  (§6.4), and `path` only for the path check. Neither is journaled or exposed.
 
 ## 5. D3 — Symbol resolution (exact binding only)
 
@@ -233,29 +238,56 @@ feed_id = "mt5f1-" + canonical_hash({
   binding mode compares `feed_id`; legacy mode compares an in-memory
   `legacy_session_fingerprint = canonical_hash((company, symbol, semantic fields, price grid,
   offset))` pinned at the first successful resolve. The fingerprint is never journaled or exposed.
-- Any difference → `feed_identity_changed`: quote status `error`, no quotes delivered, research
-  not fed. It is latched for the process. Recovery is an operator restart after config review.
-  The old stream never silently continues.
+- Any difference (A3 — RESOLVED, Rin: operator-mediated new stream):
+  1. fail closed with `feed_identity_changed` (feed layer);
+  2. stop quote delivery to Research immediately;
+  3. research reports `research_feed_mismatch` for any quote whose `feed_id` differs from the
+     research runtime's feed (a defensive check in `observe_quote`, §6.5);
+  4. latch both for the running process; a later reconnect that shows the old identity again
+     does not unlatch them;
+  5. recovery requires an explicit operator restart, after reviewing or changing the binding.
+- The runtime never migrates old feed → new feed, never re-resolves to another binding by
+  itself, and never mixes observations from different feeds in one research stream.
 - `terminal_info().connected == False` stays `terminal_disconnected` (existing behavior).
   A reconnect with unchanged identity resumes normally.
 
-### 6.5 Research stream effect
+### 6.5 Research stream effect — feed provenance isolation
+
+Repository evidence: the stream id is fixed in `ResearchRuntime.__init__`
+(`self.stream = "research:" + canonical_hash(config)`, `packages/nexora/research/runtime.py`),
+and every other runtime stream (`:config`, Experience, paper) is written through the injected
+`Journal`. `Journal` and `ckpt.AnchoredJournal` are structural `Protocol`s (`AnchoredJournal` is
+`runtime_checkable`; `runtime.py` selects checkpoint anchoring with `isinstance`). The
+`CheckpointStore` is built by `configured_checkpoints()` in `apps/api/nexora_api/research.py`,
+and every journal consumer is wired in the `main.py` lifespan. Per-feed isolation is therefore
+possible **in the API composition layer**, so **no `RuntimeConfig` change is required** (A3
+constraint satisfied).
 
 - **Binding mode:** `NormalizedPriceEvent.symbol = instrument_id`, and the research config's
   `signals.symbol` must equal the selected `instrument_id` (`research_instrument_mismatch`).
-  The stream is pinned to one feed: at startup the API composition layer appends
-  `(stream=runtime.stream + ":feed", key="feed", value={"mode": "binding", "feed_id": …})` using
-  the existing idempotent `Journal.append`. A different `feed_id` on an existing pin raises the
-  journal's identity conflict, which is surfaced as `research_feed_mismatch`: research is not
-  fed; quotes still display. No `RuntimeConfig` field is added, so this needs no change to
-  `runtime.py` or `checkpoint_state.py`.
-- **Starting a new stream after a broker change** requires a distinct `RuntimeConfig` hash. The
-  mechanism for that is open question A3. Until A3 is decided, a broker change in binding mode
-  fails closed (`research_feed_mismatch`). That is safe but requires operator action.
-- **Mode crossing is never silent:** binding mode on a stream that already has research rows
-  but no feed pin → `feed_mode_conflict`. Legacy mode on a stream that has a feed pin →
-  `feed_mode_conflict`. This matters because an operator may choose an `instrument_id` equal to a
-  legacy broker symbol, which would otherwise produce the same config hash.
+- **Feed-scoped journal view:** in binding mode the composition layer passes the runtime a
+  journal view that prefixes every stream name with `"feed:" + feed_id + ":"`, for example
+  `feed:mt5f1-<hash>:research:<cfg>`. The view also implements `AnchoredJournal` when the
+  underlying journal does, so ADR-022 checkpoints keep working. Every API reader of
+  runtime-written streams (for example `ExperienceRepository`, state/history endpoints) receives
+  the same view. Phase 2 must audit every `store`/`app.state.journal` consumer in `main.py`.
+- **Feed-scoped checkpoints (required):** `runtime.py` passes its own unprefixed `self.stream`
+  to `CheckpointStore.load/save` and to the checkpoint header. The journal view does not change
+  that name, so checkpoint files of two feeds with the same research config would share a path.
+  In binding mode `configured_checkpoints()` therefore uses the subdirectory
+  `<checkpoints>/feeds/<feed_id>/`. A checkpoint of one feed is never offered to another. ADR-022
+  anchor verification (through the view) remains a second, independent rejection layer.
+- **After an operator restart with a changed binding:** resolve again → compute the new
+  `feed_id` → verify broker and binding → the runtime starts on (or recovers) **that feed's own
+  streams**. The old feed's streams stay untouched and read-only. Switching back to the old
+  binding resumes the old feed's streams. Nothing is merged or migrated.
+- **Mode isolation by construction:** legacy streams are unprefixed and binding streams are
+  always `feed:`-prefixed, so they cannot collide even if an operator picks an `instrument_id`
+  equal to a legacy broker symbol. No journal pin stream is needed. `feed_mode_conflict` is
+  limited to mixed environment settings (§9).
+- `runtime.py`, `checkpoint_state.py` and `RuntimeConfig` are **not changed**. Checkpoint
+  headers keep the unprefixed stream name. Feed separation comes from the directory and the
+  anchored journal view.
 
 ## 7. D4 — Price grid vs P&F configuration (QUANT boundary)
 
@@ -311,7 +343,8 @@ Byte-identical to 4f69e9c:
 - `NormalizedPriceEvent` `identity_key`, `source`, `source_event_id`, `symbol`, `precision`;
 - `Quote.model_dump()` and `Snapshot.model_dump()`, including the journaled
   `observation_metadata`: new fields are **absent** (not `null`) in legacy mode;
-- research stream id (no `RuntimeConfig` change), no new journal stream, no feed pin;
+- research stream id and every stream name (no `RuntimeConfig` change, no journal view, no
+  prefix, no new journal stream); checkpoint directory unchanged;
 - ADR-019 offset semantics and the ADR-022 checkpoint format.
 
 Changed in legacy mode (intentional; fail closed only):
@@ -329,8 +362,9 @@ checkpoint *format* is unchanged.
 - Provenance: `source = "mt5-binding-v1:" + feed_id`;
   `identity_key = "quote:" + canonical_hash((feed_id, event_time, bid, ask, raw_event_time,
   time_offset_seconds))`; `source_event_id = identity_key + ":raw-time=…:offset=…"`.
-- A new research stream by construction when `instrument_id` ≠ the legacy symbol. The feed pin
-  (§6.5) guards the equal-name case.
+- Feed provenance isolation (§6.5): all runtime streams live under `feed:<feed_id>:`, and
+  checkpoints under `<checkpoints>/feeds/<feed_id>/`. One feed means one set of streams. Different
+  feeds are never combined, and binding streams never collide with legacy streams.
 
 There is no automatic migration in either direction.
 
@@ -366,7 +400,7 @@ alternative.
 |---|---|---|
 | `not_configured` | startup / feed | no symbol and no binding (§9) |
 | `instrument_config_invalid` | startup | schema error; duplicate `instrument_id`/`broker_id`; duplicate `(broker_id, symbol)` or `(instrument_id, broker_id)`; dangling reference; two brokers with the same `(company, terminal_path)`; path outside the environment |
-| `feed_mode_conflict` | startup / research | mixed legacy and binding settings; mode crossing on an existing stream (§6.5) |
+| `feed_mode_conflict` | startup | mixed or partial legacy/binding environment settings (§9) |
 | `time_offset_conflict` | startup | legacy offset variable set in binding mode |
 | `broker_not_bound` | feed | no broker for the terminal path; no binding for `(instrument_id, broker_id)` |
 | `broker_ambiguous` | feed | more than one broker/binding candidate (defensive; config validation should prevent it) |
@@ -374,9 +408,9 @@ alternative.
 | `symbol_not_found` | feed | `symbol_info(exact)` is `None` |
 | `symbol_not_visible` | feed | exact symbol not visible; never repaired |
 | `instrument_metadata_mismatch` | feed | any semantic or price-grid mismatch, unreadable field, or `custom` symbol |
-| `feed_identity_changed` | feed | identity differs from the process pin after reconnect (latched) |
+| `feed_identity_changed` | feed | identity differs from the process pin after reconnect; delivery to Research stops (latched until operator restart) |
 | `research_instrument_mismatch` | startup / research | research `signals.symbol` ≠ selected `instrument_id` |
-| `research_feed_mismatch` | research | stream feed pin ≠ current `feed_id` |
+| `research_feed_mismatch` | research | a quote's `feed_id` ≠ the feed of the research runtime's journal view (latched until operator restart) |
 
 Existing codes (`terminal_not_running`, `connection_failed`, `terminal_disconnected`,
 `quote_unavailable`, `adapter_not_installed`, `invalid_quote`, `invalid_time_offset`) are
@@ -403,6 +437,10 @@ only through the local discovery tool (§12).
 It also serves as the DEV read-only probe for §4.2's unverified `company` semantics. Running
 it is an operator action, outside this ADR's phase.
 
+ADR-003 scope note: ADR-003's read-only call list governs the **runtime** preview. The tool's
+`symbols_get()` call is not in that list. ADR-003 Amendment 1 deliberately does not broaden it,
+so this ADR's §12 allowlist governs the separate operator tool (open question A4).
+
 ## 13. Configuration and isolation
 
 - `NEXORA_INSTRUMENTS_CONFIG`: JSON file path. It is validated by the same rule `Environment.resolve`
@@ -417,21 +455,28 @@ it is an operator action, outside this ADR's phase.
 - `config/instruments.example.json` uses placeholders only (`EXAMPLE-INSTRUMENT`,
   `example-broker`, `EXAMPLE_SYMBOL`, `Example Company`, `C:\\Path\\To\\terminal64.exe`).
 
-## 14. Open questions
+## 14. Decisions and open questions
 
-Architect (Rin):
-- **A1.** Is reading `terminal_info().company` and `.path` within ADR-003's intent (§4.3), given
-  ADR-003's "connected only" wording? If not, binding mode stays unavailable in V1.
-- **A2.** Accept the residual risk that a same-company server/account switch in one terminal
-  installation is undetectable without `account_info` (§4.2), mitigated by the rule of one
-  terminal installation per `broker_id`?
-- **A3.** The mechanism for a new research stream after a broker change in binding mode (§6.5).
-  Any `RuntimeConfig` change touches `runtime.py`, which is shared with Startup Recovery, M30
-  Phase 2B and Journal V2, so it requires their coordination. Default until decided: fail
-  closed with `research_feed_mismatch`.
+Resolved (Rin):
+- **A1 — RESOLVED:** accept with a narrow ADR-003 amendment (`connected`, `company`, `path`
+  only; `account_info` stays prohibited) (§4.3, ADR-003 Amendment 1).
+- **A2 — RESOLVED:** "same company / different trade server" is an accepted V1 limitation,
+  never presented as verified server identity (§4.2).
+- **A3 — RESOLVED:** operator-mediated new stream. A changed feed fails closed and latches, and
+  after an operator restart the new feed uses its own feed-scoped streams. No runtime migration,
+  no mixing, no `RuntimeConfig` change (§6.4, §6.5).
 
-Quant:
-- **Q-Q1.** The price-grid ↔ P&F `box_size`/`price_precision` compatibility rule (§7).
+Open — Architect (Rin):
+- **A4.** Confirm that the discovery tool's `symbols_get()` / `symbol_info(name)` allowlist
+  (§12) is governed by this ADR as a separate operator tool outside ADR-003's runtime scope.
+  The alternative is to list it in an ADR-003 amendment, which Rin asked to keep narrow. If
+  neither is accepted, the discovery tool is dropped from V1; runtime resolution does not
+  depend on it.
+
+Open — Quant:
+- **Q-Q1 — QUANT DECISION REQUIRED:** the price-grid ↔ P&F `box_size`/`price_precision`
+  compatibility rule (§7). Until decided: validate and report only; never round `box_size`,
+  change `price_precision` or derive P&F config from MT5 metadata.
 
 ## 15. Downstream contract
 
@@ -440,7 +485,7 @@ Quant:
 | P&F / research pipeline | binding mode: event `symbol = instrument_id`; no engine change | Q-Q1 rule, if enforced | engine changes |
 | Pattern Engine (Track D, ADR-024) | inherits `symbol`; `pattern_id` includes symbol, so binding streams get distinct ids | none | any Track D change |
 | M30 Bias (ADR-026) | legacy: `"legacy-adr019"` + its own `feed_key`; binding: `time_contract = "adr025-binding-v1"`, `feed_key = feed_id` verbatim, from quote/event provenance | M30 Phase 2B reads `feed_id` from binding-mode provenance | any ADR-026 change |
-| Experience | scope follows the research stream; binding mode = new scope | none | Experience changes |
+| Experience | scope follows the research stream; binding mode streams live under `feed:<feed_id>:` via the journal view | none | Experience changes |
 | Risk / Paper | symbol equality on `instrument_id`; paper stays linear units, disabled for quote observation | lot/contract conversion using `trade_contract_size` (future ADR) | sizing |
 | Future Trade Journal | records `instrument_id`, `feed_id`, `broker_symbol` | design at its own ADR | — |
 | API | additive `Snapshot.feed` (binding only); `/config` may show `instrument_id`/`broker_id` | — | version bump |
@@ -451,18 +496,24 @@ Quant:
 - **Track D** (`claude/pnf-pattern-engine-v1`): no shared files. ADR-024 is unaffected.
 - **M30** (`claude/m30-next-candle-bias-v1`): ADR-026 Q-M7 already defers to this ADR's
   binding time contract. This rev defines the string `adr025-binding-v1` and the `feed_id`
-  format. ADR-026 line 52 quotes rev 1's legacy `feed_id` formula, which rev 2 removes. ADR-026's
-  own legacy `feed_key` does not depend on it, so this is informational only; the M30 owner is to
-  be notified. ADR-026 is not edited.
-- **Journal V2** (ADR-027): the legacy promise (§9.1) keeps `observation_metadata` bytes
-  unchanged. Binding mode adds `Snapshot.feed` to new streams only. The feed pin is a separate
-  small stream. Both are compatible with ADR-027's authoritative-fact classification.
-- **Shared files for Phase 2:** `apps/api/nexora_api/quotes.py`, `research.py`, `main.py`
-  (feed-pin wiring), `environment.py`. `main.py` currently has **uncommitted changes in the main
-  worktree**, so Phase 2 must rebase on whatever lands and coordinate with its owner.
-  `packages/nexora/research/runtime.py` and `checkpoint_state.py` are **not touched** unless
-  A3 selects a `RuntimeConfig` mechanism. That would need Startup Recovery / M30 Phase 2B /
-  Journal V2 coordination first.
+  format. M30 reads `feed_id` from binding-mode provenance (`source = "mt5-binding-v1:" + feed_id`
+  and `Snapshot.feed` in `observation_metadata`) without computing anything. ADR-026 line 52
+  quotes rev 1's legacy `feed_id` formula, which rev 2 removed. ADR-026's own legacy `feed_key`
+  does not depend on it, so this is informational only; the M30 owner is to be notified.
+  ADR-026 is not edited.
+- **Journal V2** (ADR-027): the legacy promise (§9.1) keeps `observation_metadata` bytes and
+  stream names unchanged. Binding mode adds `Snapshot.feed` and `feed:`-prefixed stream names to
+  new streams only. Rows keep ADR-027's format and authoritative-fact classification. The journal
+  view only renames streams; it never changes payloads.
+- **Startup Recovery** (ADR-022): the checkpoint format, header, anchors and `runtime.py`
+  are unchanged. Binding mode only chooses a feed-scoped checkpoint directory in
+  `configured_checkpoints()`.
+- **Shared files for Phase 2:** `apps/api/nexora_api/quotes.py`, `research.py`
+  (`observe_quote`, `configured_checkpoints`), `main.py` (mode selection, journal-view wiring),
+  `environment.py`. `main.py` currently has **uncommitted changes in the main worktree**, so
+  Phase 2 must rebase on whatever lands and coordinate with its owner.
+  `packages/nexora/research/runtime.py`, `checkpoint_state.py` and `RuntimeConfig` are **not
+  touched** by this ADR.
 
 ## 17. Implementation files (after acceptance)
 
@@ -470,8 +521,13 @@ Quant:
   pure resolver, `feed_id`, comparison rules (no MT5 import).
 - `apps/api/nexora_api/quotes.py`: remove `_select_symbol`; exact resolution; broker check;
   pinning; reconnect revalidation; optional `Snapshot.feed`.
-- `apps/api/nexora_api/research.py`: binding-mode provenance formats; legacy formats unchanged.
-- `apps/api/nexora_api/main.py`: mode selection; feed pin; `research_*` checks.
+- `apps/api/nexora_api/research.py`: binding-mode provenance formats; `research_feed_mismatch`
+  check in `observe_quote`; feed-scoped checkpoint directory; legacy formats unchanged.
+- `apps/api/nexora_api/feed_journal.py` (new): the `feed:<feed_id>:` journal view (`Journal` and,
+  when supported, `AnchoredJournal`).
+- `apps/api/nexora_api/main.py`: mode selection; journal-view wiring for every runtime-stream
+  reader; `research_*` checks.
+- `docs/decisions/ADR-003-local-price-preview.md`: Amendment 1 (already drafted in this branch).
 - `apps/api/nexora_api/environment.py`: path rule for `NEXORA_INSTRUMENTS_CONFIG`.
 - `packages/nexora/market_data/adapters.py`: use the same resolver (P2 parity).
 - `scripts/mt5_discover_symbols.py`, `config/instruments.example.json`, the `config/*.env.example`
@@ -502,9 +558,14 @@ module **raises on access** to `account_info`, `symbol_select`, `login`, `order_
    `feed_identity_changed`, latched, no delivery; legacy fingerprint reconnect behaves the same.
 7. Time: binding offset applied; the legacy variable in binding mode fails; the time-contract change
    changes `feed_id`; raw time retained.
-8. Streams: binding mode event symbol = `instrument_id`; `research_instrument_mismatch`; feed pin
-   written once, idempotent on restart; `research_feed_mismatch`; `feed_mode_conflict` in both
-   directions.
+8. Streams: binding mode event symbol = `instrument_id`; `research_instrument_mismatch`; every
+   runtime stream (research, `:config`, Experience, paper) is written under `feed:<feed_id>:`;
+   the journal view satisfies `isinstance(..., AnchoredJournal)` exactly when the base journal
+   does; checkpoint save/restore works under the view and in `<checkpoints>/feeds/<feed_id>/`;
+   restart with a changed binding → new feed's streams, old feed's rows byte-unchanged, nothing
+   merged; switching back resumes the old streams; a quote with a foreign `feed_id` →
+   `research_feed_mismatch`, latched; `feed_mode_conflict` for every mixed env combination.
+   The legacy mode path uses no view (the golden stream names are asserted).
 9. Legacy byte compatibility: golden `NormalizedPriceEvent`, identity key, `source_event_id`,
    `Quote`/`Snapshot` dumps, `observation_metadata` and stream id versus fixtures captured at
    4f69e9c.
@@ -517,8 +578,10 @@ module **raises on access** to `account_info`, `symbol_select`, `login`, `order_
 ## 19. Consequences
 
 - Removes an accepted-ADR violation and the silent instrument switch.
-- Broker identity is verified as far as the ADR-003-safe metadata allows; the limits are explicit.
-- A broker change can never silently continue a stream.
+- Broker identity is verified as far as the ADR-003-safe metadata allows. "Same company /
+  different trade server" is an explicit, accepted V1 limitation.
+- A broker change can never silently continue or create a stream. It requires an operator
+  restart, and each feed owns its own streams.
 - Legacy deployments keep their journal/stream bytes; one checkpoint-invalidating full replay
   follows the code deploy (ADR-022 design).
 - Out of scope: orders, `symbol_select`, automatic login, account reads, session calendars,
