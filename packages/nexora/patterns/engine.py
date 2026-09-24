@@ -166,11 +166,16 @@ class PatternEngine:
         for transition, structure in steps:
             try:
                 self._state = self._step(self._state, transition, structure, changed, failures)
+                continue
             except _StepRejected as rejected:
                 engine_reasons.append(rejected.code)
             except Exception:  # noqa: BLE001 - a SHADOW feature must never fail the pipeline
-                _log.exception("Pattern engine step failed; state unchanged")
+                _log.exception("Pattern engine step failed; resynchronizing")
                 engine_reasons.append("engine_exception")
+            try:
+                self._state = self._resync(self._state, transition, structure, changed)
+            except Exception:  # noqa: BLE001 - the next step resynchronizes on the gap
+                _log.exception("Pattern engine resync failed; state unchanged")
         return _EventOutcome(
             changed=tuple(changed),
             engine_reasons=tuple(dict.fromkeys(engine_reasons)),
@@ -226,6 +231,61 @@ class PatternEngine:
                 sorted(current.values(), key=lambda r: (r.confirmed_sequence, r.algorithm_id))
             ),
         )
+
+    def _resync(
+        self,
+        state: PatternEngineState,
+        transition: PnfTransition,
+        structure: StructureSnapshot,
+        changed: list[PatternResult],
+    ) -> PatternEngineState:
+        """Re-align with Structure after a rejected step (ADR-024 Decision 9).
+
+        The rejected step detects nothing. Its new pivots are kept for alignment with an
+        unresolved column, so no result can anchor on them until they leave the window.
+        """
+        if structure.symbol != self.symbol or transition.symbol != self.symbol:
+            return state  # foreign input: StructureEngine ignores it too
+        if structure.sequence <= state.sequence:
+            return state  # stale or replayed snapshot: already aligned with a later step
+        pivots = structure.pivots
+        aligned = (
+            structure.sequence == state.sequence + 1
+            and len(pivots) >= state.pivot_count
+            and (
+                state.pivot_count == 0
+                or pivots[state.pivot_count - 1].source_transition_id == state.last_pivot_id
+            )
+        )
+        if aligned:
+            new_pivots = pivots[state.pivot_count :]
+            window = (*state.window, *(WindowPivot(pivot, None) for pivot in new_pivots))
+            window = window[-WINDOW_BOUND:]
+            current = state.current if not new_pivots else ()
+        else:
+            # Sequence gap or rewritten pivot history: nothing in the window can be trusted.
+            window, current = (), ()
+        expired = tuple(
+            replace(
+                result,
+                status="expired",
+                status_reason="input_rejected",
+                status_time=transition.event_time,
+                status_sequence=structure.sequence,
+            )
+            for result in (() if current else state.current)
+        )
+        resynced = PatternEngineState(
+            state_version=1,
+            sequence=structure.sequence,
+            pivot_count=len(pivots),
+            last_pivot_id=pivots[-1].source_transition_id if pivots else None,
+            window=window,
+            pending=(),
+            current=current,
+        )
+        changed.extend(expired)  # only once the new state exists (atomic with it)
+        return resynced
 
     def _evaluate(
         self,

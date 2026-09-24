@@ -15,6 +15,11 @@ Related: [ADR-009](./ADR-009-market-structure-lifecycle.md), [ADR-011](./ADR-011
   - Decision 2 adopts ADR-023 revision 2: `analytical`, `max_lifecycle = SHADOW`.
   - Q-PE5 is resolved; Q-PE1–Q-PE3 stay open for Quant; Q-PE4 is scoped as documentation/display.
   - Pattern detection rules, the `PatternResult` shape and the migration phases are unchanged.
+- **Revision 3** (Phase 2A review fix F1, Rin decision: recoverable resynchronization): a rejected step no longer wedges the engine.
+  - Decision 9 defines step rejection and resynchronization.
+  - Decision 8 moves symbol mismatch and future inputs to engine-level step rejection, which matches the implementation.
+  - Decision 6 adds `status_reason="input_rejected"`.
+  - The `PatternEngineState` fields (Decision 13c) are unchanged.
 
 ## Context — current state (verified at `e2ba8ba`, re-checked at `4f69e9c`: ADR-022 changed no pattern, Signal or Structure code)
 
@@ -104,7 +109,7 @@ class PatternResult:
     pattern_type: str            # legacy names unchanged ("double_top", ...)
     direction: Literal["bullish", "bearish"]
     status: PatternResultStatus
-    status_reason: str           # "detected" | "window_superseded"
+    status_reason: str           # "detected" | "window_superseded" | "input_rejected"
     symbol: str
     resolution: str              # structure_resolution name
     anchors: tuple[PatternAnchor, ...]          # chronological
@@ -153,6 +158,7 @@ This follows the ADR-020 `line_id` precedent (`canonical_hash((symbol, kind, piv
 ```
 (none) --window matches on pivot confirmation--> confirmed
 confirmed --a newer pivot confirms (window shifts)--> expired (status_reason="window_superseded")
+confirmed --a rejected step shifts or discards the window (Decision 9)--> expired (status_reason="input_rejected")
 ```
 
 - This matches today's legacy semantics exactly: a legacy pattern is "current" only while its pivot window is the latest one. `confirmed` results in the snapshot's `current` are the parity set (Decision 10).
@@ -191,25 +197,44 @@ class PatternEngineSnapshot:
 - **DISABLED (unit):** that unit publishes nothing. Its `FeatureUnitStatus` shows `not_evaluated`, and other units run normally. Any results of a unit that becomes DISABLED do not exist, because lifecycle changes only at process start (ADR-023 Decision 6c).
 - **SHADOW:** full computation, published with `lifecycle="SHADOW"`. In V1 nothing reads `pattern_engine` for decisions. Tests must prove that the entire output except the `pattern_engine` key is **bit-identical** between SHADOW and DISABLED runs.
 - **Health per unit:**
-  - `warmup`: pivots below the window size.
-  - `unavailable`: symbol mismatch, pivot `confirmation_time` later than the processing transition, an unresolvable anchor column, or an exception inside the unit.
+  - `warmup`: fewer pivots in the window than the unit's window size (also after a hard resync, Decision 9).
+  - `unavailable`: an unresolvable anchor column in the unit's window (including a pivot recorded from a rejected step), or an exception inside the unit.
   - `ready`: otherwise.
-- **Engine health:** `unavailable` if the input itself is invalid (all units unavailable), `degraded` if some units are unavailable and some are not, otherwise `ready`/`warmup`.
+- **Step rejection is engine-level** (Decision 9): symbol mismatch, duplicate transition, inconsistent Structure, future inputs and an exception outside the units. The event that contains a rejected step publishes engine and every enabled unit `unavailable` with the rejection code, and `current = ()`.
+- **Engine health:** `unavailable` for an event with a rejected step or when all enabled units are unavailable, `degraded` if some units are unavailable and some are not, otherwise `ready`/`warmup`.
 
 ## Decision 9 — Fail-closed rules (frozen)
 
 | Condition | Behaviour |
 |---|---|
 | Anchor column cannot be resolved | Unit `unavailable` (`anchor_column_unresolved`), no result, column never guessed |
-| Inputs contain future confirmation (`confirmation_time > transition.event_time`) | Unit `unavailable` (`future_inputs`), mirroring Signal's `future_inputs` guard |
+| Transition or Structure symbol differs from the engine's (`symbol_mismatch`) | Step rejected (engine level). State unchanged, because StructureEngine also ignores a foreign transition |
+| Transition already consumed (`duplicate_transition`) | Step rejected (engine level), then resynchronized (below) |
+| Structure not a successor of the engine state (`structure_inconsistent`) | Step rejected (engine level), then resynchronized (below) |
+| A new pivot's confirmation is later than the processing transition (`future_inputs`) | Step rejected (engine level), then resynchronized (below). This mirrors Signal's `future_inputs` guard |
 | Exception in one unit | That unit's results for the step are dropped, `unavailable` (`algorithm_exception`), other units continue; the exception is logged, never swallowed silently |
-| Exception outside units | Engine `unavailable`, `current=()`; the pipeline must not fail because of a SHADOW feature |
+| Exception outside units (`engine_exception`) | Step rejected (engine level), logged, then resynchronized (below); the pipeline must not fail because of a SHADOW feature |
 | Feature config missing | All DISABLED (ADR-023) |
 | Feature config invalid, or ACTIVE requested | Startup fails `invalid_features_config` / `feature_lifecycle_not_permitted` |
 | Consumer receives missing/undecodable `pattern_engine` block, unknown `schema_version` or version not pinned | Treat as DISABLED + unavailable; use nothing (ADR-023 Decision 5 codes) |
 | Stale evidence | Impossible by construction: the block is rebuilt every event, and consumers may only pair it with inputs from the same output |
 
 None of these conditions can ever produce positive evidence.
+
+**Step rejection and resynchronization (Revision 3, Rin decision F1).** A rejected step fails closed for its own event, but must never permanently poison later valid steps. StructureEngine is the canonical source of the pivot sequence, so after a rejected step the engine realigns with the Structure snapshot of that step. Rules, applied in order:
+
+1. **Foreign or stale input.** The symbol differs, or `structure.sequence ≤ state.sequence` (a replayed or re-sent snapshot). The state is unchanged; it is already aligned with a later Structure step.
+2. **Aligned successor.** `structure.sequence == state.sequence + 1` and the last consumed pivot is unchanged at its position. The engine adopts `sequence`, `pivot_count` and `last_pivot_id` from Structure.
+   - The step's new pivots are appended to the window with `column_id = None`. They keep the window aligned with Structure's pivot order, but no result can ever anchor on them. Any unit whose window contains one reports `unavailable` (`anchor_column_unresolved`) until it has left the window.
+   - `pending` is cleared, so a later pivot sourced from the rejected transition is also unresolved.
+   - If the step confirmed new pivots, the window has shifted, so every `current` result expires with `status_reason = "input_rejected"`. Otherwise `current` is kept, because the window did not change, and it is published again from the next valid event.
+3. **Misaligned.** A sequence gap, or a rewritten last consumed pivot. Nothing in the window can be trusted: this is a **hard resync**. The engine adopts Structure's counters, and `window`, `pending` and `current` become empty. Current results expire with `input_rejected`. Units report `warmup` and rebuild only from pivots confirmed afterwards.
+
+The rejected step itself never detects a pattern. Every result published after a rejection is therefore built only from pivots whose anchor columns were resolved on accepted steps, so the published set is always a subset of what a clean engine publishes. Once `WINDOW_BOUND + 1` further pivots have been confirmed, the engine state is identical to a clean engine's on the same Structure stream (required tests).
+
+A duplicate transition that StructureEngine also consumed makes Structure's own snapshots the canonical stream from then on. "Next valid canonical step" means the next Structure snapshot with `sequence == state.sequence + 1`.
+
+Recovery is a pure function of the step inputs and the prior state, so full replay and checkpoint restore reproduce it exactly. No resync case requires a full journal replay. If `_resync` itself raises, the state is left unchanged. The next step then shows a sequence gap and takes the hard-resync path, so it cannot wedge. A full replay is required only through ADR-022's own restore validation (Decision 13f).
 
 ## Decision 10 — Backward compatibility
 
@@ -278,7 +303,7 @@ The exact field list is frozen in the Phase 2 implementation PR against this tab
 - `pending` — ≤ 2 `(transition_id, column_id)`. StructureEngine confirms the centre of its last three transitions (ADR-009), so only the previous and the current transition can still become a pivot source;
 - `current` — ≤ 1 confirmed result per unit.
 
-Engine attributes `symbol`, `resolution`, `price_tolerance`, `features` and the per-unit descriptors are configuration and are rebuilt at construction. The state is replaced atomically per transition, so a rejected step leaves no partial state.
+Engine attributes `symbol`, `resolution`, `price_tolerance`, `features` and the per-unit descriptors are configuration and are rebuilt at construction. The state is replaced atomically per transition, so a rejected step leaves no partial state. It is replaced by the resynchronized state of Decision 9, built from the same fields.
 
 **13d. What is never serialized.** Feature config, lifecycles, `feature_config_hash`, `max_lifecycle`, algorithm descriptors, parameters and `parameters_hash`, and the price tolerance (read from `SignalConfig`). All of these are reconstructed from startup configuration. Per-step health is also not state: it is recomputed every step. The per-event `changed` set and the published snapshot are pipeline output, restored through ADR-022's pipeline `_output` (whose `_OUTPUT_SCHEMA` gains the `pattern_engine` key), not through the engine section.
 

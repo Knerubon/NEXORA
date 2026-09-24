@@ -30,6 +30,7 @@ from nexora.patterns import (
     PatternEngineSnapshot,
     PatternResult,
     PatternStep,
+    WindowPivot,
     legacy_parity_key,
     parameters_hash,
     pattern_id,
@@ -572,23 +573,35 @@ def test_duplicate_and_inconsistent_steps_are_rejected() -> None:
     before = engine.state
     duplicate = engine.process_event([(transitions[0], snapshots[0])])
     assert duplicate.status.reason_codes == ("duplicate_transition",)
+    assert engine.state == before  # stale snapshot: already aligned, nothing to resync
     skipped = engine.process_event([(transitions[2], snapshots[2])])
     assert skipped.status.reason_codes == ("structure_inconsistent",)
-    assert engine.state == before
     assert duplicate.current == skipped.current == ()
+    # Sequence gap: hard resync onto Structure, no carried window evidence.
+    assert engine.state.sequence == snapshots[2].sequence
+    assert engine.state.pivot_count == len(snapshots[2].pivots)
+    assert engine.state.window == ()
+    assert engine.state.pending == ()
+    assert engine.state.current == ()
+    following = engine.process_event([(transitions[3], snapshots[3])])
+    assert following.status.health != "unavailable"
+    assert engine.state.sequence == snapshots[3].sequence
 
 
 def test_future_pivot_confirmation_is_rejected() -> None:
     transitions, snapshots = _steps(CASES["double_bottom"])
     engine = _engine()
     engine.process_event(list(zip(transitions[:2], snapshots[:2], strict=True)))
-    before = engine.state
     step = snapshots[2]
     (pivot,) = step.pivots
     future = replace(step, pivots=(replace(pivot, confirmation_time=BASE + timedelta(days=1)),))
     snapshot = engine.process_event([(transitions[2], future)])
     assert snapshot.status.reason_codes == ("future_inputs",)
-    assert engine.state == before
+    assert snapshot.current == ()
+    # Aligned resync: the untrusted pivot is tracked but can never anchor a result.
+    assert engine.state.sequence == future.sequence
+    assert engine.state.window == (WindowPivot(future.pivots[0], None),)
+    assert engine.state.pending == ()
 
 
 def test_unresolved_anchor_column_is_never_guessed() -> None:
@@ -619,6 +632,261 @@ def test_unit_exception_is_isolated() -> None:
     *_, (snapshot, structure) = _drive(engine, events)
     assert [r.pattern_type for r in snapshot.current] == ["double_top"]
     _assert_parity(snapshot, structure, frozenset({"double_top"}))
+
+
+# --- recovery after a rejected step (ADR-024 Decision 9) -------------------------------
+
+REJECTIONS = frozenset(
+    {"symbol_mismatch", "duplicate_transition", "structure_inconsistent", "future_inputs"}
+    | {"engine_exception"}
+)
+RECOVERY_SEEDS = range(8)
+
+
+def _stream(seed: int) -> tuple[list[PnfTransition], list[StructureSnapshot]]:
+    transitions = _transitions(_random_prices(seed, 400))
+    structure = StructureEngine(SYMBOL)
+    return transitions, [structure.process(t) for t in transitions]
+
+
+def _pivot_steps(snapshots: Sequence[StructureSnapshot], start: int) -> list[int]:
+    """Steps whose Structure snapshot confirmed a new pivot."""
+    return [
+        i
+        for i in range(max(start, 1), len(snapshots))
+        if len(snapshots[i].pivots) > len(snapshots[i - 1].pivots)
+    ]
+
+
+def _flush(snapshots: Sequence[StructureSnapshot], bad: int) -> int:
+    """Untrusted pivots (and the first pivot sourced from the rejected transition) leave the
+    window once WINDOW_BOUND + 1 further pivots have been confirmed."""
+    return _pivot_steps(snapshots, bad + 1)[WINDOW_BOUND]
+
+
+def _future(step: StructureSnapshot) -> StructureSnapshot:
+    pivot = step.pivots[-1]
+    shifted = replace(pivot, confirmation_time=pivot.confirmation_time + timedelta(minutes=5))
+    return replace(step, pivots=(*step.pivots[:-1], shifted))
+
+
+def _boom(*_: object, **__: object) -> Any:
+    raise RuntimeError("engine bug")
+
+
+def _assert_recovered(
+    snapshots: Sequence[StructureSnapshot],
+    bad: int,
+    results: Sequence[PatternEngineSnapshot | None],
+) -> int:
+    """Fail closed at ``bad``, never fabricate afterwards, converge once the window flushes.
+
+    Returns the number of post-flush events with legacy evidence (coverage check).
+    """
+    rejected = results[bad]
+    assert rejected is not None
+    assert rejected.current == () and rejected.status.health == "unavailable"
+    flush = _flush(snapshots, bad)
+    covered = 0
+    for i in range(bad + 1, len(results)):
+        snapshot = results[i]
+        assert snapshot is not None
+        assert not set(snapshot.status.reason_codes) & REJECTIONS, (i, snapshot.status)
+        expected = {_legacy_key(e) for e in _legacy(snapshots[i])}
+        actual = {legacy_parity_key(r) for r in snapshot.current}
+        assert actual <= expected, i  # absences only, never fabricated evidence
+        if i >= flush:
+            assert actual == expected, i
+            covered += bool(expected)
+    return covered
+
+
+def _run(
+    transitions: Sequence[PnfTransition],
+    snapshots: Sequence[StructureSnapshot],
+    bad: int,
+    inject: Any,
+) -> tuple[list[PatternEngineSnapshot | None], PatternEngine, PatternEngine]:
+    engine, clean = _engine(), _engine()
+    results: list[PatternEngineSnapshot | None] = []
+    flush = _flush(snapshots, bad)
+    for i, (transition, structure) in enumerate(zip(transitions, snapshots, strict=True)):
+        clean.process_event([(transition, structure)])
+        if i == bad:
+            results.append(inject(engine, transition, structure))
+        else:
+            results.append(engine.process_event([(transition, structure)]))
+        if i >= flush:
+            assert engine.state == clean.state, i  # full convergence, not only parity
+    return results, engine, clean
+
+
+@pytest.mark.parametrize("seed", RECOVERY_SEEDS)
+def test_future_inputs_step_fails_closed_then_recovers(seed: int) -> None:
+    """A: the rejected pivot is kept for alignment but never anchors a result."""
+    transitions, snapshots = _stream(seed)
+    bad = _pivot_steps(snapshots, 40)[0]
+
+    def inject(engine: PatternEngine, t: PnfTransition, s: StructureSnapshot) -> Any:
+        before = engine.state
+        snapshot = engine.process_event([(t, _future(s))])
+        assert snapshot.status.reason_codes == ("future_inputs",)
+        assert engine.state.sequence == s.sequence
+        assert engine.state.window[-1].column_id is None
+        assert {r.pattern_id for r in snapshot.changed} == {r.pattern_id for r in before.current}
+        assert all(r.status_reason == "input_rejected" for r in snapshot.changed)
+        return snapshot
+
+    results, engine, clean = _run(transitions, snapshots, bad, inject)
+    assert _assert_recovered(snapshots, bad, results) > 0
+    assert engine.state == clean.state
+
+
+def test_duplicate_transition_recovers_on_the_next_canonical_step() -> None:
+    """B: Structure also processed the duplicate, so its snapshots are the canonical input."""
+    covered = 0
+    for seed in RECOVERY_SEEDS:
+        original, _ = _stream(seed)
+        index = 60
+        transitions = [*original[:index], original[index - 1], *original[index:]]
+        structure = StructureEngine(SYMBOL)
+        snapshots = [structure.process(t) for t in transitions]
+        engine = _engine()
+        results: list[PatternEngineSnapshot | None] = [
+            engine.process_event([(t, s)]) for t, s in zip(transitions, snapshots, strict=True)
+        ]
+        duplicate = results[index]
+        assert duplicate is not None
+        assert duplicate.status.reason_codes == ("duplicate_transition",)
+        assert engine.state.sequence == snapshots[-1].sequence
+        covered += _assert_recovered(snapshots, index, results)
+    assert covered > 0
+
+
+@pytest.mark.parametrize("method", ["_step", "_evaluate"])
+@pytest.mark.parametrize("seed", RECOVERY_SEEDS)
+def test_engine_exception_outside_units_recovers(
+    seed: int, method: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C: an exception outside the units rejects one step, not the stream."""
+    transitions, snapshots = _stream(seed)
+    bad = _pivot_steps(snapshots, 40)[0]
+
+    def inject(engine: PatternEngine, t: PnfTransition, s: StructureSnapshot) -> Any:
+        with monkeypatch.context() as patch:
+            patch.setattr(PatternEngine, method, _boom)
+            snapshot = engine.process_event([(t, s)])
+        assert snapshot.status.reason_codes == ("engine_exception",)
+        assert engine.state.sequence == s.sequence
+        return snapshot
+
+    results, engine, clean = _run(transitions, snapshots, bad, inject)
+    assert _assert_recovered(snapshots, bad, results) > 0
+    assert engine.state == clean.state
+
+
+def test_engine_exception_without_new_pivot_keeps_current_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """C: the window did not shift, so current evidence survives (published next step)."""
+    for seed in RECOVERY_SEEDS:
+        transitions, snapshots = _stream(seed)
+        engine = _engine()
+        pivots = set(_pivot_steps(snapshots, 0))
+        for i, (t, s) in enumerate(zip(transitions, snapshots, strict=True)):
+            if i > 40 and i not in pivots and engine.state.current:
+                before = engine.state.current
+                with monkeypatch.context() as patch:
+                    patch.setattr(PatternEngine, "_step", _boom)
+                    rejected = engine.process_event([(t, s)])
+                assert rejected.current == () and rejected.changed == ()
+                assert engine.state.current == before
+                assert engine.state.sequence == s.sequence and engine.state.pending == ()
+                return
+            engine.process_event([(t, s)])
+    pytest.fail("no non-pivot step with current evidence found")
+
+
+def test_recovery_is_deterministic_across_replay_and_restore() -> None:
+    """D: full replay and a mid-stream state restore reproduce the recovery, not a wedge."""
+    transitions, snapshots = _stream(3)
+    bad = _pivot_steps(snapshots, 40)[0]
+    steps = [
+        (t, _future(s) if i == bad else s)
+        for i, (t, s) in enumerate(zip(transitions, snapshots, strict=True))
+    ]
+    live, replayed, rerun = _engine(), _engine(), _engine()
+    restored: PatternEngine | None = None
+    live_output: list[Any] = []
+    for i, step in enumerate(steps):
+        live_output.append(canonical_serialize(live.process_event([step])))
+        replayed.replay_event([step])
+        rerun_snapshot = rerun.process_event([step])
+        assert canonical_serialize(rerun_snapshot) == live_output[-1]
+        if restored is not None:
+            restored.process_event([step])
+        if i == bad:  # restart right after the rejected step, from its recovered state
+            restored = _engine()
+            restored._state = live.state
+    assert restored is not None
+    assert live.state == replayed.state == rerun.state == restored.state
+    final = live.snapshot()
+    assert not set(final.status.reason_codes) & REJECTIONS
+    assert live.state.sequence == snapshots[-1].sequence
+
+
+@pytest.mark.parametrize("seed", RECOVERY_SEEDS)
+def test_structure_sequence_gap_hard_resyncs_and_converges(seed: int) -> None:
+    """E: a gap cannot be aligned, so the window is discarded and rebuilt from new pivots."""
+    transitions, snapshots = _stream(seed)
+    skip = _pivot_steps(snapshots, 40)[0]
+    engine, clean = _engine(), _engine()
+    results: list[PatternEngineSnapshot | None] = []
+    for i, (t, s) in enumerate(zip(transitions, snapshots, strict=True)):
+        clean.process_event([(t, s)])
+        if i == skip:
+            results.append(None)  # Structure advanced, the engine never saw this step
+            continue
+        before = engine.state
+        results.append(engine.process_event([(t, s)]))
+        if i >= _flush(snapshots, skip + 1):
+            assert engine.state == clean.state, i
+        if i == skip + 1:
+            rejected = results[-1]
+            assert rejected is not None
+            assert rejected.status.reason_codes == ("structure_inconsistent",)
+            assert engine.state.window == ()
+            assert engine.state.pending == ()
+            assert engine.state.current == ()
+            assert engine.state.sequence == s.sequence
+            assert engine.state.pivot_count == len(s.pivots)
+            expired = [r for r in rejected.changed if r.status == "expired"]
+            assert {r.pattern_id for r in expired} == {r.pattern_id for r in before.current}
+            assert all(r.status_reason == "input_rejected" for r in expired)
+    _assert_recovered(snapshots, skip + 1, results)
+    assert engine.state == clean.state
+
+
+@pytest.mark.parametrize("seed", RECOVERY_SEEDS)
+def test_rewritten_pivot_history_hard_resyncs_and_converges(seed: int) -> None:
+    """E: same sequence but a different last consumed pivot is a history rewrite."""
+    transitions, snapshots = _stream(seed)
+    bad = _pivot_steps(snapshots, 40)[0]
+
+    def inject(engine: PatternEngine, t: PnfTransition, s: StructureSnapshot) -> Any:
+        count = engine.state.pivot_count
+        rewritten = replace(s.pivots[count - 1], source_transition_id="rewritten:pivot")
+        forged = replace(s, pivots=(*s.pivots[: count - 1], rewritten, *s.pivots[count:]))
+        snapshot = engine.process_event([(t, forged)])
+        assert snapshot.status.reason_codes == ("structure_inconsistent",)
+        assert engine.state.window == ()
+        assert engine.state.current == ()
+        assert engine.state.sequence == s.sequence
+        return snapshot
+
+    results, engine, clean = _run(transitions, snapshots, bad, inject)
+    _assert_recovered(snapshots, bad, results)
+    assert engine.state == clean.state
 
 
 def test_invalid_engine_parameters_fail() -> None:
