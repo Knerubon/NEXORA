@@ -14,7 +14,7 @@ from nexora.artifacts import canonical_hash, decode
 from nexora.experience import ExperienceService
 from nexora.market_data.models import NormalizedPriceEvent
 from nexora.paper.session import PaperSession, PaperSessionConfig
-from nexora.research import PipelineConfig, ResearchPipeline
+from nexora.research import PipelineConfig, ResearchPipeline, checkpoint_state
 from nexora.research import checkpoint as ckpt
 from nexora.signals import ResearchSignal
 from nexora.storage import Journal
@@ -127,20 +127,25 @@ class ResearchRuntime:
                 header.last_sequence,
                 header.event_count,
             )
-            state = ckpt.verify(
+            payload = ckpt.verify(
                 header, blob, environment=store.environment, stream=self.stream, journal=journal
             )
-            engine, events = state["engine"], state["events"]
+            try:
+                # Explicit per-component contracts onto freshly constructed components.
+                engine, events, memory = checkpoint_state.restore_state(
+                    payload, self.config.pipeline
+                )
+            except checkpoint_state.StateInvalid:
+                raise ckpt.CheckpointRejected("state_invalid") from None
             if (
-                not isinstance(engine, ResearchPipeline)
-                or not events
+                not events
                 or len(events) != header.event_count
                 or events[-1].identity_key != header.last_event_key
                 or ckpt.state_hash(engine.snapshot()) != header.state_hash
             ):
                 raise ckpt.CheckpointRejected("state_validation_failed")
             experience = ExperienceService(self.journal, self.config, self.stream)
-            experience.restore_state(state["experience"])
+            experience.restore_state(memory)
         except Exception as error:
             reason = (
                 error.reason if isinstance(error, ckpt.CheckpointRejected) else "checkpoint_corrupt"
@@ -169,11 +174,9 @@ class ResearchRuntime:
             if identity is None or identity[0] != self._events[-1].identity_key:
                 raise ValueError("checkpoint_anchor_mismatch")
             blob, blob_hash = ckpt.encode(
-                {
-                    "engine": self.engine,
-                    "events": self._events,
-                    "experience": self.experience.checkpoint_state(),
-                }
+                checkpoint_state.encode_state(
+                    self.engine, self._events, self.experience.checkpoint_state()
+                )
             )
             store.save(
                 ckpt.CheckpointHeader(

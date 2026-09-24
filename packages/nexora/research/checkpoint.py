@@ -1,11 +1,13 @@
 """Disposable research recovery checkpoints (ADR-022).
 
 The research journal is the authoritative source of truth. A checkpoint is an
-optional accelerator: an integrity-checked copy of the runtime's in-memory
-state after exactly the journal rows up to ``last_sequence``, stored as one
-file in the environment's own checkpoint directory. Every check in ``verify``
-must pass before any of its state is trusted; any failure means the caller
-performs a full journal replay. Deleting a checkpoint never destroys history.
+optional accelerator: an integrity-checked, explicit JSON representation of
+the runtime's state after exactly the journal rows up to ``last_sequence``
+(see ``checkpoint_state``), stored as one file in the environment's own
+checkpoint directory. Every check in ``verify`` must pass before any of its
+state is trusted; any failure means the caller performs a full journal replay.
+Decoding is plain JSON parsing: no step can instantiate arbitrary objects or
+execute code. Deleting a checkpoint never destroys history.
 """
 
 from __future__ import annotations
@@ -13,7 +15,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import pickle
 import sys
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass
@@ -21,11 +22,11 @@ from functools import cache
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
-from nexora.artifacts import canonical_hash
+from nexora.artifacts import canonical_hash, decode
 
+# Header line + UTF-8 JSON payload. Version 1 (pickle payload) was never released.
 FORMAT = "nexora-research-checkpoint"
-SCHEMA_VERSION = 1
-_PICKLE_PROTOCOL = 5
+SCHEMA_VERSION = 2
 _MAX_HEADER_BYTES = 64 * 1024
 
 
@@ -118,14 +119,17 @@ class CheckpointStore:
         if end < 0:
             raise CheckpointRejected("header_corrupt")
         try:
-            header = CheckpointHeader(**json.loads(data[:end]))
+            header = decode(CheckpointHeader, json.loads(data[:end]))
         except Exception:
             raise CheckpointRejected("header_corrupt") from None
         return header, data[end + 1 :]
 
 
-def encode(state: Any) -> tuple[bytes, str]:
-    blob = pickle.dumps(state, protocol=_PICKLE_PROTOCOL)
+def encode(state: dict[str, Any]) -> tuple[bytes, str]:
+    """Deterministic UTF-8 JSON for JSON-compatible state from ``checkpoint_state``."""
+    blob = json.dumps(
+        state, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+    ).encode("utf-8")
     return blob, hashlib.sha256(blob).hexdigest()
 
 
@@ -137,7 +141,7 @@ def verify(
     stream: str,
     journal: AnchoredJournal,
 ) -> Any:
-    """Return the decoded state, or raise CheckpointRejected before trusting any of it."""
+    """Return the parsed JSON state, or raise CheckpointRejected before trusting any of it."""
     if header.format != FORMAT or header.schema_version != SCHEMA_VERSION:
         raise CheckpointRejected("schema_version_mismatch")
     if header.environment != environment:
@@ -146,7 +150,7 @@ def verify(
         raise CheckpointRejected("stream_mismatch")
     if header.code_fingerprint != code_fingerprint():
         raise CheckpointRejected("code_fingerprint_mismatch")
-    # Integrity of the bytes is established before they are ever unpickled.
+    # Integrity of the bytes is established before they are parsed.
     if len(blob) != header.blob_size or hashlib.sha256(blob).hexdigest() != header.blob_hash:
         raise CheckpointRejected("blob_hash_mismatch")
     identity = journal.row_identity(stream, header.last_sequence)
@@ -155,7 +159,10 @@ def verify(
     if journal.count_through(stream, header.last_sequence) != header.event_count:
         raise CheckpointRejected("event_count_mismatch")
     try:
-        # Only integrity-checked bytes this environment's own runtime wrote.
-        return pickle.loads(blob)  # noqa: S301
-    except Exception:
+        return json.loads(blob.decode("utf-8"), parse_constant=_reject_constant)
+    except (UnicodeDecodeError, ValueError, RecursionError):
         raise CheckpointRejected("decode_failed") from None
+
+
+def _reject_constant(name: str) -> Any:
+    raise ValueError(f"non_finite_json:{name}")

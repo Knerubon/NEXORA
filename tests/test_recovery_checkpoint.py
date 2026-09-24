@@ -16,7 +16,8 @@ import pytest
 from nexora.artifacts import canonical_serialize
 from nexora.market_data.models import NormalizedPriceEvent
 from nexora.paper.session import PaperSessionConfig
-from nexora.research import ResearchPipeline
+from nexora.research import ResearchPipeline, checkpoint_state
+from nexora.research import checkpoint as checkpoints
 from nexora.research.checkpoint import CheckpointStore
 from nexora.research.runtime import ResearchRuntime, RuntimeConfig
 from nexora.risk import risk_policy_fixture
@@ -113,8 +114,8 @@ def journal_rows(path: Path) -> list[tuple[Any, ...]]:
         connection.close()
 
 
-def rewrite_header(store: CheckpointStore, stream: str, **changes: Any) -> None:
-    path = store.path_for(stream)
+def rewrite_header(store: CheckpointStore, target: str, /, **changes: Any) -> None:
+    path = store.path_for(target)
     raw = path.read_bytes()
     end = raw.index(b"\n")
     header = json.loads(raw[:end])
@@ -259,6 +260,7 @@ def test_checkpoint_plus_delta_state_equals_full_replay(tmp_path: Path, paper: b
         assert accelerated.last_recovery["replayed"] == 6
         assert reference.last_recovery["replayed"] == 32
         assert state(accelerated) == state(reference) == state(runtime)
+        assert exact_state(accelerated) == exact_state(reference)
         # Recovery never rewrites, drops or adds journal history.
         assert journal_rows(tmp_path / "r.sqlite") == rows_before
         # Both continue identically on new live events.
@@ -627,6 +629,275 @@ def test_deleting_checkpoint_never_touches_history(tmp_path: Path) -> None:
         assert recovered.last_recovery["reason"] == "no_checkpoint"
         assert state(recovered) == expected
         assert journal_rows(tmp_path / "r.sqlite") == rows
+    finally:
+        journal.close()
+
+
+# Explicit serialization (no executable decoding) --------------------------------------
+_GADGET_FIRED: list[str] = []
+
+
+def _gadget_payload() -> None:  # pragma: no cover - must never run
+    _GADGET_FIRED.append("executed")
+
+
+class _Gadget:
+    def __reduce__(self) -> tuple[Any, tuple[()]]:
+        return (_gadget_payload, ())
+
+
+def payload_of(store: CheckpointStore, stream: str) -> Any:
+    return json.loads(store.path_for(stream).read_bytes().split(b"\n", 1)[1])
+
+
+def rewrite_payload(store: CheckpointStore, stream: str, blob: bytes) -> None:
+    """Replace the payload and re-sign its hash/size, as a forger with file access could."""
+    path = store.path_for(stream)
+    header = json.loads(path.read_bytes().split(b"\n", 1)[0])
+    header.update(blob_hash=hashlib.sha256(blob).hexdigest(), blob_size=len(blob))
+    path.write_bytes(json.dumps(header, sort_keys=True).encode() + b"\n" + blob)
+
+
+def exact_state(runtime: ResearchRuntime) -> dict[str, Any]:
+    """Byte-exact explicit state (Decimal exponents, datetime offsets, dict order)."""
+    return checkpoint_state.encode_state(
+        runtime.engine, list(runtime.events()), runtime.experience.checkpoint_state()
+    )
+
+
+def test_checkpoint_payload_is_explicit_versioned_json(tmp_path: Path) -> None:
+    config, journal, store, _ = seeded(tmp_path, 25)
+    try:
+        stream = start(config, journal, None).stream
+        raw = store.path_for(stream).read_bytes()
+        header = json.loads(raw.split(b"\n", 1)[0])
+        assert header["schema_version"] == checkpoints.SCHEMA_VERSION == 2
+        payload = payload_of(store, stream)
+        assert payload["state_version"] == checkpoint_state.STATE_VERSION
+        assert set(payload) == {"state_version", "events", "pipeline", "experience"}
+        assert b"\x80\x05" not in raw and b"pickle" not in raw.lower()
+    finally:
+        journal.close()
+
+
+def test_exact_state_round_trip_and_parity(tmp_path: Path) -> None:
+    """Stricter than canonical parity: the explicit encoded state is identical."""
+    config, journal, store, _ = seeded(tmp_path, 20)
+    try:
+        stream = stream_events(34)
+        runtime = start(config, journal, store)
+        for event in stream[20:25]:
+            runtime.ingest(event)
+        commit_active_signal(journal, runtime.stream, stream[25])
+        runtime = start(config, journal, store)
+        for event in stream[26:30]:
+            runtime.ingest(event)
+        accelerated = start(config, journal, store)
+        reference = full_replay(config, journal)
+        assert accelerated.last_recovery["mode"] == "checkpoint"
+        assert exact_state(accelerated) == exact_state(reference)
+        engine, events, memory = checkpoint_state.restore_state(
+            json.loads(json.dumps(exact_state(reference))), config.pipeline
+        )
+        assert events == list(reference.events())
+        assert checkpoint_state.encode_state(engine, events, memory) == exact_state(reference)
+
+        # Samples shared across pending episodes stay shared (stored once, not copied).
+        def sharing(samples: dict[str, list[Any]]) -> list[list[int]]:
+            first: dict[int, int] = {}
+            return [
+                [first.setdefault(id(r), len(first)) for r in rows] for rows in samples.values()
+            ]
+
+        original = reference.experience.checkpoint_state()["samples"]
+        assert sum(map(len, original.values())) > len({id(r) for v in original.values() for r in v})
+        assert sharing(memory["samples"]) == sharing(original)
+        # One writer per journal: continue live, then compare with a fresh full replay.
+        for event in stream[30:]:
+            accelerated.ingest(event)
+        assert exact_state(accelerated) == exact_state(full_replay(config, journal))
+    finally:
+        journal.close()
+
+
+def test_component_contracts_cover_every_attribute(tmp_path: Path) -> None:
+    """Fails when a component gains state the explicit checkpoint contract does not capture."""
+    from dataclasses import fields as dataclass_fields
+
+    from nexora.pnf.models import _MutableSymbolState
+
+    journal = SQLiteJournal(tmp_path / "r.sqlite")
+    try:
+        runtime = start(runtime_config(), journal, None)
+        pipeline = runtime.engine
+        runner = next(iter(pipeline.matrix.runners.values()))
+        attributes = {
+            "ResearchPipeline": set(vars(pipeline)),
+            "ExperienceService": set(vars(runtime.experience)),
+            "MatrixEngine": {f.name for f in dataclass_fields(pipeline.matrix)},
+            "AdaptivePnfRunner": {f.name for f in dataclass_fields(runner)},
+            "AdaptiveBoxSizer": {f.name for f in dataclass_fields(runner.sizer)},
+            "PnfEngine": {f.name for f in dataclass_fields(runner.pnf_engine)},
+            "_MutableSymbolState": {f.name for f in dataclass_fields(_MutableSymbolState)},
+            "StructureEngine": {f.name for f in dataclass_fields(pipeline.structure)},
+            "TrendlineEngine": {f.name for f in dataclass_fields(pipeline.trendline)},
+            "MarketRegimeEngine": {f.name for f in dataclass_fields(pipeline.regime)},
+            "SignalEngine": {f.name for f in dataclass_fields(pipeline.signals)},
+        }
+        assert attributes == {k: set(v) for k, v in checkpoint_state.COVERED_FIELDS.items()}
+    finally:
+        journal.close()
+
+
+def test_pickle_payload_is_never_executed(tmp_path: Path) -> None:
+    import pickle
+
+    config, journal, store, _ = seeded(tmp_path, 15)
+    try:
+        stream = start(config, journal, None).stream
+        rewrite_payload(store, stream, pickle.dumps(_Gadget()))
+        recovered = start(config, journal, store)
+        assert _GADGET_FIRED == []
+        assert (recovered.last_recovery["mode"], recovered.last_recovery["reason"]) == (
+            "full",
+            "decode_failed",
+        )
+        assert state(recovered) == state(full_replay(config, journal))
+    finally:
+        journal.close()
+
+
+def _events_path(payload: dict[str, Any]) -> list[Any]:
+    events: list[Any] = payload["events"]
+    return events
+
+
+@pytest.mark.parametrize(
+    ("tamper", "reason"),
+    [
+        # Type tags of object-graph serializers are unknown fields, never classes to build.
+        (lambda p: _events_path(p)[0].update({"py/object": "subprocess.Popen"}), "state_invalid"),
+        (
+            lambda p: _events_path(p).__setitem__(0, {"__class__": "os.system", "args": "x"}),
+            "state_invalid",
+        ),
+        (
+            lambda p: p["pipeline"]["structure"].update({"__reduce__": ["os.system", ["x"]]}),
+            "state_invalid",
+        ),
+        (lambda p: p["pipeline"]["structure"].pop("pivots"), "state_invalid"),
+        (lambda p: p["pipeline"]["regime"].update({"sequence": "7"}), "state_invalid"),
+        (
+            lambda p: p["pipeline"]["regime"].update({"previous_label": "bull_market"}),
+            "state_invalid",
+        ),
+        (lambda p: p.update({"state_version": 99}), "state_invalid"),
+        (lambda p: p["pipeline"]["matrix"]["runners"].reverse(), "state_invalid"),
+        (lambda p: _events_path(p)[0].update({"price": "NaN"}), "state_invalid"),
+        (lambda p: p["experience"]["seen"].append(p["experience"]["seen"][0]), "state_invalid"),
+        (lambda p: p["experience"]["samples"].append(["bogus", [10**6]]), "state_invalid"),
+        # Decodes, but disagrees with the other components or the recorded state hash.
+        (lambda p: p["pipeline"]["seen"].pop(), "state_invalid"),
+        (
+            lambda p: p["pipeline"]["matrix"]["runners"][0][1]["pnf"][0][
+                "seen_identity_keys"
+            ].pop(),
+            "state_invalid",
+        ),
+        (
+            lambda p: p["pipeline"]["output"][0].__setitem__(1, "tampered-version"),
+            "state_validation_failed",
+        ),
+    ],
+)
+def test_malformed_payload_fails_safely_without_partial_adoption(
+    tmp_path: Path, tamper: Any, reason: str
+) -> None:
+    config, journal, store, _ = seeded(tmp_path, 25)
+    try:
+        stream = start(config, journal, None).stream
+        payload = payload_of(store, stream)
+        tamper(payload)
+        rewrite_payload(store, stream, checkpoints.encode(payload)[0])
+        recovered = start(config, journal, store)
+        assert (recovered.last_recovery["mode"], recovered.last_recovery["reason"]) == (
+            "full",
+            reason,
+        )
+        assert recovered.last_recovery["replayed"] == 25
+        assert exact_state(recovered) == exact_state(full_replay(config, journal))
+    finally:
+        journal.close()
+
+
+def test_late_component_failure_adopts_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A valid pipeline section followed by a failing Experience section leaves no trace."""
+    config, journal, store, _ = seeded(tmp_path, 25)
+    try:
+        restored: list[Any] = []
+        original = checkpoint_state._restore_pipeline
+
+        def capture(*args: Any) -> Any:
+            restored.append(original(*args))
+            return restored[-1]
+
+        def reject(value: Any) -> Any:
+            raise checkpoint_state.StateInvalid("synthetic")
+
+        monkeypatch.setattr(checkpoint_state, "_restore_pipeline", capture)
+        monkeypatch.setattr(checkpoint_state, "_restore_experience", reject)
+        recovered = start(config, journal, store)
+        assert restored, "pipeline section was restored before the failure"
+        assert recovered.engine is not restored[0]
+        assert recovered.last_recovery["reason"] == "state_invalid"
+        monkeypatch.undo()
+        assert exact_state(recovered) == exact_state(full_replay(config, journal))
+    finally:
+        journal.close()
+
+
+@pytest.mark.parametrize(
+    ("blob", "reason"),
+    [
+        (b'{"state_version": NaN}', "decode_failed"),
+        (b"\xff\xfe not utf-8", "decode_failed"),
+        (b"[1, 2, 3]", "state_invalid"),
+        (b'"text"', "state_invalid"),
+        (b"{}", "state_invalid"),
+    ],
+)
+def test_non_state_json_falls_back(tmp_path: Path, blob: bytes, reason: str) -> None:
+    config, journal, store, _ = seeded(tmp_path, 12)
+    try:
+        rewrite_payload(store, start(config, journal, None).stream, blob)
+        recovered = start(config, journal, store)
+        assert recovered.last_recovery["reason"] == reason
+        assert state(recovered) == state(full_replay(config, journal))
+    finally:
+        journal.close()
+
+
+@pytest.mark.parametrize(
+    ("changes", "reason"),
+    [
+        ({"stream": "research:other"}, "stream_mismatch"),
+        ({"environment": "production"}, "environment_mismatch"),
+        ({"schema_version": 1}, "schema_version_mismatch"),
+        ({"last_sequence": "5"}, "header_corrupt"),
+        ({"unexpected": True}, "header_corrupt"),
+    ],
+)
+def test_header_identity_and_types_are_enforced(
+    tmp_path: Path, changes: dict[str, Any], reason: str
+) -> None:
+    config, journal, store, _ = seeded(tmp_path, 12)
+    try:
+        rewrite_header(store, start(config, journal, None).stream, **changes)
+        recovered = start(config, journal, store)
+        assert recovered.last_recovery["reason"] == reason
+        assert state(recovered) == state(full_replay(config, journal))
     finally:
         journal.close()
 
