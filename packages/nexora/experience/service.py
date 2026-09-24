@@ -93,6 +93,26 @@ class ExperienceService:
                 del self._samples[eid]
         self._seen[identity] = digest
 
+    def checkpoint_state(self) -> dict[str, Any]:
+        """Replay-derived memory only; every record it refers to is already journaled."""
+        return {
+            "last": self._last,
+            "pending": self._pending,
+            "states": self._states,
+            "samples": self._samples,
+            "completed": self._completed,
+            "seen": self._seen,
+        }
+
+    def restore_state(self, state: dict[str, Any]) -> None:
+        """Adopt memory captured by `checkpoint_state` after the same journal rows."""
+        self._last = state["last"]
+        self._pending = state["pending"]
+        self._states = state["states"]
+        self._samples = state["samples"]
+        self._completed = state["completed"]
+        self._seen = state["seen"]
+
     def _persist_state(
         self,
         experience: Experience,

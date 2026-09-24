@@ -11,6 +11,7 @@ from typing import Any, cast
 from nexora.artifacts import canonical_hash, decode
 from nexora.backtest.models import BacktestConfig
 from nexora.market_data.models import NormalizedPriceEvent, PriceSource
+from nexora.research.checkpoint import CheckpointStore
 from nexora.research.runtime import ResearchRuntime, RuntimeConfig
 from nexora.storage import Journal, PostgresJournal, SQLiteJournal
 
@@ -32,12 +33,23 @@ def configured_journal() -> Journal:
     return SQLiteJournal(path)
 
 
+def configured_checkpoints() -> CheckpointStore | None:
+    """Recovery checkpoints live only in the resolved environment's own directory (ADR-022)."""
+    setting = os.environ.get("NEXORA_RESEARCH_CHECKPOINTS", "on")
+    if setting not in {"on", "off"}:
+        raise ValueError("invalid_research_checkpoints")
+    if setting == "off":
+        return None
+    environment = Environment.resolve()
+    return CheckpointStore(environment.checkpoints, environment=environment.name)
+
+
 def configured_runtime(journal: Journal) -> ResearchRuntime | None:
     filename = os.environ.get("NEXORA_RESEARCH_CONFIG")
     if not filename:
         return None
     config = decode(RuntimeConfig, json.loads(Path(filename).read_text(encoding="utf-8")))
-    return ResearchRuntime(config, journal)
+    return ResearchRuntime(config, journal, checkpoints=configured_checkpoints())
 
 
 def configured_backtests() -> dict[str, BacktestConfig]:

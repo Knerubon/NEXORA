@@ -46,7 +46,7 @@ Never carry exported PROD settings into a DEV shell. Templates are in `config/`.
 | Root | DEV worktree/.runtime/development | stable worktree/.runtime/production |
 | SQLite | root/storage/research.sqlite | root/storage/research.sqlite |
 | State/PIDs | root/state | root/state |
-| Checkpoints (reserved; engine currently replays) | root/checkpoints | root/checkpoints |
+| Checkpoints (research recovery, [ADR-022](decisions/ADR-022-startup-recovery-checkpoint-v1.md)) | root/checkpoints | root/checkpoints |
 | Logs | root/logs/api.log and web.log | root/logs/api.log and web.log |
 | Application cache (reserved) | root/cache | root/cache |
 | Next build/cache | DEV worktree/apps/web/.next | stable worktree/apps/web/.next |
@@ -82,8 +82,9 @@ start/stop/build operations; after a launcher crash, inspect its recorded PID be
 manually removing a stale lock. Do not delete ownership markers to bypass a failure.
 
 `start` confirms process creation, not completion of engine recovery. Check `/health`,
-`/state` and the environment-specific logs. Recovery still blocks API readiness in V1;
-this task isolates it from the other environment, and does not implement checkpoints.
+`/state` and the environment-specific logs. Recovery still blocks API readiness; since
+[ADR-022](decisions/ADR-022-startup-recovery-checkpoint-v1.md) it restores a verified checkpoint
+from this environment's own `checkpoints` directory and replays only later journal rows.
 Do not run bare uvicorn/npm commands as a substitute for the supported launcher.
 
 ## Guards and limits
