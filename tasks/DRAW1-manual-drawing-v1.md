@@ -2,7 +2,7 @@
 
 status: in_review
 translation_needed: false
-role: DEV-CHART (self-review; independent review pending)
+role: DEV-CHART (independent review APPROVED at ce5a934, no BLOCKING findings; Rin integration decisions below)
 base_commit: 816c8d701d9678e2cc78fe46857eb28cf0b19c3f (origin/main, Merge PR #39)
 branch: claude/chart-manual-drawing-v1
 worktree: D:\NEXORA\NEXORA-MANUAL-DRAWING
@@ -14,6 +14,22 @@ horizontal lines and trend lines on the live P&F chart, with a toggle to show/hi
 Sources: [requirements](../docs/requirements.md), [architecture](../docs/architecture.md),
 [root workflow](../AGENTS.md) sections 2, 7 and 9, [web AGENTS.md](../apps/web/AGENTS.md).
 Builds on the Chart Visual Intelligence V1 overlays (`chart-overlays.tsx`, `overlay-model.ts`).
+
+## Accepted deviations (Rin integration decision, 2026-09-26)
+
+The original DRAW-1 scope expected **session-only state** and **Trend Line only**. The
+implemented V1 intentionally extends this with:
+
+- **versioned per-symbol localStorage persistence** (`nexora:manual-drawings:v1:<symbol>`,
+  `version: 1`; any other version is ignored) — decision `LOCALSTORAGE: ACCEPT V1`
+- **manual H-line** (horizontal line tool) — decision `H-LINE: ACCEPT V1`
+
+Rin reviewed and ACCEPTED both extensions for DRAW-1 V1. Both remain frontend/manual
+annotations only and are **not trading evidence**: never sent to the backend, never read by
+Entry Readiness, signals, backtests or the Pattern Engine.
+
+**Mobile/touch browser verification is deferred** and recorded as a known V1 limitation
+(desktop headless-browser verification only; see Execution record).
 
 ## Scope decisions
 
@@ -60,6 +76,9 @@ Builds on the Chart Visual Intelligence V1 overlays (`chart-overlays.tsx`, `over
 - Drawings are per symbol, not per box-size/config: after a box-size change they keep their
   column/price anchors.
 - Drawings on columns older than the 60-column visible window are clipped, like the overlays.
+- Mobile/touch browser verification not performed (deferred per Rin decision).
+- A future-version payload (`version != 1`) is ignored on read and never rewritten by reading;
+  a subsequent V1 edit for that symbol writes a V1 document to the same key.
 
 ## Execution record
 
@@ -74,4 +93,13 @@ Builds on the Chart Visual Intelligence V1 overlays (`chart-overlays.tsx`, `over
   1.5 px of the glyph centres, alignment kept at 160% zoom, Esc cancels, persistence across
   reload, toggle hide/show persisted, select → popup → delete persisted, evidence popups still
   open, no network request carries drawings.
-- Review: self-review; independent review pending.
+- Review: independent review APPROVED at `ce5a934` (no BLOCKING findings).
+- 2026-09-26 pre-merge closure (tests/docs only, no production code change):
+  - Accepted deviations recorded above (localStorage, H-line; mobile/touch deferred).
+  - D3 regression guard: `Drawings OFF` hides only manual drawings; the Trendline, trendline
+    break, S/R and Pattern overlays render byte-identically to the no-drawing chart, and the
+    reverse (automatic layers OFF never hide drawings). An in-memory mutation check that
+    reuses the Drawings flag for S/R or for the overlay layers makes the guard fail.
+  - Future-version fixture: a stored `version: 2` payload with non-empty drawings (and
+    `visible: false`) parses to the empty V1 document, renders nothing and is not rewritten
+    by reading. No implementation bug found.
