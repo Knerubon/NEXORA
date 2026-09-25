@@ -1,0 +1,386 @@
+# ADR-031 — Experience Replay Performance Investigation V1 (PERF-2)
+
+Status: **Proposed (draft, Phase 1 investigation only)** — self-review; independent review pending (Rin architecture review)
+Date: 2026-09-25
+Workstream: PERF-2 (DEV-PERF role) · Branch `claude/experience-replay-performance-v1` · Worktree `D:\NEXORA\NEXORA-EXPERIENCE-PERF` · Base `origin/main` `4f69e9c`
+
+Related (on `main`): [EX1](../../tasks/EX1-experience-engine-v1.md) (Experience V1 contract), [architecture — Experience memory](../architecture.md), [ADR-018](./ADR-018-readiness-corrections.md), [ADR-022](./ADR-022-startup-recovery-checkpoint-v1.md) (checkpoint-assisted recovery).
+In flight, not on `main` (read-only inputs to this ADR): ADR-027 Research Journal Payload V2 (`claude/research-journal-payload-v2`, Decision 5 "Experience V2"), ADR-028 Experience snapshot additive fields (uncommitted in `NEXORA-EXPERIENCE-COMPAT`), ADR-029 Recovery Checkpoint V1 Hardening / PERF-1 (`claude/recovery-checkpoint-v1`), ADR-030 Replay Validation Framework V1 / VALID-1 (`claude/replay-validation-v1`).
+
+This ADR changes **no code, no contract, no formula and no stream**. It records evidence and proposes candidates. Every candidate needs its own acceptance before implementation (Phase 2).
+
+## 1. Problem
+
+Startup recovery replays research journal rows through `ResearchRuntime._rebuild()`. PERF-1 (ADR-029) reduces **how many** rows are replayed. It does not change **what each replayed row costs**. ADR-022, ADR-027 and ADR-029 reported that `ExperienceService.observe` accounts for about 93–96% of replay time.
+
+PERF-2 checks that claim independently. It explains where the per-event cost goes and how that cost grows with history. It then proposes optimizations that keep observable Experience behavior byte-identical.
+
+## 2. Repository evidence (verified at `4f69e9c`)
+
+| Area | File | Relevant fact |
+|---|---|---|
+| Recovery loop | `packages/nexora/research/runtime.py:59-114` | Per row: `decode(NormalizedPriceEvent, row["event"])`, `engine.replay(event)`, `_events.append`, `_paper_event`, `experience.observe(event, row["output"], …)`. The **recorded** output is passed to Experience, not a recomputation (EX1). |
+| Live path | `runtime.py:217-273` | `ingest` → `engine.process` (returns `canonical_serialize(_output)`) → journal append → `_paper_event` → `experience.observe`. Same `observe` code path as replay. |
+| Recorded output | `research/pipeline.py:116-133` | `output` holds the **cumulative** `columns` and `transitions` of the structure resolution, plus full `structure`, `trendline`, `signals`, `matrix`, `regime` and `entry_readiness`. Its size grows with history. |
+| Observer | `experience/service.py:29-94` | The per-event algorithm (section 4). |
+| Pure functions | `experience/engine.py` | `freeze`, `fingerprint`, `plan`, `eligible`, `measure`, `advance`, `initial_lifecycle`. |
+| Model | `experience/models.py` | `Experience` is frozen. `context()` = `json.loads(context_json)` on **every call**. `HORIZONS = (5, 15, 30, 60)`. |
+| Persistence | `experience/repository.py`, `storage.py:42-69, 172-200` | Every Experience write is `Journal.append`: canonical serialize + `json.dumps` + `canonical_hash`, then one write transaction (`BEGIN IMMEDIATE` / advisory lock, `SELECT`, `COUNT(*)`, `INSERT … IGNORE / ON CONFLICT DO NOTHING`, `SELECT`, `COMMIT`). |
+| Canonical encoding | `artifacts.py:14-37` | `canonical_serialize` is a recursive pure-Python walk (`is_dataclass`, `isinstance`, `sorted` per dict) that rebuilds every container. `canonical_hash` = serialize + `json.dumps(sort_keys)` + SHA-256. |
+| Checkpoint | `research/checkpoint_state.py:537-613` | Experience memory (`last`, `pending`, `states`, `samples`, `completed`, `seen`) is encoded explicitly. Shared sample rows are deduplicated by **object identity** (`id(row)`). |
+
+## 3. Current Experience replay flow
+
+```text
+research_journal (stream research:<cfg>) ── iter_rows(after=last_sequence), 32-row pages
+  │  storage._verify: json.loads + json.dumps(sort_keys) + sha256 of the WHOLE row  (O(|output|))
+  ▼
+ResearchRuntime._rebuild (per row, single thread, no runtime lock held)
+  ├─ decode(NormalizedPriceEvent, row["event"])        (get_type_hints per call)
+  ├─ ResearchPipeline.replay(event)                    (engines; output not serialized)
+  ├─ _events.append(event)
+  ├─ _paper_event(...)                                 (no-op unless paper configured)
+  └─ ExperienceService.observe(event, row["output"], completeness, metadata)
+        ├─ freeze(config, stream, event, output, …)            ← every event
+        │    ├─ canonical_serialize(config)                    (RuntimeConfig dataclass → dict)
+        │    ├─ canonical_serialize(output)                    O(|output|)
+        │    ├─ scope_for → canonical_hash((config, …))        (re-serializes config)
+        │    ├─ fingerprint(scope, output)                     O(|pivots|+|levels|) hash
+        │    ├─ build context {event, market, decision, matrix, structure, trendline,
+        │    │                  entry_readiness, regime, pnf{columns,transitions}, runtime_config, provenance…}
+        │    │    ├─ canonical_hash(config), canonical_hash(event)
+        │    │    └─ canonical_hash(output)                    O(|output|)  (provenance.output_hash)
+        │    ├─ frozen_json(context)                           O(|output|)  (serialize + dumps)
+        │    └─ experience_id = canonical_hash((POLICY, scope, key, digest))
+        ├─ digest = canonical_hash((event, output, completeness, metadata))   O(|output|)
+        ├─ if identity in _seen: conflict check / return        (never true on a fresh replay)
+        ├─ journal.append(experience:v1:<scope>:observations, key, raw)   ← every event; 1 write txn
+        ├─ if fingerprint != _last[scope].fingerprint:          (new T0 snapshot)
+        │    ├─ repository.save → journal.append(experience:v1:snapshots)   O(|context_json|)
+        │    └─ _persist_state("initial") → journal.append(lifecycle)
+        └─ for each pending experience in the same scope and eligible for this event:
+             ├─ samples[eid].append(raw)                        (shared object)
+             ├─ advance(experience, state, event)
+             │    └─ plan(experience) → experience.context() → json.loads(context_json)   O(|context_{t0}|)
+             │         → _persist_state per transition → journal.append(lifecycle)
+             └─ for each due horizon: measure(experience, h, samples, event)
+                  ├─ window filter; for each window row: advance(...) → plan → json.loads(context_json)
+                  ├─ plan(experience) + experience.context() again
+                  └─ journal.append(outcomes)
+             └─ all 4 horizons done → optional closing lifecycle append; drop pending/samples
+```
+
+During a restart replay, every Experience row already exists in the journal. Each `append` therefore goes through the full write transaction and returns `False` (INSERT ignored). The `content_hash` identity check still runs, so replay also **re-verifies** every historical Experience row.
+
+## 4. Call graph and per-event work (static)
+
+| Step | Frequency | Data touched | Size behavior |
+|---|---|---|---|
+| `canonical_serialize(output)` in `freeze` | 1 per event | whole output | O(i), i = events so far |
+| `canonical_hash(output)` (output_hash) | 1 per event | whole output | O(i) |
+| `frozen_json(context)` | 1 per event (built even if the fingerprint did not change) | output subset incl. `columns`, `transitions`, `structure`, `trendline` | O(i) |
+| `digest = canonical_hash((event, output, …))` | 1 per event | whole output | O(i) |
+| `fingerprint` hash | 1 per event | `structure.pivots`, `levels`, matrix, decision | O(pivots+levels), grows with i |
+| `canonical_serialize(config)` + 2× config hash | 1 per event | `RuntimeConfig` | O(1) |
+| observations `append` | 1 per event | raw event | O(1) data + 1 write transaction + `COUNT(*)` over the observations stream (O(i)) |
+| `Experience.context()` → `json.loads(context_json)` | ≈ `pending_eligible` per event + ~110 per completed experience (5+15+30+60 window rows in `measure`) + 4–8 per horizon | T0 context | O(i_t0) per call |
+| snapshot `append` | per fingerprint change | `context_json` | O(i) |
+| lifecycle / outcomes `append` | per transition / per horizon | bounded | O(1) data + 1 write transaction |
+| `measure` window filter + lifecycle rebuild | 4 per experience | ≤ 60 minutes of samples | bounded by sample rate |
+
+State held in memory: `_last` (per scope), `_pending` (open experiences, bounded by the 60-minute horizon), `_samples` (bounded by the same window), `_completed`, `_states` (**never pruned**, O(#experiences)), `_seen` (**never pruned**, O(#events)). There is no lock inside `ExperienceService`. It relies on the runtime's single writer (`_lock` in `ingest`; `_rebuild` runs from `__init__` or under that lock). The journal takes its own `RLock` plus a database write lock per append. The `_seen` short-circuit never fires on a fresh replay, because memory starts empty.
+
+No P&F or engine code runs inside Experience. It depends on engines only through the shape of the **recorded** output.
+
+## 5. Baseline / profiling methodology
+
+**Isolation.** Every run builds a synthetic SQLite journal in a **new, empty temporary directory** outside the repository. PROD, the TSID runtime, the 51.8 GB legacy database and PostgreSQL were not opened. The harness asserts that replay leaves every journal stream's row count and byte size unchanged (`journal_unchanged_rows: true` in every instrumented run).
+
+**Data.** The generator is the same seeded, mean-reverting one-minute close series as PERF-1's `scripts/recovery_benchmark.py` (seed `20260925`, example config `docs/examples/research-config.json`). It has two profiles:
+
+| Profile | `STEP_TENTHS` | Why | Snapshot rate | Research row size |
+|---|---|---|---|---|
+| **calm** | 3 | PERF-1 calibration: output growth ≈ 45–55 B/event, same order as the legacy journal (ADR-022) | ~6% of events create a new T0 snapshot | 4.3 KB (row 50) → 117 KB (row 2,000) |
+| **volatile** | 20 | Stress profile. Frequent reversals, close to ADR-027's measurement profile (88 KB/row at 300 events) | ~64% of events create a new T0 snapshot | 15 KB → 181 KB by row 250 |
+
+**Procedure.** For each (profile, N):
+
+1. Build the journal by live `ResearchRuntime.ingest` of N events, with `checkpoints=None`. This also records live `observe` latency.
+2. Run 1–3 **plain** full replays: a fresh `ResearchRuntime(config, journal)` with checkpoints disabled, timed by wall clock.
+3. Run one **instrumented** full replay. In-process wrappers attribute **exclusive** time (a parent's time excludes wrapped children) to: `freeze` and its `canonical_serialize` / `canonical_hash` / `frozen_json` / `fingerprint`; the `observe` digest; `Experience.context`; `plan`; `advance` (observe vs. measure); `measure`; `append` per Experience stream kind; each SQL statement class and `COMMIT` per stream kind (through a connection proxy); `storage._verify`; `runtime.decode`; and `ResearchPipeline.replay`. Per-call `observe` latency is logged together with the pending count and whether a snapshot was created.
+4. Run `cProfile` on one plain replay per profile (calm N=2,000; volatile N=500).
+
+Scales: calm N = 500, 1,000, 2,000, 5,000; volatile N = 250, 500, 1,000. The volatile profile is quadratic enough that N ≥ 2,000 was not practical in Phase 1.
+
+**Environment.** Windows 11, Intel64 Family 6 Model 142 (4 cores), Python 3.13.3, SQLite WAL with `synchronous=FULL`. The workstation was otherwise idle and runs were sequential.
+
+**Instrumentation overhead.** Instrumented totals were within the run-to-run spread of plain replays (for example calm N=2,000: plain 49.5–51.9 s, instrumented 53.2 s). Percentages are taken within one instrumented run.
+
+**Not measured.** PostgreSQL: `not_run`, because no isolated PostgreSQL instance was used in Phase 1. The same statement sequence runs there as network round trips; see section 7.4. Lock wait: replay is single-threaded and the journal `RLock` is uncontended. SQLite `BEGIN IMMEDIATE` and `COMMIT` time is reported as its own category. Allocation: not traced with `tracemalloc`. The cProfile call counts in section 6.3 stand in for container-rebuild volume.
+
+The harness (`perf2_profile.py`, `run_matrix.sh`, `summarize.py`) is a Phase 1 scratch artifact. It is **not committed**, because Phase 1 delivers the ADR only. Whether to commit it as `scripts/experience_replay_benchmark.py` is decision Q-P2-4.
+
+## 6. Performance findings
+
+### 6.1 Replay totals
+
+| Profile | N | Plain replay (median, s) | Mean ms / replayed event | `observe` share (instrumented) | Build by live ingest (s) |
+|---|---|---|---|---|---|
+| calm | 500 | 5.71 (3 runs) | 11.4 | 79.7% | 9.0 |
+| calm | 1,000 | 17.46 (3 runs) | 17.5 | 84.5% | 32.9 |
+| calm | 2,000 | 50.45 (3 runs) | 25.2 | 86.3% | 85.6 |
+| calm | 5,000 | 262.06 (1 run) | 52.4 | 87.6% | 492.7 |
+| volatile | 250 | 27.47 | 109.9 | 95.5% | 33.7 |
+| volatile | 500 | 131.67 | 263.3 | 96.3% | 131.9 |
+| volatile | 1,000 | 432.94 | 432.9 | 96.7% | 510.2 |
+
+**The 93–96% claim is profile-dependent.** It reproduces on volatile data (95.5–96.7%). On the legacy-calibrated calm profile, `observe` is 80–88% and rises with N (79.7% → 84.5% → 86.3% → 87.6%). The claim is directionally right — Experience dominates replay — but the magnitude, and especially **which** sub-cost dominates, depends on the workload (section 6.2).
+
+PERF-1 reported 423 s for a 5,000-event full replay with the same generator. This ADR measured 262 s on this workstation. Absolute times are machine- and load-dependent (ADR-022 recorded 241–466 s variance), so only same-machine comparisons are meaningful.
+
+### 6.2 Experience cost breakdown (exclusive time, share of total replay)
+
+| Category | calm 500 | calm 1,000 | calm 2,000 | calm 5,000 | vol 250 | vol 500 | vol 1,000 |
+|---|---|---|---|---|---|---|---|
+| A. `freeze()` serialize/hash of recorded output (`canonical_serialize`, 6× `canonical_hash`, `frozen_json`, `fingerprint`) | 34.2% | 32.5% | 34.5% | **38.3%** | 12.3% | 11.9% | 10.7% |
+| B. `Experience.context()` re-parse + `plan()` | 14.8% | 23.1% | 27.7% | 28.4% | 68.2% | **74.4%** | **74.3%** |
+| C. Idempotency digest `canonical_hash((event, output, …))` | 9.4% | 11.3% | 12.7% | 13.9% | 4.8% | 4.8% | 4.4% |
+| D. SQLite `COMMIT` of no-op Experience write transactions | 13.7% | 11.1% | 6.8% | 4.1% | 5.9% | 2.6% | 5.5% |
+| E. `append` payload serialize/hash | 4.7% | 3.5% | 2.3% | 1.2% | 2.2% | 1.4% | 1.1% |
+| F. Other Experience SQL (`BEGIN`, `SELECT`×2, `COUNT(*)`, `INSERT`) | 1.7% | 1.6% | 1.5% | 1.3% | 0.5% | 0.3% | 0.2% |
+| G. Lifecycle `advance` + `measure` arithmetic (excluding `plan`/`context`) | 0.6% | 0.7% | 0.5% | 0.3% | 1.0% | 0.7% | 0.5% |
+| H. `observe` residual (loop, dict ops) | 0.7% | 0.5% | 0.4% | 0.2% | 0.5% | 0.3% | 0.2% |
+| *Non-Experience:* research row read + `_verify` | 5.7% | 6.2% | 7.4% | 8.6% | 2.7% | 2.7% | 2.6% |
+| *Non-Experience:* `runtime.decode` of event | 9.6% | 5.7% | 3.6% | 1.8% | 0.8% | 0.4% | 0.2% |
+| *Non-Experience:* `ResearchPipeline.replay` (all engines) | 4.0% | 2.6% | 1.7% | 0.8% | 0.5% | 0.2% | 0.1% |
+
+Per-call evidence (exclusive):
+
+| Item | calm 500 | calm 2,000 | calm 5,000 | vol 250 | vol 1,000 |
+|---|---|---|---|---|---|
+| `Experience.context()` calls / events | 3,204 / 500 (6.4 per event) | 20,826 / 2,000 (10.4) | 48,950 / 5,000 (9.8) | 24,024 / 250 (96) | 110,813 / 1,000 (**111**) |
+| `Experience.context()` mean cost | 0.24 ms | 0.65 ms | 1.39 ms | 0.74 ms | 2.68 ms |
+| Mean pending experiences after `observe` | 2.2 (max 5) | 3.5 (max 14) | 3.3 (max 14) | 33.8 (max 45) | 37.8 (max 47) |
+| `observe` digest per call | 1.08 ms | 3.38 ms | 7.17 ms | 5.44 ms | 18.99 ms |
+| No-op `COMMIT` per Experience append | 1.27 ms | 1.29 ms | 1.53 ms | 1.19–1.32 ms | 3.7–4.6 ms |
+| `COUNT(*)` on observations stream per append | 0.07 ms | 0.24 ms | 0.54 ms | 0.04 ms | 0.11 ms |
+| `runtime.decode` per event | 1.10 ms | 0.96 ms | 0.93 ms | 0.92 ms | 0.89 ms |
+| New-snapshot vs. no-snapshot `observe` mean | 12.4 / 9.1 ms | 27.1 / 22.7 ms | 49.9 / 45.0 ms | 109.6 / 103.8 ms | 426.8 / 406.0 ms |
+
+The no-op `COMMIT` cost rose from ~1.3 ms to 3.7–4.6 ms in the volatile N=1,000 run (531 MB database). The cause (WAL/database size or OS cache pressure) was not isolated in Phase 1.
+
+Interpretation:
+
+- **A + C (serialize/hash of the recorded output)** are the largest sum on calm data (44–52%, rising with N). They are paid on **every** event, whether or not a snapshot is created. The no-snapshot `observe` is only ~20% cheaper than the new-snapshot one. cProfile (calm N=2,000) attributes the cost to the pure-Python recursive `canonical_serialize`: **18.9 M recursive calls** from ~35.8 k top-level calls (about 18 per event, about 9.5 k nodes walked per event), plus 88.9 M `isinstance` and 18.9 M `is_dataclass` calls. The C-level `json.dumps` (~8 s under the profiler) and SHA-256 (1.4 s) are small next to it. Every one of these walks re-canonicalizes data that **is already canonical**: the recorded output is decoded JSON on replay, and `canonical_serialize(_output)` output on the live path.
+- **B (`context_json` re-parse)** dominates volatile data (68–74%) and grows on calm data (15% → 28%). cProfile (volatile N=500): `json` `raw_decode` takes 99 s of self time over 52,974 calls, the single largest item. `plan()` is a pure function of the immutable `Experience`, yet it re-parses the full T0 context — including cumulative `pnf.columns/transitions` — once per pending experience per event and once per window row inside `measure`.
+- **D (no-op write transactions)** is **~1.2–1.5 ms per Experience append** (3.7–4.6 ms on the 531 MB volatile database) on SQLite with `synchronous=FULL`. It applies even though replay inserts nothing. Its share falls as the O(i) terms grow, but it scales with the number of appends: 1 per event, plus lifecycle and outcome rows. The 4 horizons alone add 4 appends per experience.
+- **Engines are ≤ 4% everywhere** (0.1–0.8% at the largest N), which confirms ADR-022, ADR-027 and ADR-030 Decision 13.
+
+### 6.3 Cost growth within one replay (history size)
+
+Mean `observe` latency per decile of replay position:
+
+| Profile, N | D1 | D2 | D3 | D4 | D5 | D6 | D7 | D8 | D9 | D10 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| calm 2,000 (ms) | 6.8 | 10.1 | 9.4 | 21.7 | 21.6 | 18.6 | 23.7 | 34.3 | 38.4 | 44.7 |
+| calm 5,000 (ms) | 8.2 | 19.6 | 25.5 | 39.0 | 42.3 | 45.3 | 59.8 | 58.5 | 73.5 | 80.8 |
+| vol 250 (ms) | 10.9 | 27.9 | 65.0 | 82.6 | 101.8 | 103.7 | 131.9 | 155.8 | 195.1 | 200.2 |
+| vol 1,000 (ms) | 58.5 | 137.3 | 222.7 | 303.9 | 370.5 | 460.1 | 541.4 | 662.2 | 673.8 | 764.8 |
+
+Live ingest shows the same growth. Live `observe` goes from 9.1 ms (first decile) to 82.2 ms (last decile) in calm N=5,000, and from 44.1 to 733.5 ms in volatile N=1,000. **This is a live-path latency problem as well as a recovery problem.** On live ingest, `observe` is 53–80% of `ingest` time.
+
+## 7. Complexity analysis
+
+### 7.1 Per-event cost model (from code plus measurements)
+
+For replayed event *i*, with *S_i* = size of the recorded output at *i* (cumulative `columns`, `transitions`, `pivots`, `levels`, `trendline` history), *P_i* = eligible pending experiences in scope, and *C_t0* = size of each pending experience's `context_json`:
+
+```text
+cost_observe(i) ≈ k1·S_i                       (A + C: ~4 full canonical walks + 3 dumps + 2 sha256 of output)
+               + k2·Σ_{p∈P_i} C_{t0(p)}        (B: one json.loads per pending experience)
+               + k3·Σ_{completing p} W_p·C_{t0(p)}   (B in measure: W ≤ ~60-min window rows)
+               + k4·A_i                        (D/F: A_i appends × fixed write-txn cost)
+               + k5·i                          (COUNT(*) over the observations stream; small constant)
+```
+
+- *S_i* grows **linearly** with history (measured calm row size 4.3 KB → 117 KB over 2,000 events). It grows faster on volatile data because reversals add columns and pivots.
+- *C_t0* ≈ *S_t0* (the context embeds `pnf` and full `structure`/`trendline`), so it is also O(i).
+- *P_i* is bounded by the snapshot rate × 60 minutes of event time: ~2–4 on calm data, ~34 on volatile data. It does **not** grow with N, but it multiplies the O(i) term.
+
+**Conclusion: `observe` is O(i) per event (linear in accumulated history), and a full replay is O(N²).** Evidence: the per-decile latency grows roughly linearly within a replay (section 6.3), and the per-event mean grows with N (calm 11.4 → 17.5 → 25.2 → 52.4 ms for N = 500 → 1,000 → 2,000 → 5,000). Fitted exponent of total replay time: calm 500→1,000 ≈ N^1.61, 1,000→2,000 ≈ N^1.53, 2,000→5,000 ≈ N^1.80; volatile 250→500 ≈ N^2.26, 500→1,000 ≈ N^1.72. Exponents below 2 at small N reflect the fixed per-event terms (decode, commits, engines), whose share shrinks as N grows. It is not O(1) or O(log N). There is no single O(N) scan per event over an ever-growing Python collection; the growth comes from **re-walking the cumulative collections embedded in each recorded output**.
+
+### 7.2 Repeated scans over growing collections
+
+| Location | Collection | Per event | Growth |
+|---|---|---|---|
+| `freeze`/`observe` canonical walks | recorded `output` | ~4 walks | O(i) |
+| `plan` → `context()` | T0 `context_json` | P_i parses (+ W per horizon) | O(i_t0) |
+| `storage.append` `COUNT(*)` | observations stream rows | 1 (index range count) | O(i), 0.07 → 0.24 ms (500 → 2,000) |
+| `_seen`, `_states` | dicts | O(1) lookup | memory O(N) and O(#experiences); checkpoint size grows (PERF-1 domain) |
+| `measure` window | `_samples[eid]` | per horizon | bounded (≤ 60 minutes) |
+
+### 7.3 Adjacent (non-Experience) replay costs
+
+- `storage._verify`: `json.loads` + `dumps` + SHA-256 of each O(i) research row (6–7% calm). This is owned by ADR-027 Payload V2 and storage, not PERF-2.
+- `runtime.decode`: ~1 ms per event, fixed. `get_type_hints()` is evaluated on every `_decode` call; cProfile shows ~50 k `compile()` calls from resolving string annotations. It is 1.8–9.6% on calm data (a fixed ~0.9–1.1 ms per event). This lives in `artifacts.py`, a shared file, not in Experience.
+
+### 7.4 PostgreSQL (inferred, not measured)
+
+`PostgresJournal.append` issues 6 statements plus the transaction, including `pg_advisory_xact_lock` and `COUNT(*)`, for **each** Experience append. That is at least 7 synchronous network round trips per append, and at least one append per replayed event. D + F are therefore expected to weigh **more** on PostgreSQL than on local SQLite. This must be measured on an isolated PostgreSQL instance before it is used for prioritization (Q-P2-3).
+
+## 8. Correctness invariants (the boundary any optimization must keep)
+
+A future optimization is acceptable only if **all** of the following hold, compared with the `4f69e9c` implementation on the same inputs:
+
+| # | Invariant | Observable |
+|---|---|---|
+| X1 | **Journal byte-identity.** Every `experience:v1:*` row has an identical `(stream, event_key, content_hash, payload)`, and the set of rows written for a given input sequence is identical. | journal rows |
+| X2 | **Write order.** Relative order of Experience appends is unchanged. In particular the observation append **precedes** every snapshot, lifecycle or outcome write that uses it (`service.py:53`), and lifecycle suffix order (`initial`, `0`, `1`, `close`) is preserved. | journal `sequence` order on live ingest and on crash-fill replay |
+| X3 | **Identity and content.** `scope`, `fingerprint`, `experience_id`, `t0`, `action` and `context_json` are byte-identical. This includes `provenance.output_hash` / `event_hash` / `config_hash` and ADR-028's presence-not-value rule for additive fields. | snapshots |
+| X4 | **Outcomes.** MFE, MAE, `mfe_r`, `mae_r`, `risk_distance`, excursions, `sample_count`, `sample_event_ids`, `coverage`, `plan_hits`, `entry_observed_by_horizon`, endpoint fields and `measurement_reference` are identical. Causal windows are unchanged (`event_time <= due` **and** `received_at <= due`), and the late endpoint never contributes excursions or hits. | outcomes |
+| X5 | **Lifecycle.** Same states, transitions, hit facts, `entered_at` and `latest_fact` guard. Entry is never counted at T0, and there is no transition after 60 minutes. | lifecycle |
+| X6 | **In-memory state equivalence.** `checkpoint_state()` after replaying any prefix encodes to identical bytes through `checkpoint_state.encode_state`. This includes `seen` digests (same digest definition) and **sample-row object sharing**: the same `raw` object is shared across pending episodes, because encoding dedups by `id(row)`. | checkpoint state (ADR-022 invariant `STATE(full) == STATE(checkpoint + delta)`) |
+| X7 | **Idempotency and conflict semantics.** A repeated identity with the same digest is a no-op. A different digest raises `experience_event_identity_conflict`. Any differing committed row still raises `journal_identity_conflict`. Replay still **fills missing** Experience rows after a crash between the research commit and the Experience writes (EX1 recovery rule). | exceptions, filled rows |
+| X8 | **Replay/live parity.** `observe` receives the **recorded** output on replay and the same canonical output live, and produces the same writes on either path. Decisions are never regenerated. | parity test |
+| X9 | **No feedback.** Experience state never influences engine, signal, paper or risk inputs. | existing `test_runtime_observer_has_no_feedback_to_any_decision` |
+| X10 | **Failure points.** An exception at any append leaves the same committed prefix as today, so `ingest`'s `_rebuild()` retry converges to the same state. | fault-injection test |
+| X11 | **API reads.** `ExperienceRepository` results (`/experiences*`) are unchanged. | API tests |
+
+**Decision-time behavior.** Experience is a post-decision observer and has no decision-time output. PERF-2 must not move `observe` before the research commit, and must not make it asynchronous relative to the research row, without a separate architecture decision (see C8).
+
+## 9. Optimization candidates (not implemented)
+
+Priority follows the measured shares in section 6.2. "Benefit" is the upper bound, meaning the measured exclusive share of the removed work.
+
+### C1 — Memoize `plan()` and the parsed T0 context per Experience · LOW RISK · Priority 1
+
+- **Current:** `plan()` calls `experience.context()` (`json.loads(context_json)`) on every `advance` and on every window row in `measure`. `measure` also reads `context()["event"]["price"]`.
+- **Suspected cost (measured):** category B = 15–28% on calm data and **68–74%** on volatile data. Volatile N=1,000 performs 111 parses per event at 2.68 ms each.
+- **Concept:** compute `plan(experience)` and the T0 price once per `experience_id` and cache them in `ExperienceService` (or in a module-level cache keyed by the immutable `Experience`). Drop the entry when the experience leaves `_pending`. Return immutable views (or copies), so no caller can mutate the cached decision. `advance` and `measure` never mutate `decision` today.
+- **Expected benefit:** removes almost all of B. Estimated replay reduction is ~20–28% on calm data and ~65–74% on volatile data. Live `observe` latency improves by the same factor.
+- **Correctness risk:** low. `plan` is pure over an immutable dataclass. The risks are cache lifetime (not a correctness issue) and accidental mutation of a shared cached dict (guard with a test).
+- **Files likely affected:** `experience/engine.py` (signature or helper), `experience/service.py`. This **collides with ADR-028's uncommitted `engine.py` change**, so it must be sequenced after EXC1 lands.
+- **Validation:** X3–X6 differential tests; a mutation guard test; the existing `test_experience.py` suite.
+
+### C2 — Lazy T0 context: build `context_json` only when the fingerprint changes · LOW RISK · Priority 2
+
+- **Current:** `freeze()` always builds and serializes the full context — `frozen_json(context)`, `canonical_hash(output)`, `canonical_hash(event)`, `canonical_hash(config)` — even though `observe` only needs `scope` and `fingerprint` unless the fingerprint differs from `_last[scope]`. That is ~94% of events on calm data and ~36% on volatile data.
+- **Suspected cost:** the context and provenance part of category A. On calm data, A is 33–38%; about two of the ~four output walks can be skipped on no-snapshot events.
+- **Concept:** split `freeze` into `identify(config, event, output) → (scope, fingerprint)` and `materialize(...) → Experience`. Call `materialize` only when a new snapshot is needed. `freeze()` keeps its exact output for VALID-1 L6, which calls it directly.
+- **Expected benefit:** roughly half of A on calm data (~15–19% of replay). Small on volatile data.
+- **Correctness risk:** low. Snapshot bytes are produced by the same code on the same inputs. The residual risk is scope/fingerprint drift between the split and the original `freeze`. A property test pins `identify(...) == (freeze(...).scope, freeze(...).fingerprint)`.
+- **Files:** `experience/engine.py`, `experience/service.py` (ADR-028 collision, as in C1).
+- **Validation:** X1, X3 and X6; golden snapshots, including ADR-028 legacy fixtures.
+
+### C3 — Canonicalize and encode the recorded output once per `observe` · LOW–MEDIUM RISK · Priority 3
+
+- **Current:** in one `observe`, the same output is walked by `canonical_serialize` about four times: `freeze` serialize, the `output_hash` hash, `frozen_json` (context subset) and the digest hash. There are 18 top-level walks per event overall, counting config and append payloads.
+- **Suspected cost:** A + C = 44–52% on calm data. cProfile puts it in the recursive walk, not in JSON or SHA-256.
+- **Concept:** (a) walk once, reuse the canonical tree, and derive `output_hash` and the digest from **one** compact `json.dumps` of it. The digest's canonical JSON for the tuple is exactly `"[" + enc(event) + "," + enc(output) + "," + enc(completeness) + "," + enc(metadata) + "]"`, so the output encoding can be reused byte for byte. (b) Cache `canonical_serialize(config)` and the config hashes, which are constant per service. (c) Optionally add a fast path that skips re-canonicalizing input already known to be canonical JSON. Replay output is JSON-decoded, and live output comes from `canonical_serialize`.
+- **Phase 1 feasibility check (scratch, not a test):** on 300 recorded calm rows, the composed digest equals `canonical_hash((event, output, completeness, metadata))` in 300 of 300 cases, and `canonical_serialize(output) == output` held for every recorded output. This is evidence that (a) is possible, not proof for all inputs.
+- **Expected benefit:** reduces A + C by an estimated 50–75%, about 25–38% of calm replay.
+- **Correctness risk:** low–medium. Byte-identity depends on exact `json.dumps` options (`sort_keys=True`, `separators=(",", ":")`) and on canonical form, where (c) is the risky part: Decimal/datetime/dataclass values must never reach the fast path. It needs exhaustive equality tests against `canonical_hash` on random, legacy and ADR-028 fixtures. (a) and (b) are low risk. (c) is medium.
+- **Files:** `experience/engine.py`, `experience/service.py`, possibly a helper in `artifacts.py` (shared by every package; Architect coordination).
+- **Validation:** X1, X3, X6 and X7 (digest values in `seen` must be identical), plus a property test `new_hash(x) == canonical_hash(x)`.
+
+### C4 — Read-before-write fast path for Experience appends that already exist · MEDIUM RISK · Priority 4
+
+- **Current:** every Experience append runs a full write transaction and a `COUNT(*)` even when the row exists. The count is computed unconditionally but only used when `expected_count` is set, which Experience never sets. On SQLite that is ~1.2–1.3 ms per append. On PostgreSQL it is 7+ round trips (inferred).
+- **Suspected cost:** D + F = 5–15% on calm data (SQLite; the share falls as N grows) and ~6% on volatile N=1,000. Likely more on PostgreSQL.
+- **Concept:** (a) compute `COUNT(*)` only when `expected_count is not None`. (b) For Experience streams, first read `content_hash` by `(stream, key)` without a write transaction. If it equals the digest, return `False`. If it differs, raise `journal_identity_conflict`. If it is absent, fall through to today's transactional append. Rows are append-only and never updated, so a positive read result is final.
+- **Expected benefit:** most of D + F (≈ 5–15% calm on SQLite; potentially larger on PostgreSQL).
+- **Correctness risk:** medium. `storage.py` is shared by every writer (paper, research, checkpoints via PERF-1, Payload V2 via ADR-027). (a) alone is behavior-identical. (b) changes the locking pattern and must keep X7 and the concurrent-writer guard (`expected_count`) intact. It is safest as an opt-in method (for example `append_idempotent`) used only by Experience, rather than a change to `append`.
+- **Files:** `storage.py` (shared, persistence domain), `experience/service.py`, `experience/repository.py`.
+- **Validation:** X1, X2, X7 and X10; SQLite + PostgreSQL tests (`test_experience_postgres.py`); a concurrent-writer regression test; a Security review (persistence, section 12 of AGENTS.md).
+
+### C5 — Cache resolved type hints in `decode` · LOW RISK · adjacent (outside Experience)
+
+- **Current:** `_decode` calls `get_type_hints(model)` per dataclass per call. That costs ~1 ms per replayed event (`compile()` of string annotations).
+- **Suspected cost:** 1.8–9.6% of calm replay. It is a fixed per-event cost.
+- **Concept:** memoize `get_type_hints` per model (`functools.cache`).
+- **Correctness risk:** low; the type hints of a class are static.
+- **Owner:** `artifacts.py` is shared. This is outside PERF-2's Experience scope and is listed for the Architect to assign (Q-P2-5).
+
+### C6 — Skip re-appending Experience rows during replay below a verified watermark · HIGH RISK · not recommended in V1
+
+- **Concept:** on replay, trust that Experience rows up to a verified research sequence are complete, and skip appends and verification.
+- **Risk:** it removes the EX1 rule "replay fills missing keys" (X7) and removes replay's re-verification of historical Experience rows (X1 enforcement). Proving completeness needs a new durable watermark or a checkpoint field, which is PERF-1's checkpoint format and is out of bounds.
+- **Benefit:** D + E + F, which C4 captures most of anyway.
+
+### C7 — Experience V2: reference instead of copy; bounded fingerprint · HIGH RISK · separate ADR (ADR-027 Decision 5)
+
+- Stops embedding `pnf.columns/transitions`, full `structure`/`trendline` and `runtime_config` in T0 contexts. Bounds the fingerprint (the pivot/level window). Uses the stored `output_hash` as the digest.
+- It would remove the O(i) term itself, making `observe` ≈ O(1) per event. That is the only candidate that changes the **asymptotic** class.
+- It changes `POLICY`, ids, scopes and snapshot content, and needs a rule for V1 experiences still pending at cutover. **Quant/Architect decision**, not a performance change. It is out of PERF-2 scope. C1–C4 remain valid under V1 and V2.
+
+### C8 — Move Experience off the recovery critical path (asynchronous or deferred observe) · HIGH RISK · not recommended
+
+- Readiness could be reported before Experience catches up. This changes write ordering (X2), failure semantics (X10) and the single-writer model. It needs an architecture decision and is listed only for completeness.
+
+## 10. Risk matrix
+
+| Candidate | Measured target share (calm / volatile) | Expected gain | Risk | Contract change | Shared-file impact | Recommended order |
+|---|---|---|---|---|---|---|
+| C1 plan/context memo | B: 15–28% / 68–74% | high | LOW | none | `experience/engine.py` (ADR-028) | 1 |
+| C2 lazy context | ~½ of A: ~15–19% / small | medium | LOW | none | `experience/engine.py` (ADR-028) | 2 |
+| C3 serialize once | A+C: 44–52% / 15–17% | high on calm data | LOW–MEDIUM | none (byte-identical) | possibly `artifacts.py` | 3 |
+| C4 append fast path | D+F: 5–15% / 3–6% (SQLite) | medium; PG likely more | MEDIUM | none | `storage.py` | 4 |
+| C5 decode type-hint cache | 1.8–9.6% / ≤1% | small–medium | LOW | none | `artifacts.py` | assign separately |
+| C6 replay append skip | ⊂ D+E+F | small over C4 | HIGH | recovery semantics | checkpoint (PERF-1) | reject for V1 |
+| C7 Experience V2 | removes the O(i) term | asymptotic | HIGH | new policy/ids | Experience, ADR-027 | separate ADR |
+| C8 async observe | n/a | readiness only | HIGH | ordering/failure | runtime (PERF-1) | reject for V1 |
+
+C1–C4 target work that accounts for ~80–86% of calm replay time (calm N=5,000: A+B+C+D+F = 86%) and ~90% of volatile replay time. They do not remove all of it. **Replay stays O(N²) until C7 or ADR-027 bound the recorded collections.** C1–C4 only lower the constants. Estimates must be re-measured after each step; the shares are not additive once one of them is removed.
+
+## 11. VALID-1 verification strategy
+
+ADR-030 (VALID-1) never runs `ExperienceService`, because it is a journal writer (ADR-030 Decisions 6, L6, and 14). Experience code is out of its scope (Q-V8 resolved). VALID-1 can still contribute evidence **without modification**:
+
+1. **L6 RECORDED/RECOMPUTED parity (after VALID-1 Phase 2B).** Over a journal backup, RECORDED mode reads `experience:v1:snapshots`, and RECOMPUTED mode calls the pure `freeze()`/`fingerprint()`. If C2 or C3 change the internals of `freeze()`, the L6 comparison of recorded snapshots against the optimized `freeze()` on the recorded research rows is an independent byte-identity check (X3). C2 must keep `freeze()` as a public function with identical output, so that this still holds.
+2. **Outcome kernel parity (Q-V8).** VALID-1 pins its own excursion kernel to `measure()` for the EX1-equivalent definition. That parity test is a regression tripwire for X4 after C1 changes how `measure` obtains `plan`.
+3. **Sealed datasets and prefix hashes (G2).** VALID-1's sealed, hashed observation datasets can serve as fixed, reproducible replay corpora for the PERF-2 differential harness, including journal-derived segments once the 2B extractor exists.
+
+VALID-1 does not replace the PERF-2 proof obligation. Phase 2 of PERF-2 must add its own **differential equivalence harness**:
+
+- Run the baseline and the optimized code over the same journals (calm, volatile, ADR-028 legacy fixture `experience_journal_9016004.json`, and multi-pattern/WAIT/BUY/SELL test fixtures).
+- Compare every Experience row (X1), the per-stream sequence order (X2), and `encode_state(checkpoint_state())` bytes after every prefix k (X6).
+- Run fault injection at every Experience append (X7, X10) and a conflict mutation corpus (X7).
+- Check live-vs-replay parity (X8).
+
+## 12. Dependencies and conflicts
+
+| Track | Relationship | Effect on PERF-2 |
+|---|---|---|
+| PERF-1 / ADR-029 (`claude/recovery-checkpoint-v1`) | Owns checkpoint scheduling, shutdown, readiness metrics, checkpoint format and state, and its benchmark. Modifies `research/runtime.py`. | PERF-2 changes none of these. PERF-1's benchmark `experience_observe` component remains the macro metric. C6 and C8 are rejected partly to stay out of PERF-1's scope. |
+| ADR-028 / EXC1 (`NEXORA-EXPERIENCE-COMPAT`, uncommitted `experience/engine.py`) | **Direct file collision** for C1–C3. | PERF-2 Phase 2 is **blocked on ADR-028 landing**; rebase onto it and add its legacy fixture to the equivalence corpus. |
+| ADR-027 Payload V2 (`claude/research-journal-payload-v2`) | Changes how the recorded output is stored and reconstructed. Decision 5 proposes Experience V2 (= C7). | C1–C4 are independent of V2 because `observe` still receives the same output dict. C7 belongs to the Experience V2 ADR. |
+| ADR-030 VALID-1 (`claude/replay-validation-v1`) | Consumer of pure `freeze()` (L6) and a `measure()` parity pin. | PERF-2 must keep `freeze()`/`measure()` signatures and outputs stable. VALID-1 Phase 2B is needed for journal-backed L6 evidence. |
+| `storage.py`, `artifacts.py` (shared) | C3(c), C4 and C5 touch shared persistence and encoding. | Architect coordination and Security review for C4. |
+| `NEXORA-TRENDLINE` (`claude/trendline-engine-v1`) | Branch diff touches `experience/engine.py`, but the branch is 17 commits behind `main` and its content appears superseded. | No active conflict, noted for the Integrator. |
+
+## 13. Out of scope
+
+- Any production code change in Phase 1, including `ExperienceService`, engines, storage and runtime.
+- Checkpoint scheduling, format, state, graceful shutdown, readiness metrics and the PERF-1 benchmark.
+- Journal format and compaction (ADR-027) and Experience V2 policy/identity changes (C7).
+- Changes to trading, decision, signal, risk or paper semantics, and any change to MFE/MAE or horizon definitions.
+- VALID-1 code or ADR-030.
+- PROD or legacy-database benchmarking.
+
+## 14. Open decisions
+
+| ID | Owner | Question | Proposed default |
+|---|---|---|---|
+| Q-P2-1 | Architect (Rin) | Accept C1 → C2 → C3(a,b) as the Phase 2 scope, sequenced after ADR-028 lands? | Yes. C3(c) and C4 each get a separate review. |
+| Q-P2-2 | Architect + Security | C4: an opt-in `append_idempotent` for Experience, or the `COUNT(*)`-only fix (a) in shared `append`? | Start with (a), which is behavior-identical. Then (b) as opt-in with a Security review. |
+| Q-P2-3 | Architect | Is a PostgreSQL measurement on an isolated, non-PROD instance required before C4 is prioritized? | Yes, if PROD uses PostgreSQL. Its per-append round trips are the unmeasured risk. |
+| Q-P2-4 | Architect | Commit the Phase 1 harness as `scripts/experience_replay_benchmark.py` (evidence only, like PERF-1's)? | Yes, in Phase 2, reusing PERF-1's generator once PERF-1 merges. |
+| Q-P2-5 | Architect | Owner for C5 (`decode` type-hint cache, `artifacts.py`)? | A small separate fix outside PERF-2. |
+| Q-P2-6 | Architect + Quant | Is Experience V2 (C7 / ADR-027 Decision 5) the intended path to remove the O(N²) term? | Separate ADR. PERF-2 does not decide policy. |
+| Q-P2-7 | Architect | Acceptable Phase 2 target, for example calm N=5,000 full replay ≤ X s? | No target frozen here. Measure after each candidate. |
+
+## 15. Consequences
+
+- No behavior, stream, identity, checkpoint or config change in Phase 1.
+- The prior "93–96%" figure is corrected to be **profile-dependent** (80–88% calm, rising with N; 95–97% volatile). The dominant sub-cost differs by profile (serialize/hash on calm data vs. context re-parse on volatile data), so both profiles must be kept in every future measurement.
+- Experience cost affects **live ingest latency** as well as recovery. Live `observe` grows to tens to hundreds of milliseconds per event as history grows.
