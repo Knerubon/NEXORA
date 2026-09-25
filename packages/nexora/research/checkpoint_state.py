@@ -16,7 +16,7 @@ fails when a component gains state this module does not capture.
 from __future__ import annotations
 
 import types
-from dataclasses import fields, is_dataclass
+from dataclasses import fields, is_dataclass, replace
 from datetime import datetime
 from decimal import Decimal
 from functools import cache
@@ -27,10 +27,22 @@ from nexora.adaptive_box.models import AdaptiveBoxDecision, AdaptiveBoxSnapshot,
 from nexora.adaptive_box.runner import AdaptivePnfRunner
 from nexora.entry_readiness import EntryReadinessSnapshot
 from nexora.experience.models import Experience
+from nexora.features import ResolvedFeatureConfig, default_features_config
 from nexora.market_data.models import NormalizedPriceEvent
 from nexora.market_regime import MarketRegimeEngine, RegimeSnapshot
 from nexora.market_regime.models import RegimeLabel
 from nexora.matrix import MatrixEngine, MatrixSnapshot
+from nexora.patterns import (
+    EMPTY_STATE,
+    LEGACY_UNITS,
+    PENDING_BOUND,
+    WINDOW_BOUND,
+    PatternEngine,
+    PatternEngineSnapshot,
+    PatternEngineState,
+    PatternResult,
+    pattern_id,
+)
 from nexora.pnf import PnfColumn, PnfEngine, PnfTransition
 from nexora.pnf.models import _MutableSymbolState
 from nexora.research.pipeline import PipelineConfig, ResearchPipeline
@@ -39,7 +51,7 @@ from nexora.structure import CandidateLevel, ConfirmedPivot, StructureEngine, St
 from nexora.trendline import TrendlineEngine, TrendlineSnapshot
 from nexora.trendline.models import TrendlineAnchor, TrendlineLine
 
-STATE_VERSION = 1
+STATE_VERSION = 2
 
 # Every attribute of every checkpointed component. Configuration attributes are
 # rebuilt from the current config; all others are persisted below, except
@@ -52,6 +64,7 @@ COVERED_FIELDS: dict[str, frozenset[str]] = {
             "matrix",
             "structure",
             "trendline",
+            "pattern_engine",
             "regime",
             "signals",
             "_seen",
@@ -94,6 +107,9 @@ COVERED_FIELDS: dict[str, frozenset[str]] = {
     "SignalEngine": frozenset(
         {"config", "_sequence", "_history", "_last_signal_sequence", "_last_decision"}
     ),
+    "PatternEngine": frozenset(
+        {"symbol", "resolution", "price_tolerance", "features", "_units", "_state"}
+    ),
     "ExperienceService": frozenset(
         {
             "repository",
@@ -123,6 +139,7 @@ _OUTPUT_SCHEMA: tuple[tuple[str, Any], ...] = (
     ("entry_readiness", EntryReadinessSnapshot),
     ("columns", tuple[PnfColumn, ...]),
     ("transitions", tuple[PnfTransition, ...]),
+    ("pattern_engine", PatternEngineSnapshot),
 )
 _LIFECYCLE_KEYS = frozenset({"state", "entered_at", "hits"})
 _HIT_NAMES = ("TP1", "TP2", "invalidation")
@@ -132,6 +149,10 @@ _SAMPLE_KEYS = frozenset({"event", "completeness", "metadata"})
 
 class StateInvalid(ValueError):
     """The persisted state does not match this module's schema."""
+
+
+class FeatureConfigMismatch(StateInvalid):
+    """Valid feature hash belongs to a different startup configuration."""
 
 
 # --- Exact, schema-driven primitive codec ------------------------------------------------
@@ -179,9 +200,13 @@ def _dec(model: Any, value: Any) -> Any:
             raise StateInvalid("invalid_literal")
         return value
     if origin is tuple:
-        if len(args) != 2 or args[1] is not Ellipsis or type(value) is not list:
+        if type(value) is not list:
             raise StateInvalid("invalid_tuple")
-        return tuple(_dec(args[0], item) for item in value)
+        if len(args) == 2 and args[1] is Ellipsis:
+            return tuple(_dec(args[0], item) for item in value)
+        if len(args) != len(value):
+            raise StateInvalid("invalid_tuple")
+        return tuple(_dec(model, item) for model, item in zip(args, value, strict=True))
     if model is Decimal:
         if type(value) is not str:
             raise StateInvalid("invalid_decimal")
@@ -428,6 +453,177 @@ def _restore_signals(engine: SignalEngine, value: Any) -> None:
     engine._last_decision = _dec(SignalDecision, value["last_decision"])
 
 
+def _validate_pattern_result(
+    result: PatternResult, engine: PatternEngine, structure: StructureEngine
+) -> None:
+    """Validate references/identity, without detecting patterns or changing evidence."""
+    units = {unit.algorithm_id: unit for unit in LEGACY_UNITS}
+    descriptors = {d.algorithm_id: d for d in engine.snapshot().algorithms}
+    unit = units.get(result.algorithm_id)
+    descriptor = descriptors.get(result.algorithm_id)
+    if unit is None or descriptor is None:
+        raise StateInvalid("pattern_algorithm_invalid")
+    if (
+        engine.features.effective_unit("pattern_engine", result.algorithm_id) != "SHADOW"
+        or result.lifecycle != "SHADOW"
+        or result.symbol != engine.symbol
+        or result.resolution != engine.resolution
+        or result.pattern_type != unit.pattern_type
+        or result.direction != unit.direction
+        or result.evidence_code != unit.evidence_code
+        or result.algorithm_version != descriptor.algorithm_version
+        or result.parameters_hash != descriptor.parameters_hash
+        or len(result.anchors) != unit.window_size
+        or tuple(a.role for a in result.anchors) != unit.roles
+        or result.pattern_id
+        != pattern_id(
+            symbol=result.symbol,
+            resolution=result.resolution,
+            algorithm_id=result.algorithm_id,
+            algorithm_version=result.algorithm_version,
+            parameters_hash=result.parameters_hash,
+            anchor_ids=tuple(a.source_transition_id for a in result.anchors),
+        )
+    ):
+        raise StateInvalid("pattern_result_invalid")
+    pivots = {p.source_transition_id: p for p in structure._pivots}
+    transitions = {t.identity_key: t for t in structure._transitions}
+    for anchor in result.anchors:
+        pivot = pivots.get(anchor.source_transition_id)
+        transition = transitions.get(anchor.source_transition_id)
+        if (
+            pivot is None
+            or transition is None
+            or (anchor.pivot_kind, anchor.price, anchor.occurrence_time, anchor.confirmation_time)
+            != (pivot.kind, pivot.price, pivot.occurrence_time, pivot.confirmation_time)
+            or anchor.column_id != transition.column_id
+        ):
+            raise StateInvalid("pattern_anchor_invalid")
+    if not 1 <= result.confirmed_sequence <= result.status_sequence <= structure._sequence:
+        raise StateInvalid("pattern_sequence_invalid")
+    confirmation = structure._transitions[result.confirmed_sequence - 1]
+    status_transition = structure._transitions[result.status_sequence - 1]
+    if (
+        result.confirmation_transition_id != confirmation.identity_key
+        or result.confirmation_column != confirmation.column_id
+        or result.config_version != confirmation.config_version
+        or result.start_column != result.anchors[0].column_id
+        or result.end_column != result.anchors[-1].column_id
+        or result.start_time != result.anchors[0].occurrence_time
+        or result.confirmation_time != max(a.confirmation_time for a in result.anchors)
+        or result.confirmation_time > confirmation.event_time
+        or result.status_time != status_transition.event_time
+        or result.price_low > result.price_high
+        or result.source_refs
+        != (*(a.source_transition_id for a in result.anchors), confirmation.identity_key)
+        or (
+            result.status == "confirmed"
+            and (
+                result.status_reason != "detected"
+                or result.status_sequence != result.confirmed_sequence
+            )
+        )
+        or (
+            result.status == "expired"
+            and result.status_reason not in ("window_superseded", "input_rejected")
+        )
+    ):
+        raise StateInvalid("pattern_result_reference_invalid")
+
+
+def _restore_pattern(pipeline: ResearchPipeline, value: Any) -> None:
+    engine, structure = pipeline.pattern_engine, pipeline.structure
+    state = _dec(PatternEngineState, value)
+    if engine.effective_lifecycle == "DISABLED":
+        if state != EMPTY_STATE:
+            raise StateInvalid("pattern_disabled_state")
+    else:
+        if (
+            state.sequence != structure._sequence
+            or state.sequence != len(structure._transitions)
+            or state.pivot_count != len(structure._pivots)
+            or state.last_pivot_id
+            != (structure._pivots[-1].source_transition_id if structure._pivots else None)
+            or len(state.window) > WINDOW_BOUND
+            or len(state.pending) > PENDING_BOUND
+            or len(state.current) > len(LEGACY_UNITS)
+        ):
+            raise StateInvalid("pattern_state_inconsistent")
+        if state.window and tuple(w.pivot for w in state.window) != tuple(
+            structure._pivots[-len(state.window) :]
+        ):
+            raise StateInvalid("pattern_window_invalid")
+        transitions = {t.identity_key: t for t in structure._transitions}
+        for member in state.window:
+            transition = transitions.get(member.pivot.source_transition_id)
+            if transition is None or (
+                member.column_id is not None and member.column_id != transition.column_id
+            ):
+                raise StateInvalid("pattern_window_column_invalid")
+        if state.pending and state.pending != tuple(
+            (t.identity_key, t.column_id) for t in structure._transitions[-len(state.pending) :]
+        ):
+            raise StateInvalid("pattern_pending_invalid")
+        _unique([r.algorithm_id for r in state.current])
+        if state.current != tuple(
+            sorted(state.current, key=lambda r: (r.confirmed_sequence, r.algorithm_id))
+        ):
+            raise StateInvalid("pattern_order_invalid")
+        for result in state.current:
+            _validate_pattern_result(result, engine, structure)
+            members = state.window[-len(result.anchors) :]
+            if result.status != "confirmed" or tuple(
+                (a.source_transition_id, a.column_id) for a in result.anchors
+            ) != tuple((w.pivot.source_transition_id, w.column_id) for w in members):
+                raise StateInvalid("pattern_current_invalid")
+    # State belongs to a fresh, unadopted pipeline. Event-local health/changed are
+    # restored from output, not recomputed by snapshot().
+    engine._state = state
+    if pipeline._output:
+        snapshot = pipeline._output["pattern_engine"]
+        expected = engine.snapshot()
+        status = snapshot.status
+        normalized_units = (
+            tuple(
+                replace(unit, health=base.health, reason_codes=base.reason_codes)
+                for unit, base in zip(status.units, expected.status.units, strict=True)
+            )
+            if len(status.units) == len(expected.status.units)
+            else ()
+        )
+        if (
+            snapshot.symbol != engine.symbol
+            or snapshot.sequence != state.sequence
+            or snapshot.algorithms != expected.algorithms
+            or replace(
+                status,
+                health=expected.status.health,
+                reason_codes=expected.status.reason_codes,
+                units=normalized_units,
+            )
+            != expected.status
+        ):
+            raise StateInvalid("pattern_output_config_invalid")
+        if engine.effective_lifecycle == "DISABLED":
+            if snapshot != expected:
+                raise StateInvalid("pattern_disabled_output")
+        elif snapshot.current != state.current and not (
+            not snapshot.current
+            and status.health == "unavailable"
+            and set(status.reason_codes)
+            & {
+                "symbol_mismatch",
+                "duplicate_transition",
+                "structure_inconsistent",
+                "future_inputs",
+                "engine_exception",
+            }
+        ):
+            raise StateInvalid("pattern_output_current_invalid")
+        for result in snapshot.changed:
+            _validate_pattern_result(result, engine, structure)
+
+
 def _encode_pipeline(pipeline: ResearchPipeline) -> dict[str, Any]:
     output = pipeline._output
     if output and list(output) != [key for key, _ in _OUTPUT_SCHEMA]:
@@ -441,18 +637,31 @@ def _encode_pipeline(pipeline: ResearchPipeline) -> dict[str, Any]:
         "trendline": _encode_trendline(pipeline.trendline),
         "regime": _encode_regime(pipeline.regime),
         "signals": _encode_signals(pipeline.signals),
+        "pattern_engine": _enc(pipeline.pattern_engine.state),
     }
 
 
 _PIPELINE_KEYS = frozenset(
-    {"seen", "last", "output", "matrix", "structure", "trendline", "regime", "signals"}
+    {
+        "seen",
+        "last",
+        "output",
+        "matrix",
+        "structure",
+        "trendline",
+        "regime",
+        "signals",
+        "pattern_engine",
+    }
 )
 
 
-def _restore_pipeline(config: PipelineConfig, value: Any) -> ResearchPipeline:
+def _restore_pipeline(
+    config: PipelineConfig, value: Any, features: ResolvedFeatureConfig
+) -> ResearchPipeline:
     value = _record(value, _PIPELINE_KEYS)
     # Construction from the current config rebuilds every configuration attribute.
-    pipeline = ResearchPipeline(config)
+    pipeline = ResearchPipeline(config, features=features)
     seen = _pairs(value["seen"])
     _unique([key for key, _ in seen])
     pipeline._seen = {_dec(str, k): _dec(str, v) for k, v in seen}
@@ -473,6 +682,7 @@ def _restore_pipeline(config: PipelineConfig, value: Any) -> ResearchPipeline:
     _restore_trendline(pipeline.trendline, value["trendline"])
     _restore_regime(pipeline.regime, value["regime"])
     _restore_signals(pipeline.signals, value["signals"])
+    _restore_pattern(pipeline, value["pattern_engine"])
     return pipeline
 
 
@@ -622,6 +832,7 @@ def encode_state(
     """JSON-compatible state of every checkpointed component."""
     return {
         "state_version": STATE_VERSION,
+        "feature_config_hash": pipeline.pattern_engine.features.feature_config_hash,
         "events": _enc(events),
         "pipeline": _encode_pipeline(pipeline),
         "experience": _encode_experience(experience),
@@ -629,18 +840,27 @@ def encode_state(
 
 
 def restore_state(
-    value: Any, config: PipelineConfig
+    value: Any, config: PipelineConfig, *, features: ResolvedFeatureConfig | None = None
 ) -> tuple[ResearchPipeline, list[NormalizedPriceEvent], dict[str, Any]]:
     """Rebuild components from `encode_state` output; raises StateInvalid on any mismatch.
 
     Nothing here touches the running runtime: the caller adopts the result only
     after every further check has passed.
     """
-    value = _record(value, frozenset({"state_version", "events", "pipeline", "experience"}))
+    value = _record(
+        value,
+        frozenset({"state_version", "feature_config_hash", "events", "pipeline", "experience"}),
+    )
     if type(value["state_version"]) is not int or value["state_version"] != STATE_VERSION:
         raise StateInvalid("state_version_mismatch")
+    features = features if features is not None else default_features_config()
+    digest = _dec(str, value["feature_config_hash"])
+    if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+        raise StateInvalid("invalid_feature_config_hash")
+    if digest != features.feature_config_hash:
+        raise FeatureConfigMismatch("feature_config_mismatch")
     events = list(_dec(tuple[NormalizedPriceEvent, ...], value["events"]))
-    pipeline = _restore_pipeline(config, value["pipeline"])
+    pipeline = _restore_pipeline(config, value["pipeline"], features)
     experience = _restore_experience(value["experience"])
     keys = [event.identity_key for event in events]
     _unique(keys)

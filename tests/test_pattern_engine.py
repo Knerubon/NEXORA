@@ -535,9 +535,14 @@ def test_pattern_core_has_no_decision_or_runtime_dependencies() -> None:
                 )
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
                 assert node.func.id != "open", path.name
-    # No production module consumes the engine yet (no wiring in Phase 2A).
+    # Phase 2 authorizes orchestration/persistence only, never decision consumers.
+    wiring = {
+        ROOT / "packages/nexora/research/pipeline.py",
+        ROOT / "packages/nexora/research/runtime.py",
+        ROOT / "packages/nexora/research/checkpoint_state.py",
+    }
     for path in (ROOT / "packages").rglob("*.py"):
-        if path.parent.name == "patterns" or path.name == "features.py":
+        if path.parent.name == "patterns" or path.name == "features.py" or path in wiring:
             continue
         text = path.read_text(encoding="utf-8")
         assert "nexora.patterns" not in text and "nexora.features" not in text, path

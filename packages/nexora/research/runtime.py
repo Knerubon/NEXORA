@@ -12,6 +12,7 @@ from typing import Any
 
 from nexora.artifacts import canonical_hash, decode
 from nexora.experience import ExperienceService
+from nexora.features import ResolvedFeatureConfig, default_features_config
 from nexora.market_data.models import NormalizedPriceEvent
 from nexora.paper.session import PaperSession, PaperSessionConfig
 from nexora.research import PipelineConfig, ResearchPipeline, checkpoint_state
@@ -42,12 +43,14 @@ class ResearchRuntime:
         checkpoint_interval: int = DEFAULT_CHECKPOINT_INTERVAL,
         checkpoint_max_age: float | None = None,
         clock: Callable[[], float] = time.monotonic,
+        features: ResolvedFeatureConfig | None = None,
     ) -> None:
         if checkpoint_interval < 0:
             raise ValueError("invalid_checkpoint_interval")
         if checkpoint_max_age is not None and not checkpoint_max_age > 0:
             raise ValueError("invalid_checkpoint_max_age")
         self.config, self.journal = config, journal
+        self.features = features if features is not None else default_features_config()
         self.stream = "research:" + canonical_hash(config)
         self._lock = RLock()
         self.error: str | None = None
@@ -75,7 +78,7 @@ class ResearchRuntime:
         self._since_checkpoint = 0
         self._uncovered_since = None
         self._last_sequence = 0
-        self.engine = ResearchPipeline(self.config.pipeline)
+        self.engine = ResearchPipeline(self.config.pipeline, features=self.features)
         self.experience = ExperienceService(self.journal, self.config, self.stream)
         self._events: list[NormalizedPriceEvent] = []
         anchored = self._anchored()
@@ -143,8 +146,10 @@ class ResearchRuntime:
             try:
                 # Explicit per-component contracts onto freshly constructed components.
                 engine, events, memory = checkpoint_state.restore_state(
-                    payload, self.config.pipeline
+                    payload, self.config.pipeline, features=self.features
                 )
+            except checkpoint_state.FeatureConfigMismatch:
+                raise ckpt.CheckpointRejected("feature_config_mismatch") from None
             except checkpoint_state.StateInvalid:
                 raise ckpt.CheckpointRejected("state_invalid") from None
             if (

@@ -10,6 +10,12 @@ from typing import Any, cast
 
 from nexora.artifacts import canonical_hash, decode
 from nexora.backtest.models import BacktestConfig
+from nexora.features import (
+    FeatureConfigError,
+    ResolvedFeatureConfig,
+    default_features_config,
+    parse_features_config,
+)
 from nexora.market_data.models import NormalizedPriceEvent, PriceSource
 from nexora.research.checkpoint import CheckpointStore
 from nexora.research.runtime import ResearchRuntime, RuntimeConfig
@@ -58,7 +64,21 @@ def configured_checkpoint_max_age() -> float | None:
     return seconds
 
 
+def configured_features() -> ResolvedFeatureConfig:
+    """Read optional startup-only analytical feature config (ADR-023)."""
+    filename = os.environ.get("NEXORA_FEATURES_CONFIG")
+    if filename is None:
+        return default_features_config()
+    Environment.resolve()  # Reuse the existing configuration-path isolation boundary.
+    try:
+        text = Path(filename).read_text(encoding="utf-8")
+    except (OSError, UnicodeError, ValueError):
+        raise FeatureConfigError("invalid_features_config", "unreadable features file") from None
+    return parse_features_config(text)
+
+
 def configured_runtime(journal: Journal) -> ResearchRuntime | None:
+    features = configured_features()
     filename = os.environ.get("NEXORA_RESEARCH_CONFIG")
     if not filename:
         return None
@@ -68,6 +88,7 @@ def configured_runtime(journal: Journal) -> ResearchRuntime | None:
         journal,
         checkpoints=configured_checkpoints(),
         checkpoint_max_age=configured_checkpoint_max_age(),
+        features=features,
     )
 
 

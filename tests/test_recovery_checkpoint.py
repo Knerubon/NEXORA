@@ -674,7 +674,13 @@ def test_checkpoint_payload_is_explicit_versioned_json(tmp_path: Path) -> None:
         assert header["schema_version"] == checkpoints.SCHEMA_VERSION == 2
         payload = payload_of(store, stream)
         assert payload["state_version"] == checkpoint_state.STATE_VERSION
-        assert set(payload) == {"state_version", "events", "pipeline", "experience"}
+        assert set(payload) == {
+            "state_version",
+            "feature_config_hash",
+            "events",
+            "pipeline",
+            "experience",
+        }
         assert b"\x80\x05" not in raw and b"pickle" not in raw.lower()
     finally:
         journal.close()
@@ -733,6 +739,7 @@ def test_component_contracts_cover_every_attribute(tmp_path: Path) -> None:
         runner = next(iter(pipeline.matrix.runners.values()))
         attributes = {
             "ResearchPipeline": set(vars(pipeline)),
+            "PatternEngine": set(type(pipeline.pattern_engine).__slots__),
             "ExperienceService": set(vars(runtime.experience)),
             "MatrixEngine": {f.name for f in dataclass_fields(pipeline.matrix)},
             "AdaptivePnfRunner": {f.name for f in dataclass_fields(runner)},

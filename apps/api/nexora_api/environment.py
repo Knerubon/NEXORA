@@ -68,7 +68,11 @@ class Environment:
         web = int(env.get("NEXORA_WEB_PORT", str(profile["web_port"])))
         if (host, api, web) != (profile["api_host"], profile["api_port"], profile["web_port"]):
             raise ValueError("environment_listener_mismatch")
-        for key in ("NEXORA_RESEARCH_CONFIG", "NEXORA_BACKTEST_CONFIG_DIR"):
+        for key in (
+            "NEXORA_RESEARCH_CONFIG",
+            "NEXORA_BACKTEST_CONFIG_DIR",
+            "NEXORA_FEATURES_CONFIG",
+        ):
             if env.get(key):
                 source = Path(env[key]).resolve()
                 if not (source.is_relative_to(code) or source.is_relative_to(root)):

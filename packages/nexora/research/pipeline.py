@@ -8,9 +8,11 @@ from typing import Any
 from nexora.adaptive_box import AdaptiveBoxConfig, AdaptiveBoxSizer, AdaptivePnfRunner
 from nexora.artifacts import canonical_hash, canonical_serialize
 from nexora.entry_readiness import evaluate_entry_readiness
+from nexora.features import ResolvedFeatureConfig
 from nexora.market_data.models import NormalizedPriceEvent
 from nexora.market_regime import MarketRegimeEngine, RegimeConfig
 from nexora.matrix import MatrixEngine, MatrixResolutionConfig
+from nexora.patterns import PatternEngine, PatternStep
 from nexora.pnf import PnfConfig
 from nexora.signals import ResearchSignal, SignalConfig, SignalEngine
 from nexora.structure import StructureEngine
@@ -48,7 +50,9 @@ class PipelineConfig:
 
 
 class ResearchPipeline:
-    def __init__(self, config: PipelineConfig) -> None:
+    def __init__(
+        self, config: PipelineConfig, *, features: ResolvedFeatureConfig | None = None
+    ) -> None:
         self.config = config
         self.matrix = MatrixEngine(
             symbol=config.signals.symbol,
@@ -64,6 +68,12 @@ class ResearchPipeline:
         )
         self.structure = StructureEngine(config.signals.symbol)
         self.trendline = TrendlineEngine(config.signals.symbol)
+        self.pattern_engine = PatternEngine(
+            symbol=config.signals.symbol,
+            resolution=config.structure_resolution,
+            price_tolerance=config.signals.pattern_price_tolerance,
+            features=features,
+        )
         self.regime = MarketRegimeEngine(config.regime)
         self.signals = SignalEngine(config.signals)
         self._seen: dict[str, str] = {}
@@ -103,9 +113,12 @@ class ResearchPipeline:
         before = len(runner.pnf_engine.state_for(event.symbol).transitions)
         matrix = self.matrix.process(event, now=event.received_at)
         pnf = runner.pnf_engine.state_for(event.symbol)
+        pattern_steps: list[PatternStep] = []
         for transition in pnf.transitions[before:]:
             structure_step = self.structure.process(transition)
             self.trendline.process(transition, structure_step)
+            pattern_steps.append((transition, structure_step))
+        pattern_snapshot = self.pattern_engine.process_event(pattern_steps)
         structure = self.structure.snapshot()
         trendline = self.trendline.snapshot()
         regime = self.regime.classify(structure, matrix)
@@ -124,6 +137,7 @@ class ResearchPipeline:
             "entry_readiness": entry_readiness,
             "columns": pnf.columns,
             "transitions": pnf.transitions,
+            "pattern_engine": pattern_snapshot,
         }
         self._seen[event.identity_key] = identity
         self._last = event
