@@ -31,7 +31,7 @@ Host allowlist คงอยู่; ไม่มี permissive CORS หรือ 
 MT5 dependencies เป็น optional extra; tests ใช้ fake และไม่ require terminal
 
 ## Amendment 1 — terminal identity fields (ADR-025)
-Status: draft ร่วมกับ [ADR-025](ADR-025-mt5-instrument-resolution-v1.md); มีผลเมื่อ ADR-025 ได้ accept เท่านั้น ก่อนหน้านั้นใช้ "connected เท่านั้น" ตามเดิม
+Status: accepted พร้อม [ADR-025](ADR-025-mt5-instrument-resolution-v1.md) rev 3 (Rin, 2026-09-25); มีผลกับ runtime เมื่อ Phase 2B wiring merge — ก่อนหน้านั้น runtime ยังอ่าน "connected เท่านั้น" ตามเดิม
 terminal_info อ่านได้เฉพาะ `connected`, `company`, `path` — `company`/`path` เป็น terminal identity metadata (ใช้ตรวจ terminal ที่ bind ไว้) ไม่ใช่ account identity
 field อื่นของ terminal_info (เช่น `community_*`, `mqid`, `data_path`, `commondata_path`) ยังห้ามอ่าน เว้นแต่มี accepted ADR อื่นอนุญาตโดยตรง
 account_info() ยังห้ามเรียก; ไม่อ่าน login, server, balance, equity, positions, orders, history หรือ credentials; ส่วนอื่นของ ADR นี้ไม่เปลี่ยน

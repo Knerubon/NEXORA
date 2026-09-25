@@ -1,8 +1,12 @@
 # ADR-025 — MT5 multi-broker instrument resolution V1
 
-Status: **DRAFT rev 3 — NOT ACCEPTED.** D1–D5 and A1–A3 are resolved per Rin's decisions.
-Q-Q1 (Quant, §7) and A4 (§14) remain open. Awaiting Rin's final ADR review. No implementation may
-start until this ADR and ADR-003 Amendment 1 are accepted.
+Status: **ACCEPTED rev 3 (architecture)** — Rin final architecture review, 2026-09-25: A1, A2, A3
+and A4 approved; no architect decision outstanding. ADR-003 Amendment 1 takes effect with this
+acceptance. **Q-Q1 (Quant, §7) remains OPEN**: until it is decided the price grid is validated and
+reported only, and no P&F `box_size`/`price_precision` rule is implemented. Implementation proceeds
+in phases: Phase 2A = pure resolver, `feed_id`, strict config and the offline discovery tool
+(no runtime wiring); Phase 2B (quotes/research/main wiring) needs a separate Rin review and
+shared-file coordination.
 
 Workstream: MT5 Multi-Broker V1 — branch `claude/mt5-multi-broker-v1`,
 worktree `D:\NEXORA\NEXORA-MT5-BROKER`, base `origin/main` 4f69e9c (unchanged since rev 1).
@@ -466,12 +470,9 @@ Resolved (Rin):
   after an operator restart the new feed uses its own feed-scoped streams. No runtime migration,
   no mixing, no `RuntimeConfig` change (§6.4, §6.5).
 
-Open — Architect (Rin):
-- **A4.** Confirm that the discovery tool's `symbols_get()` / `symbol_info(name)` allowlist
-  (§12) is governed by this ADR as a separate operator tool outside ADR-003's runtime scope.
-  The alternative is to list it in an ADR-003 amendment, which Rin asked to keep narrow. If
-  neither is accepted, the discovery tool is dropped from V1; runtime resolution does not
-  depend on it.
+- **A4 — RESOLVED (Rin, 2026-09-25):** the discovery tool's `symbols_get()` / `symbol_info(name)`
+  allowlist (§12) is governed by this ADR as a separate operator tool outside ADR-003's runtime
+  scope. ADR-003 Amendment 1 stays narrow and is not broadened.
 
 Open — Quant:
 - **Q-Q1 — QUANT DECISION REQUIRED:** the price-grid ↔ P&F `box_size`/`price_precision`
