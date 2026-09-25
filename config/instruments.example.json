@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "instruments": [
+    {
+      "instrument_id": "EXAMPLE-INSTRUMENT",
+      "currency_base": "EXA",
+      "currency_profit": "USD",
+      "trade_calc_mode": 0,
+      "trade_contract_size": "100",
+      "chart_mode": 0,
+      "description": "Placeholder only; replace every value after reviewing discovery output"
+    }
+  ],
+  "brokers": [
+    {
+      "broker_id": "example-broker",
+      "company": "Example Company",
+      "terminal_path": "C:\\Path\\To\\terminal64.exe"
+    }
+  ],
+  "bindings": [
+    {
+      "instrument_id": "EXAMPLE-INSTRUMENT",
+      "broker_id": "example-broker",
+      "symbol": "EXAMPLE_SYMBOL",
+      "price_grid": {
+        "digits": 2,
+        "point": "0.01",
+        "trade_tick_size": "0.01"
+      },
+      "time_offset_seconds": 0
+    }
+  ]
+}
