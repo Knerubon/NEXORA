@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
-from dataclasses import dataclass
 from datetime import timedelta
 from decimal import Decimal
-from typing import Any, NamedTuple
+from typing import Any
 
 from nexora.artifacts import canonical_hash, canonical_serialize
 from nexora.experience.models import POLICY, Experience, frozen_json
@@ -18,56 +15,6 @@ from nexora.market_data.models import NormalizedPriceEvent
 # output carries it, so replaying output recorded before the field existed reproduces
 # the committed snapshot exactly (ADR-028). Append future additive fields here.
 ADDITIVE_OUTPUT_CONTEXT = ("trendline", "entry_readiness")
-
-
-@dataclass(frozen=True)
-class RecordedOutput:
-    """One canonical walk and one encoding of a recorded output (ADR-031 C3).
-
-    `encoded` is exactly the text `canonical_hash` hashes, so every hash of the output
-    reuses it instead of re-walking the growing collections it contains.
-    """
-
-    canonical: dict[str, Any]
-    encoded: str
-
-    @property
-    def hash(self) -> str:
-        return _sha256(self.encoded)
-
-
-def recorded(output: dict[str, Any]) -> RecordedOutput:
-    canonical = canonical_serialize(output)
-    return RecordedOutput(canonical, _encode(canonical))
-
-
-def _encode(canonical: Any) -> str:
-    # The same encoding `canonical_hash` applies to already canonical values.
-    return json.dumps(canonical, sort_keys=True, separators=(",", ":"))
-
-
-def _sha256(encoded: str) -> str:
-    return hashlib.sha256(encoded.encode()).hexdigest()
-
-
-def observation_digest(
-    event: NormalizedPriceEvent,
-    output: RecordedOutput,
-    completeness: str,
-    metadata: dict[str, Any] | None,
-) -> str:
-    """`canonical_hash((event, output, completeness, metadata))`, reusing the output text.
-
-    A canonical tuple encodes as its encoded items joined by "," inside "[...]", so the
-    output is not serialized again.
-    """
-    items = (
-        _encode(canonical_serialize(event)),
-        output.encoded,
-        _encode(canonical_serialize(completeness)),
-        _encode(canonical_serialize(metadata)),
-    )
-    return _sha256("[" + ",".join(items) + "]")
 
 
 def scope_for(config: Any, event: NormalizedPriceEvent) -> str:
@@ -130,51 +77,17 @@ def freeze(
     metadata: dict[str, Any] | None,
 ) -> Experience:
     config = canonical_serialize(config)
-    frame = recorded(output)
+    output = canonical_serialize(output)
     scope = scope_for(config, event)
-    return materialize(
-        config,
-        canonical_hash(config),
-        runtime_stream,
-        event,
-        frame,
-        completeness,
-        metadata,
-        scope,
-        fingerprint(scope, frame.canonical),
-    )
-
-
-def current_signal(output: dict[str, Any], event: NormalizedPriceEvent) -> Any:
-    """The latest signal only when it was decided at this event (canonical output)."""
+    digest = fingerprint(scope, output)
+    decision = output.get("signals", {}).get("decision")
     latest = output.get("signals", {}).get("latest")
     # A previous signal is historical context, not the current WAIT decision.
-    return (
+    signal = (
         latest
         if latest and latest.get("decision_time") == canonical_serialize(event.received_at)
         else None
     )
-
-
-def materialize(
-    config: dict[str, Any],
-    config_hash: str,
-    runtime_stream: str,
-    event: NormalizedPriceEvent,
-    frame: RecordedOutput,
-    completeness: str,
-    metadata: dict[str, Any] | None,
-    scope: str,
-    experience_fingerprint: str,
-) -> Experience:
-    """The T0 snapshot `freeze()` returns, from an already canonical config and output.
-
-    Only needed when the fingerprint starts a new Experience (ADR-031 C2).
-    """
-    output = frame.canonical
-    decision = output.get("signals", {}).get("decision")
-    latest = output.get("signals", {}).get("latest")
-    signal = current_signal(output, event)
     bid, ask = event.bid, event.ask
     context = {
         "event": event,
@@ -195,13 +108,13 @@ def materialize(
         "runtime_config": config,
         "provenance": {
             "runtime_stream": runtime_stream,
-            "config_hash": config_hash,
+            "config_hash": canonical_hash(config),
             "pipeline_version": config.get("pipeline", {}).get("version"),
             "implementation_version": config.get("implementation_version"),
             "signal_engine_version": (decision or {}).get("engine_version"),
             "strategy_version": (decision or {}).get("config_version"),
             "event_hash": canonical_hash(event),
-            "output_hash": frame.hash,
+            "output_hash": canonical_hash(output),
             "data_version": None,
         },
         "completeness": completeness,
@@ -215,38 +128,17 @@ def materialize(
     return Experience(
         1,
         POLICY,
-        canonical_hash((POLICY, scope, event.identity_key, experience_fingerprint)),
+        canonical_hash((POLICY, scope, event.identity_key, digest)),
         scope,
-        experience_fingerprint,
+        digest,
         event.received_at,
         (decision or {}).get("action"),
         frozen_json(context),
     )
 
 
-class Plan(NamedTuple):
-    """Plan facts of one immutable Experience, parsed once (ADR-031 C1). Read-only."""
-
-    entry: Decimal | None
-    risk: Decimal | None
-    decision: dict[str, Any]
-    t0_price: Decimal
-
-
-def plan_of(experience: Experience) -> Plan:
-    context = experience.context()
-    entry, risk, decision = _plan(experience, context)
-    return Plan(entry, risk, decision, Decimal(context["event"]["price"]))
-
-
 def plan(experience: Experience) -> tuple[Decimal | None, Decimal | None, dict[str, Any]]:
-    return _plan(experience, experience.context())
-
-
-def _plan(
-    experience: Experience, context: dict[str, Any]
-) -> tuple[Decimal | None, Decimal | None, dict[str, Any]]:
-    decision = context.get("decision") or {}
+    decision = experience.context().get("decision") or {}
     if experience.action not in {"BUY", "SELL"}:
         return None, None, {}
     zone = decision.get("entry_zone")
@@ -276,11 +168,7 @@ def measure(
     minutes: int,
     samples: list[dict[str, Any]],
     endpoint: NormalizedPriceEvent,
-    *,
-    prepared: Plan | None = None,
 ) -> dict[str, Any]:
-    """`prepared` must be `plan_of(experience)`; it only avoids re-parsing the context."""
-    known = plan_of(experience) if prepared is None else prepared
     due = experience.t0 + timedelta(minutes=minutes)
     window = [
         r
@@ -293,17 +181,11 @@ def measure(
     # The late endpoint and the live lifecycle cannot supply historical plan facts.
     lifecycle = initial_lifecycle(experience)
     for row in window:
-        # Without a prepared plan, advance is called exactly as before (public contract).
-        states = (
-            advance(experience, lifecycle, row["event"])
-            if prepared is None
-            else advance(experience, lifecycle, row["event"], prepared=prepared)
-        )
-        for state in states:
+        for state in advance(experience, lifecycle, row["event"]):
             lifecycle = state
     prices = [r["event"].price for r in window]
-    t0_price = known.t0_price
-    entry, risk = known.entry, known.risk
+    t0_price = Decimal(experience.context()["event"]["price"])
+    entry, risk, _ = plan(experience)
     reference = entry if entry is not None else t0_price
     sign = Decimal(1) if experience.action == "BUY" else Decimal(-1)
     directional = experience.action in {"BUY", "SELL"}
@@ -356,18 +238,10 @@ def advance(
     experience: Experience,
     previous: dict[str, Any],
     event: NormalizedPriceEvent,
-    *,
-    prepared: Plan | None = None,
 ) -> list[dict[str, Any]]:
-    """Only sampled prices establish hypothetical entry/hits; no intrabar path guessing.
-
-    `prepared` must be `plan_of(experience)`; it only avoids re-parsing the context.
-    """
+    """Only sampled prices establish hypothetical entry/hits; no intrabar path guessing."""
     state = {**previous, "hits": dict(previous["hits"])}
-    if prepared is None:
-        entry, risk, decision = plan(experience)
-    else:
-        entry, risk, decision = prepared.entry, prepared.risk, prepared.decision
+    entry, risk, decision = plan(experience)
     if (
         risk is None
         or entry is None
