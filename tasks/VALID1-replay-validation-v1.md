@@ -50,3 +50,22 @@ Draft [ADR-030](../docs/decisions/ADR-030-replay-validation-framework-v1.md).
   - `mypy`: no findings in new code. Two pre-existing `psutil` stub errors come from the local environment (`types-psutil` is not installed in the shared `.venv`).
   - `scripts/recovery_drill.py` passes. `git diff --check` passes.
   - Rin code review pending.
+
+## Integration record — sync with M30 main (2026-09-25)
+
+This record is separate from the Phase 2A evidence above, which stays historical. The original Phase 2A base remains `4f69e9c`.
+
+- Integration base: `origin/main` `f8267da` (PR #33 merge, M30 Phase 2A).
+- Sync method: clean `git rebase` of the 4 unpublished VALID-1 commits, with no conflicts and no squash. HEAD after the sync is `7e9ddb4`.
+- Overlap:
+  - No direct file overlap with M30.
+  - M30 and VALID-1 do not import each other.
+  - The only semantic dependency: `code_fingerprint()` now also hashes the M30 files, so `run_id` values change. This is expected provenance behaviour.
+- Content: every VALID-1 tree and file hash is unchanged by the rebase, and `git range-diff` shows `=` for all commits.
+- Targeted validation: 56 passed (`tests/test_validation_causal.py`, `tests/test_validation_core.py`).
+- Full regression: 529 passed, 3 skipped. The 96 M30 tests pass and are included.
+- `ruff check .` passes.
+- Local `mypy`: only the two pre-existing missing-`psutil`-stub errors, also reproduced on a pristine `origin/main` export.
+- `git diff --check` passes.
+- ADR-030's current ADR-026 status wording was updated, because ADR-026 is now on `main` and accepted for the M30 Phase 2A Architect scope. Historical text is unchanged.
+- Integration assessment: READY_FOR_PR_REVIEW (accepted by Rin).

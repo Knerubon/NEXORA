@@ -5,12 +5,11 @@ Date: 2026-09-25
 Workstream: VALID-1, `claude/replay-validation-v1`, worktree `D:\NEXORA\NEXORA-REPLAY-VALIDATION`, acting as ARCHITECT for the proposal
 Base: `origin/main` `4f69e9c38803796ccfc8afc01480deffd8499c38`
 Task: [VALID1](../../tasks/VALID1-replay-validation-v1.md)
-Related (on `main`): [ADR-009](./ADR-009-market-structure-lifecycle.md), [ADR-011](./ADR-011-signal-evidence-policy.md), [ADR-014](./ADR-014-backtest-lab-reproducibility.md), [ADR-019](./ADR-019-explicit-feed-time-correction.md), [ADR-020](./ADR-020-pnf-trendline-v1.md), [ADR-021](./ADR-021-entry-readiness-v1.md), [ADR-022](./ADR-022-startup-recovery-checkpoint-v1.md), [EX1](../../tasks/EX1-experience-engine-v1.md), [environment isolation](../environment-isolation.md), [requirements FR-09](../requirements.md)
+Related (on `main`): [ADR-009](./ADR-009-market-structure-lifecycle.md), [ADR-011](./ADR-011-signal-evidence-policy.md), [ADR-014](./ADR-014-backtest-lab-reproducibility.md), [ADR-019](./ADR-019-explicit-feed-time-correction.md), [ADR-020](./ADR-020-pnf-trendline-v1.md), [ADR-021](./ADR-021-entry-readiness-v1.md), [ADR-022](./ADR-022-startup-recovery-checkpoint-v1.md), [ADR-026](./ADR-026-m30-next-candle-bias-v1.md) (M30 Next Candle Bias; accepted for the M30 Phase 2A Architect scope), [EX1](../../tasks/EX1-experience-engine-v1.md), [environment isolation](../environment-isolation.md), [requirements FR-09](../requirements.md)
 
 These ADRs are not on `main` and are referenced by name only:
 - ADR-023 (Feature Lifecycle) and ADR-024 (Pattern Engine): accepted for Phase 2 on `claude/pnf-pattern-engine-v1`.
 - ADR-025 (MT5 instrument resolution / Binding Mode) on `claude/mt5-multi-broker-v1`.
-- ADR-026 (M30 Next Candle Bias, draft) on `claude/m30-next-candle-bias-v1`.
 - ADR-027 (Research Journal Payload V2, draft) on `claude/research-journal-payload-v2`.
 - ADR-028 (Experience snapshot additive fields, proposed) in the `NEXORA-EXPERIENCE-COMPAT` worktree.
 
@@ -390,7 +389,7 @@ CI: the existing `pytest`, `ruff`, strict `mypy`, `git diff --check`. A bounded 
 |---|---|---|
 | ADR-024 Pattern Engine (DEV-PNF) | L2c consumes `pattern_engine` as an evaluation consumer (its declared SHADOW contract). `pattern_id` determinism enables SHADOW-vs-later-ACTIVE comparison. | L2c waits for ADR-024 Phase 2 on `main`. Until then only L2b (legacy). No Pattern Engine file touched. |
 | ADR-023 Feature Lifecycle | A SHADOW feature's output is eligible for VALID-1. `feature_config_hash` is part of provenance. | VALID-1 never changes lifecycle and grants no ACTIVE promotion. It only provides evidence for one. |
-| ADR-026 M30 Bias | ADR-026 owns its own prediction and evaluation contract. VALID-1 adopts the same time vocabulary, the N1–N8 spirit and the LIVE/REPLAY split. | VALID-1 does **not** evaluate M30 bias in V1 and defines no competing M30 outcome. A later ADR may add M30 records as a RECORDED subject. |
+| ADR-026 M30 Bias (on `main`, accepted for the M30 Phase 2A Architect scope) | ADR-026 owns its own prediction and evaluation contract. VALID-1 adopts the same time vocabulary, the N1–N8 spirit and the LIVE/REPLAY split. | VALID-1 does **not** evaluate M30 bias in V1 and defines no competing M30 outcome. A later ADR may add M30 records as a RECORDED subject. |
 | ADR-027 Journal Payload V2 | If recorded `output` is slimmed or compacted, RECORDED mode can no longer read full per-row outputs for new rows. | RECORDED mode reads whatever the payload version provides and declares missing components `absent`. **ARCHITECT coordination required** on which fields V2 keeps for evaluation. |
 | ADR-028 Experience compat | Absent vs `null` semantics | Adopted (Decision 3b). |
 | ADR-022 recovery (DEV-PERF) | Reuses `code_fingerprint()` read-only | No change to `checkpoint*.py`. |
