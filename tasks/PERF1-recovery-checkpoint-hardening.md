@@ -30,3 +30,16 @@ Not authorized: H1, H4, H6, H7, H8. Do not modify `packages/nexora/experience/**
 - Tests at `3c571ca` (base `4f69e9c`): `.venv/Scripts/python -m pytest` gave 403 passed and 3 skipped (baseline 377 passed, 3 skipped). `ruff check .` and `mypy` pass. `ruff format --check` passes on the changed files; the 20 files it flags repo-wide already fail at base.
 - Benchmark: [evidence](evidence/PERF1-recovery-benchmark.md), N = 500 to 5,000, median of 3.
 - Open decisions carried to Rin: D2 (the file token deviates from the recommended console signal) and D3 (no value chosen for T; a true idle timer is not implemented).
+
+### Integration sync (2026-09-25; integration base `f5bbdfa`)
+- Rebased onto `f5bbdfa` (VALID-1 PR #34, on top of M30 PR #33) with no conflicts. Range-diff shows all patches unchanged. The Phase 2A SHAs above are pre-rebase; the mapping is in the [integration record](evidence/PERF1-integration-sync-f5bbdfa.md).
+- No direct or semantic overlap with M30 or VALID-1. VALID-1 reads `code_fingerprint()` in its run manifests, so the future H1 review must include it.
+- At `4c8fa51`:
+  - Full suite: 555 passed, 3 skipped.
+  - PERF-1 targeted: 26 passed.
+  - Recovery tests: 103 passed, 2 skipped.
+  - M30: 96 passed.
+  - VALID-1: 56 passed.
+  - ruff and mypy pass. The format check matches pristine main. `git diff --check` is clean.
+- Benchmark re-run (N ≤ 2,000): deterministic outputs are identical to Phase 2A. Wall time was higher because of machine load that was not controlled.
+- Status: in_review, ready for PR review. Nothing pushed or merged.
