@@ -1,0 +1,904 @@
+{
+ "meta": {
+  "harness": "experience-replay-benchmark-v1",
+  "commit": "64ebb12354651750c6ea685eb5e0f10349531836",
+  "python": "3.13.3",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "processor": "Intel64 Family 6 Model 142 Stepping 11, GenuineIntel",
+  "runs": 3,
+  "warmup": 0,
+  "breakdown": true,
+  "seed": 20260925,
+  "profiles": {
+   "calm": {
+    "name": "calm",
+    "step_tenths": 3,
+    "purpose": "legacy-calibrated output growth"
+   },
+   "volatile": {
+    "name": "volatile",
+    "step_tenths": 20,
+    "purpose": "stress: frequent reversals and snapshots"
+   }
+  },
+  "config": "docs\\examples\\research-config.json",
+  "journal_backend": "sqlite (synthetic, benchmark-owned)",
+  "created_at": "2026-09-25T13:46:24.804376+00:00",
+  "code_under_test": "ADR-031 Phase 2 working tree (C1, C2, C3(a,b)); committed in the Phase 2 implementation commit; meta.commit is the harness checkout"
+ },
+ "cases": {
+  "calm:500": {
+   "build": {
+    "reused": false,
+    "total_s": 5.732,
+    "live_ingest": {
+     "calls": 500,
+     "total_ms": 5732.0,
+     "mean_ms": 11.464,
+     "median_ms": 9.876,
+     "p95_ms": 22.097,
+     "max_ms": 39.88,
+     "decile_mean_ms": [
+      6.55,
+      7.719,
+      7.184,
+      8.031,
+      8.919,
+      12.259,
+      12.045,
+      16.678,
+      19.014,
+      16.24
+     ]
+    },
+    "live_observe": {
+     "calls": 500,
+     "total_ms": 2062.1,
+     "mean_ms": 4.124,
+     "median_ms": 3.632,
+     "p95_ms": 7.928,
+     "max_ms": 16.335,
+     "decile_mean_ms": [
+      3.118,
+      3.39,
+      2.939,
+      3.405,
+      3.451,
+      4.433,
+      4.605,
+      5.462,
+      5.705,
+      4.736
+     ]
+    },
+    "live_observe_share": 0.3598,
+    "journal": {
+     "rows": 1127,
+     "sha256": "8c9f7d80df3169fca23c50cfc7c8f570dd139cd56e1f160e3c55e0ee95e1a11f"
+    },
+    "facts": {
+     "streams_by_kind": {
+      "observations": {
+       "streams": 1,
+       "rows": 500,
+       "bytes": 307356
+      },
+      "lifecycle": {
+       "streams": 18,
+       "rows": 36,
+       "bytes": 8523
+      },
+      "outcomes": {
+       "streams": 18,
+       "rows": 72,
+       "bytes": 95439
+      },
+      "snapshot": {
+       "streams": 1,
+       "rows": 18,
+       "bytes": 241029
+      },
+      "research": {
+       "streams": 1,
+       "rows": 500,
+       "bytes": 5852371
+      },
+      "research_config": {
+       "streams": 1,
+       "rows": 1,
+       "bytes": 1826
+      }
+     },
+     "db_bytes": 7618560
+    }
+   },
+   "runs": [
+    {
+     "total_s": 3.147,
+     "observe_s": 1.923,
+     "observe_share": 0.6109,
+     "observe": {
+      "calls": 500,
+      "total_ms": 1922.6,
+      "mean_ms": 3.845,
+      "median_ms": 3.338,
+      "p95_ms": 7.376,
+      "max_ms": 10.894,
+      "decile_mean_ms": [
+       2.955,
+       3.618,
+       3.288,
+       3.752,
+       3.961,
+       3.974,
+       3.919,
+       4.703,
+       4.777,
+       3.505
+      ]
+     },
+     "state_hash": "6f07cdc6d472ac3cde0749813f65516ddf078468719c2bdb247c0cf58ff2e6f5",
+     "journal_changed": false
+    },
+    {
+     "total_s": 3.084,
+     "observe_s": 1.917,
+     "observe_share": 0.6215,
+     "observe": {
+      "calls": 500,
+      "total_ms": 1916.6,
+      "mean_ms": 3.833,
+      "median_ms": 3.342,
+      "p95_ms": 7.096,
+      "max_ms": 14.421,
+      "decile_mean_ms": [
+       3.081,
+       3.099,
+       2.824,
+       3.609,
+       3.928,
+       4.111,
+       4.01,
+       5.247,
+       4.387,
+       4.034
+      ]
+     },
+     "state_hash": "6f07cdc6d472ac3cde0749813f65516ddf078468719c2bdb247c0cf58ff2e6f5",
+     "journal_changed": false
+    },
+    {
+     "total_s": 3.166,
+     "observe_s": 1.953,
+     "observe_share": 0.6167,
+     "observe": {
+      "calls": 500,
+      "total_ms": 1952.6,
+      "mean_ms": 3.905,
+      "median_ms": 3.451,
+      "p95_ms": 7.279,
+      "max_ms": 27.532,
+      "decile_mean_ms": [
+       2.706,
+       3.025,
+       3.137,
+       4.242,
+       3.602,
+       3.737,
+       5.34,
+       4.727,
+       4.3,
+       4.236
+      ]
+     },
+     "state_hash": "6f07cdc6d472ac3cde0749813f65516ddf078468719c2bdb247c0cf58ff2e6f5",
+     "journal_changed": false
+    }
+   ],
+   "summary": {
+    "runs": 3,
+    "total_s": [
+     3.147,
+     3.084,
+     3.166
+    ],
+    "median_total_s": 3.147,
+    "median_ms_per_event": 6.294,
+    "median_observe_s": 1.923,
+    "median_observe_share": 0.6167,
+    "state_hash": "6f07cdc6d472ac3cde0749813f65516ddf078468719c2bdb247c0cf58ff2e6f5"
+   },
+   "breakdown": {
+    "total_s": 3.38,
+    "observe_s": 2.138,
+    "observe_share": 0.6326,
+    "observe": {
+     "calls": 500,
+     "total_ms": 2138.3,
+     "mean_ms": 4.277,
+     "median_ms": 3.651,
+     "p95_ms": 8.354,
+     "max_ms": 32.733,
+     "decile_mean_ms": [
+      3.103,
+      4.216,
+      3.437,
+      3.934,
+      4.565,
+      4.396,
+      4.959,
+      4.925,
+      4.56,
+      4.67
+     ]
+    },
+    "state_hash": "6f07cdc6d472ac3cde0749813f65516ddf078468719c2bdb247c0cf58ff2e6f5",
+    "journal_changed": false,
+    "breakdown": {
+     "categories": {
+      "experience_commit": {
+       "ms": 920.7,
+       "share": 0.2723
+      },
+      "experience_freeze_serialize_hash": {
+       "ms": 690.3,
+       "share": 0.2042
+      },
+      "runtime_decode_event": {
+       "ms": 608.6,
+       "share": 0.18
+      },
+      "journal_read_verify": {
+       "ms": 333.1,
+       "share": 0.0985
+      },
+      "experience_append_encode": {
+       "ms": 283.3,
+       "share": 0.0838
+      },
+      "engine_replay": {
+       "ms": 241.0,
+       "share": 0.0713
+      },
+      "experience_sql": {
+       "ms": 102.7,
+       "share": 0.0304
+      },
+      "experience_digest": {
+       "ms": 59.3,
+       "share": 0.0176
+      },
+      "experience_observe_residual": {
+       "ms": 53.9,
+       "share": 0.0159
+      },
+      "experience_lifecycle_measure": {
+       "ms": 24.0,
+       "share": 0.0071
+      },
+      "experience_context_reparse": {
+       "ms": 6.4,
+       "share": 0.0019
+      },
+      "research_config_append": {
+       "ms": 4.4,
+       "share": 0.0013
+      }
+     },
+     "unattributed_ms": 52.9,
+     "calls": {
+      "Experience.context": 18,
+      "append.canonical_hash": 627,
+      "append.canonical_serialize": 627,
+      "append:experience": 626,
+      "append:research": 1,
+      "commit:experience": 626,
+      "commit:research": 1,
+      "engine.replay": 500,
+      "freeze.canonical_hash": 537,
+      "freeze.canonical_serialize": 2000,
+      "freeze.frozen_json": 1543,
+      "journal.verify": 500,
+      "materialize": 18,
+      "measure": 72,
+      "measure.advance": 1980,
+      "observe": 500,
+      "observe.advance": 1080,
+      "observe.digest": 501,
+      "observe.fingerprint": 500,
+      "observe.recorded": 500,
+      "persist_state": 36,
+      "plan_of": 18,
+      "repository.save": 18,
+      "runtime.decode": 500,
+      "sql:experience": 3130,
+      "sql:read": 17,
+      "sql:research": 5
+     }
+    }
+   }
+  },
+  "calm:1000": {
+   "build": {
+    "reused": false,
+    "total_s": 19.749,
+    "live_ingest": {
+     "calls": 1000,
+     "total_ms": 19748.5,
+     "mean_ms": 19.748,
+     "median_ms": 16.571,
+     "p95_ms": 45.464,
+     "max_ms": 89.469,
+     "decile_mean_ms": [
+      8.048,
+      9.705,
+      11.208,
+      13.524,
+      14.499,
+      17.673,
+      25.894,
+      25.13,
+      28.99,
+      42.812
+     ]
+    },
+    "live_observe": {
+     "calls": 1000,
+     "total_ms": 6320.7,
+     "mean_ms": 6.321,
+     "median_ms": 5.041,
+     "p95_ms": 13.454,
+     "max_ms": 34.011,
+     "decile_mean_ms": [
+      3.631,
+      4.14,
+      4.212,
+      4.789,
+      4.361,
+      6.317,
+      9.404,
+      7.19,
+      8.543,
+      10.62
+     ]
+    },
+    "live_observe_share": 0.3201,
+    "journal": {
+     "rows": 2404,
+     "sha256": "00dad59916f7a81900b1875b06174df1b1d44e113c673d386d6572d847437b8e"
+    },
+    "facts": {
+     "streams_by_kind": {
+      "lifecycle": {
+       "streams": 56,
+       "rows": 128,
+       "bytes": 31347
+      },
+      "outcomes": {
+       "streams": 55,
+       "rows": 219,
+       "bytes": 292239
+      },
+      "observations": {
+       "streams": 1,
+       "rows": 1000,
+       "bytes": 615184
+      },
+      "snapshot": {
+       "streams": 1,
+       "rows": 56,
+       "bytes": 1575678
+      },
+      "research": {
+       "streams": 1,
+       "rows": 1000,
+       "bytes": 27547601
+      },
+      "research_config": {
+       "streams": 1,
+       "rows": 1,
+       "bytes": 1826
+      }
+     },
+     "db_bytes": 32174080
+    }
+   },
+   "runs": [
+    {
+     "total_s": 8.971,
+     "observe_s": 5.705,
+     "observe_share": 0.6359,
+     "observe": {
+      "calls": 1000,
+      "total_ms": 5704.9,
+      "mean_ms": 5.705,
+      "median_ms": 4.806,
+      "p95_ms": 11.679,
+      "max_ms": 34.848,
+      "decile_mean_ms": [
+       3.5,
+       3.718,
+       4.093,
+       5.735,
+       4.595,
+       5.004,
+       8.274,
+       7.163,
+       7.351,
+       7.615
+      ]
+     },
+     "state_hash": "c5c190f0ba5d4c904555bb9d341d064acc1ee213b444913fce405efa1e590324",
+     "journal_changed": false
+    },
+    {
+     "total_s": 8.718,
+     "observe_s": 5.542,
+     "observe_share": 0.6357,
+     "observe": {
+      "calls": 1000,
+      "total_ms": 5542.1,
+      "mean_ms": 5.542,
+      "median_ms": 4.706,
+      "p95_ms": 11.261,
+      "max_ms": 20.812,
+      "decile_mean_ms": [
+       3.739,
+       3.512,
+       4.033,
+       4.2,
+       4.723,
+       5.053,
+       8.072,
+       6.987,
+       7.699,
+       7.402
+      ]
+     },
+     "state_hash": "c5c190f0ba5d4c904555bb9d341d064acc1ee213b444913fce405efa1e590324",
+     "journal_changed": false
+    },
+    {
+     "total_s": 8.905,
+     "observe_s": 5.673,
+     "observe_share": 0.637,
+     "observe": {
+      "calls": 1000,
+      "total_ms": 5672.7,
+      "mean_ms": 5.673,
+      "median_ms": 4.865,
+      "p95_ms": 11.222,
+      "max_ms": 30.686,
+      "decile_mean_ms": [
+       3.204,
+       3.412,
+       4.285,
+       5.281,
+       4.612,
+       5.125,
+       8.118,
+       7.246,
+       8.548,
+       6.896
+      ]
+     },
+     "state_hash": "c5c190f0ba5d4c904555bb9d341d064acc1ee213b444913fce405efa1e590324",
+     "journal_changed": false
+    }
+   ],
+   "summary": {
+    "runs": 3,
+    "total_s": [
+     8.971,
+     8.718,
+     8.905
+    ],
+    "median_total_s": 8.905,
+    "median_ms_per_event": 8.905,
+    "median_observe_s": 5.673,
+    "median_observe_share": 0.6359,
+    "state_hash": "c5c190f0ba5d4c904555bb9d341d064acc1ee213b444913fce405efa1e590324"
+   },
+   "breakdown": {
+    "total_s": 9.738,
+    "observe_s": 6.275,
+    "observe_share": 0.6444,
+    "observe": {
+     "calls": 1000,
+     "total_ms": 6274.8,
+     "mean_ms": 6.275,
+     "median_ms": 5.16,
+     "p95_ms": 13.009,
+     "max_ms": 41.071,
+     "decile_mean_ms": [
+      4.02,
+      3.762,
+      5.171,
+      5.475,
+      5.051,
+      5.568,
+      9.787,
+      7.641,
+      8.001,
+      8.273
+     ]
+    },
+    "state_hash": "c5c190f0ba5d4c904555bb9d341d064acc1ee213b444913fce405efa1e590324",
+    "journal_changed": false,
+    "breakdown": {
+     "categories": {
+      "experience_freeze_serialize_hash": {
+       "ms": 2854.5,
+       "share": 0.2931
+      },
+      "experience_commit": {
+       "ms": 1942.1,
+       "share": 0.1994
+      },
+      "journal_read_verify": {
+       "ms": 1475.5,
+       "share": 0.1515
+      },
+      "runtime_decode_event": {
+       "ms": 1240.8,
+       "share": 0.1274
+      },
+      "experience_append_encode": {
+       "ms": 675.6,
+       "share": 0.0694
+      },
+      "engine_replay": {
+       "ms": 532.4,
+       "share": 0.0547
+      },
+      "experience_sql": {
+       "ms": 308.1,
+       "share": 0.0316
+      },
+      "experience_digest": {
+       "ms": 199.8,
+       "share": 0.0205
+      },
+      "experience_observe_residual": {
+       "ms": 156.9,
+       "share": 0.0161
+      },
+      "experience_lifecycle_measure": {
+       "ms": 103.0,
+       "share": 0.0106
+      },
+      "experience_context_reparse": {
+       "ms": 39.4,
+       "share": 0.004
+      },
+      "research_config_append": {
+       "ms": 4.8,
+       "share": 0.0005
+      }
+     },
+     "unattributed_ms": 204.6,
+     "calls": {
+      "Experience.context": 56,
+      "append.canonical_hash": 1404,
+      "append.canonical_serialize": 1404,
+      "append:experience": 1403,
+      "append:research": 1,
+      "commit:experience": 1403,
+      "commit:research": 1,
+      "engine.replay": 1000,
+      "freeze.canonical_hash": 1113,
+      "freeze.canonical_serialize": 4457,
+      "freeze.frozen_json": 3299,
+      "journal.verify": 1000,
+      "materialize": 56,
+      "measure": 219,
+      "measure.advance": 5990,
+      "observe": 1000,
+      "observe.advance": 3286,
+      "observe.digest": 1001,
+      "observe.fingerprint": 1000,
+      "observe.recorded": 1000,
+      "persist_state": 128,
+      "plan_of": 56,
+      "repository.save": 56,
+      "runtime.decode": 1000,
+      "sql:experience": 7015,
+      "sql:read": 33,
+      "sql:research": 5
+     }
+    }
+   }
+  },
+  "volatile:250": {
+   "build": {
+    "reused": false,
+    "total_s": 15.849,
+    "live_ingest": {
+     "calls": 250,
+     "total_ms": 15848.7,
+     "mean_ms": 63.395,
+     "median_ms": 63.451,
+     "p95_ms": 118.278,
+     "max_ms": 141.46,
+     "decile_mean_ms": [
+      15.305,
+      30.662,
+      45.198,
+      50.195,
+      76.961,
+      65.451,
+      71.582,
+      80.653,
+      99.793,
+      98.148
+     ]
+    },
+    "live_observe": {
+     "calls": 250,
+     "total_ms": 6608.9,
+     "mean_ms": 26.436,
+     "median_ms": 23.949,
+     "p95_ms": 51.733,
+     "max_ms": 87.144,
+     "decile_mean_ms": [
+      7.972,
+      15.659,
+      22.37,
+      22.198,
+      30.957,
+      24.685,
+      29.0,
+      33.507,
+      40.905,
+      37.104
+     ]
+    },
+    "live_observe_share": 0.417,
+    "journal": {
+     "rows": 1545,
+     "sha256": "a2158031e84ead7bcee1b70c707c3a3342fe7e44534211dec71011bd9ced8e25"
+    },
+    "facts": {
+     "streams_by_kind": {
+      "lifecycle": {
+       "streams": 160,
+       "rows": 315,
+       "bytes": 77283
+      },
+      "outcomes": {
+       "streams": 157,
+       "rows": 569,
+       "bytes": 742602
+      },
+      "observations": {
+       "streams": 1,
+       "rows": 250,
+       "bytes": 153496
+      },
+      "snapshot": {
+       "streams": 1,
+       "rows": 160,
+       "bytes": 11591052
+      },
+      "research": {
+       "streams": 1,
+       "rows": 250,
+       "bytes": 24142806
+      },
+      "research_config": {
+       "streams": 1,
+       "rows": 1,
+       "bytes": 1826
+      }
+     },
+     "db_bytes": 37715968
+    }
+   },
+   "runs": [
+    {
+     "total_s": 6.884,
+     "observe_s": 5.443,
+     "observe_share": 0.7906,
+     "observe": {
+      "calls": 250,
+      "total_ms": 5442.7,
+      "mean_ms": 21.771,
+      "median_ms": 21.085,
+      "p95_ms": 35.974,
+      "max_ms": 58.923,
+      "decile_mean_ms": [
+       6.797,
+       14.808,
+       19.981,
+       21.746,
+       22.049,
+       20.517,
+       25.17,
+       28.426,
+       29.665,
+       28.548
+      ]
+     },
+     "state_hash": "bf79e50c0bade823a3aef6ed1ca9ef072360910996dd93bd898d8aa032f498b9",
+     "journal_changed": false
+    },
+    {
+     "total_s": 12.478,
+     "observe_s": 10.779,
+     "observe_share": 0.8639,
+     "observe": {
+      "calls": 250,
+      "total_ms": 10779.2,
+      "mean_ms": 43.117,
+      "median_ms": 36.196,
+      "p95_ms": 106.95,
+      "max_ms": 184.108,
+      "decile_mean_ms": [
+       6.308,
+       40.247,
+       79.162,
+       72.947,
+       69.723,
+       29.307,
+       31.72,
+       29.95,
+       32.918,
+       38.886
+      ]
+     },
+     "state_hash": "bf79e50c0bade823a3aef6ed1ca9ef072360910996dd93bd898d8aa032f498b9",
+     "journal_changed": false
+    },
+    {
+     "total_s": 7.754,
+     "observe_s": 6.04,
+     "observe_share": 0.7789,
+     "observe": {
+      "calls": 250,
+      "total_ms": 6039.6,
+      "mean_ms": 24.158,
+      "median_ms": 23.082,
+      "p95_ms": 43.965,
+      "max_ms": 60.21,
+      "decile_mean_ms": [
+       6.902,
+       16.193,
+       21.957,
+       20.149,
+       23.205,
+       20.945,
+       31.401,
+       33.363,
+       36.412,
+       31.06
+      ]
+     },
+     "state_hash": "bf79e50c0bade823a3aef6ed1ca9ef072360910996dd93bd898d8aa032f498b9",
+     "journal_changed": false
+    }
+   ],
+   "summary": {
+    "runs": 3,
+    "total_s": [
+     6.884,
+     12.478,
+     7.754
+    ],
+    "median_total_s": 7.754,
+    "median_ms_per_event": 31.016,
+    "median_observe_s": 6.04,
+    "median_observe_share": 0.7906,
+    "state_hash": "bf79e50c0bade823a3aef6ed1ca9ef072360910996dd93bd898d8aa032f498b9"
+   },
+   "breakdown": {
+    "total_s": 7.638,
+    "observe_s": 5.981,
+    "observe_share": 0.783,
+    "observe": {
+     "calls": 250,
+     "total_ms": 5981.1,
+     "mean_ms": 23.925,
+     "median_ms": 23.674,
+     "p95_ms": 42.596,
+     "max_ms": 61.592,
+     "decile_mean_ms": [
+      7.026,
+      12.68,
+      20.842,
+      22.402,
+      24.929,
+      25.509,
+      29.323,
+      28.585,
+      35.526,
+      32.422
+     ]
+    },
+    "state_hash": "bf79e50c0bade823a3aef6ed1ca9ef072360910996dd93bd898d8aa032f498b9",
+    "journal_changed": false,
+    "breakdown": {
+     "categories": {
+      "experience_freeze_serialize_hash": {
+       "ms": 2731.6,
+       "share": 0.3576
+      },
+      "experience_commit": {
+       "ms": 1641.2,
+       "share": 0.2149
+      },
+      "journal_read_verify": {
+       "ms": 1047.0,
+       "share": 0.1371
+      },
+      "experience_append_encode": {
+       "ms": 741.0,
+       "share": 0.097
+      },
+      "runtime_decode_event": {
+       "ms": 288.9,
+       "share": 0.0378
+      },
+      "experience_context_reparse": {
+       "ms": 233.8,
+       "share": 0.0306
+      },
+      "experience_observe_residual": {
+       "ms": 186.5,
+       "share": 0.0244
+      },
+      "experience_lifecycle_measure": {
+       "ms": 183.1,
+       "share": 0.024
+      },
+      "engine_replay": {
+       "ms": 166.8,
+       "share": 0.0218
+      },
+      "experience_sql": {
+       "ms": 148.1,
+       "share": 0.0194
+      },
+      "experience_digest": {
+       "ms": 117.9,
+       "share": 0.0154
+      },
+      "research_config_append": {
+       "ms": 5.2,
+       "share": 0.0007
+      }
+     },
+     "unattributed_ms": 147.3,
+     "calls": {
+      "Experience.context": 159,
+      "append.canonical_hash": 1295,
+      "append.canonical_serialize": 1295,
+      "append:experience": 1294,
+      "append:research": 1,
+      "commit:experience": 1294,
+      "commit:research": 1,
+      "engine.replay": 250,
+      "freeze.canonical_hash": 571,
+      "freeze.canonical_serialize": 1371,
+      "freeze.frozen_json": 1384,
+      "journal.verify": 250,
+      "materialize": 160,
+      "measure": 569,
+      "measure.advance": 14480,
+      "observe": 250,
+      "observe.advance": 8406,
+      "observe.digest": 251,
+      "observe.fingerprint": 250,
+      "observe.recorded": 250,
+      "persist_state": 315,
+      "plan_of": 159,
+      "repository.save": 160,
+      "runtime.decode": 250,
+      "sql:experience": 6470,
+      "sql:read": 9,
+      "sql:research": 5
+     }
+    }
+   }
+  }
+ }
+}
