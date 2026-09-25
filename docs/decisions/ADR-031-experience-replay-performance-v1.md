@@ -1,6 +1,6 @@
 # ADR-031 — Experience Replay Performance Investigation V1 (PERF-2)
 
-Status: **Proposed — Phase 1 approved (Rin), Phase 1B tooling complete; production optimization (Phase 2) not started and blocked on ADR-028.** Phase 1B is self-reviewed; independent review is pending.
+Status: **Proposed — Phase 1 approved (Rin); Phase 2A (C1, C2, C3(a, b)) implemented on this branch, pending Rin code review and a Rin decision on `COVERED_FIELDS` (§18.7).** Self-review only.
 Date: 2026-09-25
 Workstream: PERF-2 (DEV-PERF role) · Branch `claude/experience-replay-performance-v1` · Worktree `D:\NEXORA\NEXORA-EXPERIENCE-PERF` · Base `origin/main` `4f69e9c`
 
@@ -559,3 +559,168 @@ C4 and C5 stay out.
 **BLOCKED.** The only blocker is ADR-028 / EXC1: it is uncommitted and unmerged, and it owns `experience/engine.py`. Main has not moved beyond `f2d51ad`, and no invariant or Phase 1 assumption was invalidated.
 
 **Unblock condition:** ADR-028 is accepted and merged to main (or committed on an approved branch that PERF-2 is directed to base on). Then rebase, re-run 17.4 as the Phase 2A baseline, and request Rin's Phase 2A decision.
+
+## 18. Phase 2 implementation — C1, C2, C3(a, b) (2026-09-25)
+
+The scope was authorized by Rin after EXC1 / ADR-028 merged (PR #36, `ec0aad5`). C3(c), C4, C5, Experience V2, async observe, and any journal, checkpoint-format or storage-format change are **not** implemented. Self-review only; Rin code review is pending.
+
+### 18.1 Sync and baseline
+
+- Rebased from `c69523b` (base `f2d51ad`) onto `origin/main` `ec0aad5`. There were no conflicts, and the four PERF-2 commits were kept (not squashed). Main's `experience/` equals EXC1's reviewed head `a7972d4`. The only other worktree with an `experience/engine.py` diff is the stale, fully merged `claude/trendline-engine-v1`; it is not an owner.
+- **EXC1 baseline before any change:**
+  - `test_experience_journal_compat.py`: 15 passed.
+  - Experience suites: 55 passed, 1 skipped.
+  - Recovery/checkpoint suites: 80 passed.
+
+  These cover byte-identical old-writer rows, cold replay = checkpoint + delta (C12), ADR-028 presence semantics, and no rewrite.
+
+### 18.2 Implementation
+
+| Candidate | Change | Where |
+|---|---|---|
+| **C1** | `Plan(entry, risk, decision, t0_price)` and `plan_of(experience)` parse `context_json` **once** per Experience. `ExperienceService` caches it per pending `experience_id`, drops the entry when the Experience completes, and starts empty after `restore_state`. `advance()` and `measure()` take an optional keyword-only `prepared`. Without it they behave and call each other exactly as before, so the public contract holds (VALID-1 and `test_measure_replays_only_causal_window` use them unchanged). | `engine.py`, `service.py` |
+| **C2** | `observe()` computes scope and fingerprint first. `materialize()` builds the full T0 context and `context_json` **only when the fingerprint starts a new Experience**, still before any journal write, as before. Public `freeze()` is now `recorded()` + `fingerprint()` + `materialize()`, and its result is equal to the baseline's. ADR-028 presence semantics are the same code (`ADDITIVE_OUTPUT_CONTEXT`, `key in output`). | `engine.py`, `service.py` |
+| **C3(a)** | `recorded(output)` does **one** canonical walk and **one** compact sorted encoding per `observe()`. `output_hash` is the SHA-256 of that encoding. `observation_digest()` assembles the digest's canonical tuple encoding as `"[" + event + "," + output + "," + completeness + "," + metadata + "]"` from the same output text. Both equal `canonical_hash`, proven by tests. | `engine.py` |
+| **C3(b)** | The canonical config, its hash and the scope (keyed by source, symbol, price source and units) are computed once per service. The config is an immutable `RuntimeConfig` at every construction site. | `service.py` |
+
+- **Failure parity:** `observe()` still evaluates `current_signal()` on every event, so a malformed recorded `signals.latest` fails on every event as it did when the full context was built. Everything else `materialize()` serializes was already walked by `recorded()` or the digest.
+- **Derived state:** the three caches live in one attribute, `ExperienceService._derived`, which is never checkpointed. **Shared-file touch:** `research/checkpoint_state.py` `COVERED_FIELDS` gains the name `"_derived"`, with a comment that it is derived and not persisted. `COVERED_FIELDS` is read only by the contract test `test_component_contracts_cover_every_attribute`. Encode and decode, `STATE_VERSION` and the checkpoint format are unchanged. Not approved by Rin; decision pending (18.7).
+- `storage.py`, `artifacts.py`, the runtime, VALID-1, M30 and the API are unchanged.
+
+### 18.3 Equivalence evidence
+
+**Oracle:** `tests/experience_baseline/` holds the ec0aad5 `engine.py` verbatim and `service.py` with only its import block changed (to import the baseline engine). `tests/test_experience_replay_equivalence.py` (20 tests) runs both implementations through the real `ResearchRuntime`:
+
+| # | Requirement | Test and result |
+|---|---|---|
+| 1–7 | Rows, write order, IDs, fingerprints, `context_json`, MFE/MAE and outcome windows, lifecycle | Live ingest of calm (160) and volatile (140) data. **All journal rows are equal as `(sequence, stream, key, content_hash, payload)`.** The volatile run asserts BUY and SELL plans, `ENTRY_TRIGGERED`/`ACTIVE`/`INVALIDATED` states and entry-zone outcomes are present, so the plan cache is exercised. Plus pure checks: `plan_of`, `advance`/`measure` with and without `prepared` match the baseline for every horizon, and `freeze()` matches the baseline for every recorded row × {additive fields absent, explicit null, present}, and for raw (non-canonical) live output. |
+| 8 | Checkpoint state byte-identical after equivalent prefixes | The checkpoint **blob hash after every event** is equal between implementations. Warm restore (checkpoint + delta) and cold replay are each byte-equal across implementations. |
+| 9 | Replay and live converge | Replay by both implementations leaves rows unchanged and yields equal state. An optimized live journal equals the baseline one and replays to the same state. Checkpoint + delta equals cold replay (value level; see 18.6 O1). |
+| 10 | Conflict detection | `experience_event_identity_conflict` still raises; a tampered snapshot still fails replay with `journal_identity_conflict` under both implementations. |
+| 11 | EXC1 old journal | The `9016004` fixture replays under both implementations to equal state, with rows byte-identical. All 15 EXC1 tests pass. |
+| 12 | Fault/restart | An injected failure at the 3rd, 40th or 170th Experience append gives identical rows under both implementations, no duplicate or missing rows against a clean run, and the same replay state. |
+| — | **The tests catch bugs** | Six mutations each make the comparison fail: a stale fingerprint (C2), a weakened digest (C3; only `_seen` changes, caught by the prefix checkpoint hash), dropped additive fields (ADR-028), one plan shared by all Experiences (C1), a wrong cached T0 price (C1), and a different output-hash encoding (C3). |
+
+**At benchmark scale:** journals built live by the ec0aad5 code and by the optimized code are **identical**: calm 500 has 1,127 rows, calm 1,000 has 2,404 and volatile 250 has 1,545, all with equal ordered digests. Their replay state hashes are identical too.
+
+### 18.4 Before / after (same harness, same machine, sequential, idle)
+
+Evidence: [tasks/evidence/PERF2-phase2-benchmark.md](../../tasks/evidence/PERF2-phase2-benchmark.md), with raw before/after JSON.
+
+The "before" run used `git archive` of the base (Experience code = ec0aad5); the "after" run used the working tree. Both used `experience_replay_benchmark.py --cases calm:500 calm:1000 volatile:250 --runs 3 --breakdown`. The harness now wraps only functions present in the loaded code, and maps the new function names to the same cost categories.
+
+| Case | Replay median before → after | ms/event | Speed-up | `observe` share |
+|---|---|---|---|---|
+| calm 500 | 6.29 → **3.15 s** | 12.6 → 6.3 | 2.0× | 78.6% → 61.7% |
+| calm 1,000 | 19.83 → **8.91 s** | 19.8 → 8.9 | 2.2× | 83.7% → 63.6% |
+| volatile 250 | 33.44 → **7.75 s** | 133.8 → 31.0 | 4.3× | 95.4% → 79.1% |
+
+Attributed replay run, before → after, in seconds and share of that run (calm 500 / calm 1,000 / volatile 250):
+
+| Category | calm 500 | calm 1,000 | volatile 250 |
+|---|---|---|---|
+| `freeze` / serialize / hash of the output | 2.07 (34%) → 0.69 (20%) | 7.17 (34%) → 2.85 (29%) | 4.50 (13%) → 2.73 (36%) |
+| Context parsing | 0.83 (14%) → 0.01 (0.2%) | 5.03 (24%) → 0.04 (0.4%) | 23.18 (68%) → 0.23 (3%) |
+| Idempotency digest | 0.55 (9%) → 0.06 (2%) | 2.36 (11%) → 0.20 (2%) | 1.70 (5%) → 0.12 (2%) |
+| Append/write (commit + encode + SQL) | 1.23 → 1.30 | 2.96 → 2.93 | 2.75 → 2.53 |
+
+| Per event | calm 500 | calm 1,000 | volatile 250 |
+|---|---|---|---|
+| `Experience.context()` parses | 6.41 → **0.04** | 9.71 → **0.06** | 96.1 → **0.64** |
+| Full-output canonical walks | ~4 → 1 + new-snapshot rate (0.04) | ~4 → 1 + 0.06 | ~4 → 1 + 0.64 |
+| Experience appends / commits | 1.25 → 1.25 | 1.40 → 1.40 | 5.18 → 5.18 (unchanged; C4 not done) |
+| Live ingest mean | 16.8 → 11.5 ms | 31.9 → 19.7 ms | 165.3 → 63.4 ms |
+| Live `observe` mean | 9.5 → 4.1 ms | 18.1 → 6.3 ms | 129.0 → 26.4 ms |
+
+Append/write cost is unchanged by design. It becomes the largest single Experience item on calm data (commit 20–27%). `decode` (C5) is now 13–18% of calm replay. Volatile "after" had one noisy run (12.5 s); the median is reported.
+
+### 18.5 Complexity after Phase 2
+
+**Phase 2 does not remove the O(N²).** It removes repeated work per event, so the constant shrinks, but the per-event cost still grows with history. "After" per-decile `observe` means still rise: 3.5 → 7.6 ms (calm 1,000) and 6.8 → 28.5 ms (volatile 250).
+
+The remaining O(i) work per event:
+
+1. The one `recorded()` canonical walk and encoding of the cumulative recorded output (`columns`, `transitions`, `structure`, `trendline`, and so on);
+2. `fingerprint()` over all `pivots` and `levels`;
+3. `storage._verify` of each O(i) research row;
+4. on new-snapshot events, `materialize()` serializing a T0 context that embeds the same cumulative collections.
+
+Removing these requires bounding the recorded collections or the frozen context: Experience V2 (C7) or ADR-027. That is a policy or format decision outside PERF-2.
+
+### 18.6 Findings
+
+- **O1 (predates this work, not Experience):** a live runtime's checkpoint blob differs from a replayed runtime's even in the baseline. Live events keep their Decimal exponent (`2000.0`) while journal-decoded events do not (`2000`); values and canonical hashes are equal. Byte-exact live-vs-replay or checkpoint-vs-cold comparisons therefore hold only for data without trailing zeros (for example the EXC1 fixture); the recovery suite's `state()` comparison holds generally. This is reported for ADR-022/PERF-1 awareness; PERF-2 does not change it.
+- **O2:** because `engine.py` and `service.py` change, deployment rejects every existing checkpoint once (whole-package code fingerprint) and performs one full replay, now roughly 2–4× faster than before.
+
+### 18.7 `COVERED_FIELDS` / `"_derived"` — Rin decision required (not approved)
+
+Rin has **not** approved the shared checkpoint contract change: Phase 2A scope is C1 → C2 → C3(a, b), and `checkpoint_state.py` is a shared recovery/checkpoint area. Evidence for that decision:
+
+**Exact diff of `packages/nexora/research/checkpoint_state.py`:** a comment plus one list entry.
+
+```diff
+ # Every attribute of every checkpointed component. Configuration attributes are
+-# rebuilt from the current config; all others are persisted below.
++# rebuilt from the current config; all others are persisted below, except
++# ExperienceService._derived: caches derived from the config and pending Experiences,
++# never persisted and rebuilt on demand after restore (ADR-031).
+ COVERED_FIELDS: dict[str, frozenset[str]] = {
+@@
+             "_completed",
+             "_seen",
++            "_derived",
+```
+
+**Which candidate needs `_derived`:** C1 (`plans`, the per-pending-Experience `Plan` cache) and C3(b) (`config`, the canonical config and hash, and `scopes`, the scope per source key). These caches must outlive one `observe()` call, so they are instance state. C2 and C3(a) do not need it; they are per-call. `_derived` is **not** needed for correctness: all three caches are pure functions of immutable inputs, and a restore starts empty.
+
+**What fails if `checkpoint_state.py` is reverted:** tested in a scratch copy with C1/C2/C3 unchanged and only `checkpoint_state.py` reverted to HEAD. Running `test_recovery_checkpoint`, `test_experience_replay_equivalence`, `test_experience_journal_compat`, `test_checkpoint_schedule`, `test_startup_recovery` and `test_experience` gave **1 failed, 160 passed**. The single failure is `test_component_contracts_cover_every_attribute`, the guard that every instance attribute of a checkpointed component is declared. **No equivalence, EXC1, recovery or checkpoint-parity test fails.** It is guard bookkeeping, but it cannot be removed while all tests stay green, so it was **not** reverted.
+
+**Serialized bytes, schema and restore semantics: unchanged.**
+- `COVERED_FIELDS` is read only by that contract test; `encode_state` and `restore_state` do not use it.
+- `STATE_VERSION = 1` and `checkpoint.py` (`SCHEMA_VERSION = 2`, `FORMAT`) are unchanged.
+- The equivalence tests show the checkpoint **blob hash after every event** is byte-equal to the ec0aad5 baseline, and that warm restore (checkpoint + delta) is byte-equal across implementations.
+- `ExperienceService.checkpoint_state()` still returns exactly `last, pending, states, samples, completed, seen`. `restore_state` assigns the same six maps and resets `_derived`.
+
+**Checkpoint/recovery equivalence, before → after:**
+
+| Suite | Before (ec0aad5 Experience code) | After (Phase 2) |
+|---|---|---|
+| Recovery/checkpoint (5 files) | 92 passed | 92 passed |
+| EXC1 compatibility | 15 passed | 15 passed |
+| Equivalence: live rows, checkpoint blob after every prefix, warm = cold, fault/restart | — | 20 passed (baseline vs optimized) |
+
+**Options for Rin:**
+
+| Option | Effect |
+|---|---|
+| **A (recommended).** Accept the one-name `COVERED_FIELDS` entry | Keeps C1 and C3(b) as implemented. The guard stays exhaustive and documents why `_derived` is not persisted. |
+| **B.** Move the caches off the service instance (module-level memo keyed by immutable values) | No `checkpoint_state.py` change. But it adds process-global cache state (memory retention of T0 contexts, lifetime not tied to the runtime) and sidesteps the guard's inventory of component state. Not recommended. |
+| **C.** Drop C1 and C3(b) caching | No contract change, but loses most of the gain (C1 alone removed 68% of volatile replay). Not recommended. |
+
+### 18.8 Deferred (not implemented)
+
+| Item | Status |
+|---|---|
+| C3(c) canonical fast path | Needs `artifacts.py`; not authorized. |
+| C4 no-op append fast path | Needs `storage.py`, a PostgreSQL measurement and Security review. It is now the largest remaining Experience cost on calm data. |
+| C5 `decode` type-hint cache | Needs `artifacts.py`; no owner assigned (Q-P2-5). It is now 13–18% of calm replay. |
+| C7 Experience V2 | The only candidate that removes the O(i) term; a policy change (Q-P2-6). |
+
+### 18.9 Regression
+
+| Check | Result |
+|---|---|
+| PERF-2 tests (equivalence 20 + benchmark 8) | 28 passed |
+| EXC1 compatibility | 15 passed |
+| Experience suites (6 files) | 90 passed, 1 skipped (PostgreSQL DSN not set) |
+| Recovery/checkpoint (5 files) | 92 passed |
+| VALID-1 | 56 passed |
+| M30 | 96 passed |
+| Full `pytest` | **598 passed, 3 skipped** |
+| `ruff check .` | clean |
+| `ruff format --check`, changed files | clean |
+| `mypy` (strict), changed files | clean |
+| `mypy`, whole repo | 3 errors that predate this work: missing `psutil` stubs in `launch.py`, `test_launch_graceful_stop.py` and `test_environment.py` |
+| `git diff --check` | clean |
+
+All suites ran with an absolute `PYTHONPATH` to this worktree.
