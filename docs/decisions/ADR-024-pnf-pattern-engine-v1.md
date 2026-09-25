@@ -333,6 +333,29 @@ Any failure means no adoption and a deterministic full journal replay (ADR-022 D
 
 ## Consequences
 
+**13i. Concrete Phase 2 integration (2026-09-25).** ADR-023 §11e resolves the
+checkpoint integration points against merged PERF-2 (`6cdff36`):
+
+- `pipeline.pattern_engine` stores the exact `PatternEngineState` fields from §13c,
+  using the existing explicit codec (typed fixed tuples for `pending` pairs).
+  DISABLED stores encoded `EMPTY_STATE`, never `null` or an omitted section.
+- Configuration and unit descriptors are reconstructed, not stored in engine state.
+  `COVERED_FIELDS` covers `PatternEngine.__slots__` and the pipeline's engine attribute.
+- Validate bounds, sequence against Structure, pivot count/last id/window suffix,
+  resolved columns and pending transition references. Check current results against
+  enabled units, descriptors, deterministic ids and their Structure/P&F anchors.
+  Reject non-empty DISABLED state; never guess anchors or partially adopt state.
+- Append `pattern_engine` to pipeline output and `_OUTPUT_SCHEMA`; preserve its exact
+  event snapshot (including `changed` and health), rather than regenerating a snapshot
+  that loses event-local information. Validate configuration metadata and references.
+- Pipeline collects ordered `(transition, structure_step)` inputs for each event and
+  calls the existing `process_event`, including on no-transition events. Both replay
+  and observation run this path. Signal, Entry Readiness and Experience consumers are unchanged.
+- API composition reads optional `NEXORA_FEATURES_CONFIG`, strictly parses it and passes
+  resolved config to runtime. Unset defaults to DISABLED; invalid/unreadable config or
+  ACTIVE fails startup. The existing runtime output/API publishes the additive block.
+
+
 - One pattern-evidence owner, with a safe path to it. V1 changes no decision, Experience identity, chart, backtest result or stream id.
 - Journal rows grow by one bounded block per event.
 - The legacy duplication (Signal and engine) exists from Phase 2 until Phase 3, guarded by the parity test.

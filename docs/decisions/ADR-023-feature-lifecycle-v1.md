@@ -255,6 +255,31 @@ Lifecycle-controlled features follow ADR-022's explicit, versioned JSON checkpoi
 
 Any Phase 2 code change alters ADR-022's `code_fingerprint`, so the first start after upgrade is always a full replay regardless.
 
+**11e. Phase 2 integration contract (2026-09-25, Lane C authorization).**
+After PERF-2 merged at `6cdff36`, the authorized integration specializes 11d as follows;
+it does not change lifecycle or trading semantics:
+
+- Keep the ADR-022 JSON envelope and header `schema_version = 2` unchanged.
+  Bump payload `STATE_VERSION` from 1 to 2 because its explicit layout changes
+  (required by 11d). Pattern's own state version stays 1.
+- Store `feature_config_hash` at the payload root as validation metadata, not mutable
+  engine state. Keep feature config outside `RuntimeConfig`/`PipelineConfig` and stream identity.
+- Preserve header, integrity and journal-anchor validation in `checkpoint.verify`.
+  Then validate payload version/keys/hash before typed component decoding. A well-typed
+  different hash yields `feature_config_mismatch`; missing/ill-typed hash or malformed
+  component state yields `state_invalid`. All failures use existing full-replay fallback.
+- Pass the same resolved startup features to both cold pipeline construction and
+  `_restore_pipeline`. Decode onto fresh components; restore Structure before checking
+  Pattern cross-component invariants. Adopt only after the existing output hash and
+  event checks and Experience restore all pass.
+- Add `pipeline.pattern_engine` and the matching typed output block; exact state,
+  DISABLED representation and validation are specified in ADR-024 §13i.
+- PERF-2's `ExperienceService._derived` remains covered but never serialized; the
+  existing Experience restore clears it and rebuilds it lazily. No Experience codec,
+  semantics, journal schema or persistence model changes.
+- A feature-config mismatch rebuilds under the new config and writes a fresh checkpoint;
+  historical journal rows and their feature metadata are never rewritten.
+
 ## Consequences
 
 - One reusable resolver `resolve(ceiling, feature, unit) -> FeatureLifecycle` plus the registry and the `FeatureStatus` contract in a new pure module (proposed `packages/nexora/features.py`).
