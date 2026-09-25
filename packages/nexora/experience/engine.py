@@ -10,6 +10,12 @@ from nexora.artifacts import canonical_hash, canonical_serialize
 from nexora.experience.models import POLICY, Experience, frozen_json
 from nexora.market_data.models import NormalizedPriceEvent
 
+# Output fields added to the frozen context after experience-v1 was first committed
+# (ADR-020 Decision 13, ADR-021 Decision 12). Each is frozen only when the recorded
+# output carries it, so replaying output recorded before the field existed reproduces
+# the committed snapshot exactly (ADR-028). Append future additive fields here.
+ADDITIVE_OUTPUT_CONTEXT = ("trendline", "entry_readiness")
+
 
 def scope_for(config: Any, event: NormalizedPriceEvent) -> str:
     return canonical_hash((config, event.source, event.symbol, event.price_source, event.units))
@@ -97,8 +103,6 @@ def freeze(
         "latest_signal_context": latest,
         "matrix": output.get("matrix"),
         "structure": output.get("structure"),
-        "trendline": output.get("trendline"),
-        "entry_readiness": output.get("entry_readiness"),
         "regime": output.get("regime"),
         "pnf": {"columns": output.get("columns"), "transitions": output.get("transitions")},
         "runtime_config": config,
@@ -119,6 +123,8 @@ def freeze(
         "session_context": None,
         "news_context": None,
     }
+    # Presence, not value: an explicitly recorded null is frozen as null.
+    context.update({key: output[key] for key in ADDITIVE_OUTPUT_CONTEXT if key in output})
     return Experience(
         1,
         POLICY,

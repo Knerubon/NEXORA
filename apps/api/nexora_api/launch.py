@@ -5,10 +5,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import secrets
 import shutil
 import socket
 import subprocess
 import sys
+import threading
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -34,7 +37,74 @@ def child_environment(settings: Environment) -> dict[str, str]:
     return env
 
 
-def stop_owned(records: list[dict[str, Any]], code: Path) -> None:
+# Graceful stop (ADR-029 H2). The API child watches a per-run request file in its own
+# environment's state directory, so its lifespan shutdown (feed stop, research checkpoint)
+# can finish before the existing terminate/kill path. Nothing listens on the network.
+GRACEFUL_STOP_SECONDS = 30.0
+# Open connections (e.g. dashboard WebSockets) must not hold the lifespan shutdown.
+CONNECTION_DRAIN_SECONDS = 5
+STOP_TOKEN_VARIABLE = "NEXORA_API_STOP_TOKEN"
+_STOP_POLL_SECONDS = 0.25
+
+
+def stop_request_path(state: Path) -> Path:
+    return state / "api-stop.request"
+
+
+def request_stop(path: Path, token: str) -> None:
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(token, encoding="utf-8")
+    os.replace(temporary, path)
+
+
+def watch_stop_request(
+    path: Path,
+    token: str,
+    on_stop: Callable[[], None],
+    done: threading.Event,
+    poll: float = _STOP_POLL_SECONDS,
+) -> None:
+    """Call `on_stop` once when `path` holds this run's token; stale requests never match."""
+    while not done.wait(poll):
+        try:
+            requested = path.read_text(encoding="utf-8") == token
+        except (OSError, UnicodeDecodeError):
+            continue
+        if requested:
+            on_stop()
+            return
+
+
+def serve_api(app: Any, host: str, port: int, *, stop_request: Path, token: str | None) -> None:
+    import uvicorn
+
+    server = uvicorn.Server(
+        uvicorn.Config(
+            app, host=host, port=port, timeout_graceful_shutdown=CONNECTION_DRAIN_SECONDS
+        )
+    )
+    done = threading.Event()
+    if token:
+
+        def stop() -> None:
+            server.should_exit = True
+
+        threading.Thread(
+            target=watch_stop_request, args=(stop_request, token, stop, done), daemon=True
+        ).start()
+    try:
+        server.run()
+    finally:
+        done.set()
+
+
+def stop_owned(
+    records: list[dict[str, Any]],
+    code: Path,
+    *,
+    stop_request: Path | None = None,
+    grace: float = GRACEFUL_STOP_SECONDS,
+) -> None:
     for record in records:
         try:
             process = psutil.Process(record["pid"])
@@ -47,6 +117,23 @@ def stop_owned(records: list[dict[str, Any]], code: Path) -> None:
             if process.cmdline() != record["command"]:
                 raise ValueError("process_command_mismatch")
             descendants = process.children(recursive=True)
+            token = record.get("stop_token")
+            if stop_request is not None and isinstance(token, str) and token:
+                # Only after the ownership checks above; bounded, then the hard path below.
+                request_stop(stop_request, token)
+                _, remaining = psutil.wait_procs([process, *descendants], timeout=grace)
+                for child in reversed(remaining):
+                    try:
+                        child.terminate()
+                    except psutil.NoSuchProcess:
+                        pass
+                _, alive = psutil.wait_procs(remaining, timeout=10)
+                for child in alive:
+                    try:
+                        child.kill()
+                    except psutil.NoSuchProcess:
+                        pass
+                continue
             # All descendants were captured from this verified root; no name/port kill.
             for child in reversed(descendants):
                 try:
@@ -84,9 +171,15 @@ def main() -> None:
 
 def run_action(settings: Environment, action: str) -> None:
     if action == "api":
-        import uvicorn
-
-        uvicorn.run("nexora_api.main:app", host=settings.api_host, port=settings.api_port)
+        # Not inherited by the application or anything it starts.
+        token = os.environ.pop(STOP_TOKEN_VARIABLE, None)
+        serve_api(
+            "nexora_api.main:app",
+            settings.api_host,
+            settings.api_port,
+            stop_request=stop_request_path(settings.state),
+            token=token,
+        )
         return
     node = shutil.which("node")
     web = settings.code / "apps" / "web"
@@ -108,8 +201,13 @@ def run_action(settings: Environment, action: str) -> None:
         return
     if action == "stop":
         if registry.exists():
-            stop_owned(json.loads(registry.read_text()), settings.code)
+            stop_owned(
+                json.loads(registry.read_text()),
+                settings.code,
+                stop_request=stop_request_path(settings.state),
+            )
             registry.unlink()
+        stop_request_path(settings.state).unlink(missing_ok=True)
         return
     if not node:
         raise RuntimeError("node_unavailable")
@@ -136,6 +234,8 @@ def run_action(settings: Environment, action: str) -> None:
         build_id = web / ".next" / "BUILD_ID"
         if not build_id.exists() or not build_id.read_text().startswith("production-"):
             raise RuntimeError("production_build_required")
+    stop_request_path(settings.state).unlink(missing_ok=True)
+    stop_token = secrets.token_hex(16)
     records: list[dict[str, Any]] = []
     try:
         for label, command, cwd in (
@@ -158,7 +258,7 @@ def run_action(settings: Environment, action: str) -> None:
                 process = subprocess.Popen(
                     command,
                     cwd=cwd,
-                    env=env,
+                    env={**env, STOP_TOKEN_VARIABLE: stop_token} if label == "api" else env,
                     stdout=log,
                     stderr=log,
                     stdin=subprocess.DEVNULL,
@@ -173,6 +273,7 @@ def run_action(settings: Environment, action: str) -> None:
                     "created": identity.create_time(),
                     "cwd": str(cwd.resolve()),
                     "command": identity.cmdline(),
+                    **({"stop_token": stop_token} if label == "api" else {}),
                 }
             )
         registry.write_text(json.dumps(records), encoding="utf-8")

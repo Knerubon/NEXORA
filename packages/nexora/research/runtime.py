@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from threading import RLock
@@ -40,15 +40,24 @@ class ResearchRuntime:
         *,
         checkpoints: ckpt.CheckpointStore | None = None,
         checkpoint_interval: int = DEFAULT_CHECKPOINT_INTERVAL,
+        checkpoint_max_age: float | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         if checkpoint_interval < 0:
             raise ValueError("invalid_checkpoint_interval")
+        if checkpoint_max_age is not None and not checkpoint_max_age > 0:
+            raise ValueError("invalid_checkpoint_max_age")
         self.config, self.journal = config, journal
         self.stream = "research:" + canonical_hash(config)
         self._lock = RLock()
         self.error: str | None = None
         self.checkpoints, self.checkpoint_interval = checkpoints, checkpoint_interval
+        # Age trigger (ADR-029 H3): off unless configured; evaluated only on a successful
+        # ingest, with an injectable monotonic clock. No background timer.
+        self.checkpoint_max_age, self._clock = checkpoint_max_age, clock
+        self._uncovered_since: float | None = None
         self.last_recovery: dict[str, Any] = {}
+        self.last_checkpoint: dict[str, Any] | None = None
         journal.append(self.stream + ":config", "config", config)
         self.paper = PaperSession(config.paper, journal) if config.paper is not None else None
         self._rebuild()
@@ -64,6 +73,7 @@ class ResearchRuntime:
         # memory; no checkpoint is written again until a later rebuild completes.
         self._recovered = self._consistent = False
         self._since_checkpoint = 0
+        self._uncovered_since = None
         self._last_sequence = 0
         self.engine = ResearchPipeline(self.config.pipeline)
         self.experience = ExperienceService(self.journal, self.config, self.stream)
@@ -200,6 +210,14 @@ class ResearchRuntime:
             _log.warning("Research checkpoint: write failed; journal unaffected", exc_info=True)
             return
         self._since_checkpoint = 0
+        self._uncovered_since = None
+        self.last_checkpoint = {
+            "sequence": self._last_sequence,
+            "events": len(self._events),
+            "bytes": len(blob),
+            "write_ms": round((time.monotonic() - started) * 1000),
+            "written_at": self._clock(),
+        }
         _log.info(
             "Research checkpoint: written sequence=%d events=%d bytes=%d in %d ms",
             self._last_sequence,
@@ -267,10 +285,49 @@ class ResearchRuntime:
                 raise
             if inserted and (journal := self._anchored()) is not None:
                 self._last_sequence = journal.sequence_of(self.stream, event.identity_key) or 0
+                if not self._since_checkpoint:
+                    self._uncovered_since = self._clock()
                 self._since_checkpoint += 1
             self._consistent = True
-            if self.checkpoint_interval and self._since_checkpoint >= self.checkpoint_interval:
+            if self._checkpoint_due():
                 self._write_checkpoint()
+
+    def _checkpoint_due(self) -> bool:
+        """Count trigger (ADR-022) or age of the oldest uncovered ingest (ADR-029 H3)."""
+        if not self._since_checkpoint:
+            return False
+        if self.checkpoint_interval and self._since_checkpoint >= self.checkpoint_interval:
+            return True
+        return (
+            self.checkpoint_max_age is not None
+            and self._uncovered_since is not None
+            and self._clock() - self._uncovered_since >= self.checkpoint_max_age
+        )
+
+    def recovery_status(self) -> dict[str, Any]:
+        """Recovery facts the runtime already knows; reading them never changes recovery."""
+        with self._lock:
+            now = self._clock()
+            last = self.last_checkpoint
+            return {
+                "checkpoints": "on" if self.checkpoints is not None else "off",
+                "recovered": self._recovered,
+                "mode": self.last_recovery.get("mode"),
+                "reason": self.last_recovery.get("reason"),
+                "checkpoint_sequence": self.last_recovery.get("checkpoint_sequence"),
+                "replayed": self.last_recovery.get("replayed"),
+                "duration_ms": self.last_recovery.get("duration_ms"),
+                "uncovered_events": self._since_checkpoint,
+                "last_checkpoint": None
+                if last is None
+                else {
+                    "sequence": last["sequence"],
+                    "events": last["events"],
+                    "bytes": last["bytes"],
+                    "write_ms": last["write_ms"],
+                    "age_s": round(now - last["written_at"], 3),
+                },
+            }
 
     def _paper_event(
         self, event: NormalizedPriceEvent, completeness: str, output: dict[str, Any]

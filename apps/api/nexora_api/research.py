@@ -44,12 +44,31 @@ def configured_checkpoints() -> CheckpointStore | None:
     return CheckpointStore(environment.checkpoints, environment=environment.name)
 
 
+def configured_checkpoint_max_age() -> float | None:
+    """Optional age trigger in seconds (ADR-029 H3). Unset means off; no default is decided."""
+    setting = os.environ.get("NEXORA_RESEARCH_CHECKPOINT_MAX_AGE_SECONDS", "").strip()
+    if not setting:
+        return None
+    try:
+        seconds = float(setting)
+    except ValueError:
+        raise ValueError("invalid_research_checkpoint_max_age") from None
+    if not 0 < seconds < float("inf"):
+        raise ValueError("invalid_research_checkpoint_max_age")
+    return seconds
+
+
 def configured_runtime(journal: Journal) -> ResearchRuntime | None:
     filename = os.environ.get("NEXORA_RESEARCH_CONFIG")
     if not filename:
         return None
     config = decode(RuntimeConfig, json.loads(Path(filename).read_text(encoding="utf-8")))
-    return ResearchRuntime(config, journal, checkpoints=configured_checkpoints())
+    return ResearchRuntime(
+        config,
+        journal,
+        checkpoints=configured_checkpoints(),
+        checkpoint_max_age=configured_checkpoint_max_age(),
+    )
 
 
 def configured_backtests() -> dict[str, BacktestConfig]:
