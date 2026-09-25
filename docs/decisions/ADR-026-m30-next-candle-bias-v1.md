@@ -1,6 +1,6 @@
 # ADR-026 — M30 Next Candle Bias V1: time, prediction and evaluation contract
 
-Status: **proposed — draft rev 2, NOT accepted**. Architect decisions Q-M1, Q-M2, Q-M5, Q-M6 and Q-M7 are frozen from Rin's architecture review. Quant decisions Q-M3, Q-M4 and Q-M8 remain open. Awaiting Rin's final architecture review.
+Status: **accepted for the Phase 2A Architect scope** (rev 2 with the rev 2.1 Decision 3 clarification), recorded 2026-09-25 by Rin's architecture acceptance review. The acceptance came **after** the Phase 2A implementation `56ba6a7`; see [Acceptance record](#acceptance-record). Architect decisions Q-M1, Q-M2, Q-M5, Q-M6 and Q-M7 are frozen. Quant decisions Q-M3, Q-M4 and Q-M8 remain open. Phase 2B and later gates (Decision 17) are unchanged.
 Date: 2026-09-24
 Workstream: `claude/m30-next-candle-bias-v1`, worktree `D:\NEXORA\NEXORA-M30-BIAS` (ARCHITECT role for the proposal; no implementation)
 Base: `origin/main` `4f69e9c38803796ccfc8afc01480deffd8499c38`
@@ -14,7 +14,7 @@ Not on `main`, referenced by name only:
 ## Revision history
 
 - rev 1 (`3972d62`): initial proposal.
-- rev 2 (this revision):
+- rev 2 (`c557b5e`):
   - freezes Architect decisions Q-M1, Q-M2, Q-M5, Q-M6 and Q-M7 (Decision 0);
   - adds the Candle Identity contract (Decision 5A), the Algorithm Identity contract (Decision 5B) and the Freeze-before-write crash contract (Decision 12A);
   - replaces the rev-1 `scope`/`prediction_id` derivation with those contracts;
@@ -22,6 +22,19 @@ Not on `main`, referenced by name only:
   - makes Δ = 0 a candidate only.
 
   No-look-ahead rules N1–N8 are unchanged.
+- rev 2.1 (this revision): Decision 3 now states normatively which target receives the `SKIPPED` record: the latest target whose cutoff the trigger crossed, `B = bucket_start(F.event_time + Δ)`. The rev 2 phrase "the bucket containing `F_k`" was ambiguous for Δ > 0. This matches the Phase 2A implementation, which is unchanged. No other contract changes. The acceptance status is recorded.
+
+## Acceptance record
+
+Recorded transparently. It is not backdated.
+
+1. 2026-09-24: Phase 2A implementation `56ba6a7` was committed while this ADR still read "proposed — draft rev 2, NOT accepted". At that time the Decision 17 gate for Phase 2A ("ADR-026 accepted") was **not** met.
+2. 2026-09-25: the independent Phase 2A review returned `CHANGES_REQUESTED`. It found no blocking technical defect. It reported:
+   - the unmet governance gate (B-1);
+   - the ambiguous Decision 3 `SKIPPED` wording for Δ > 0 (NB-1);
+   - missing Δ > 0 tests (NB-2).
+3. 2026-09-25: Rin performed the architecture acceptance review. It accepted ADR-026 rev 2 for the Phase 2A Architect scope, subject to the Decision 3 clarification (rev 2.1). It accepted the existing implementation semantics.
+4. The Phase 2A gate is satisfied **prospectively**, from this record onward. Phase 2A completion still requires independent re-review and human merge (AGENTS.md §10, §17).
 
 ## Decision 0 — Frozen Architect decisions (Rin review)
 
@@ -111,7 +124,12 @@ Recorded timestamps (all taken from canonical events; none from a wall clock):
 | `target_start` / `target_end` | `B_k` / `E_k` |
 
 **Eligibility.**
-- **Structural rule:** a record is `FROZEN` only if `I_k` contains at least one event with `event_time ∈ [B_k − 1800s, C_k)`. Otherwise one `SKIPPED` record with `discontinuous_feed` is written for the bucket containing `F_k`, and nothing is written for the empty buckets in between.
+- **Structural rule:** a record for target `k` is `FROZEN` only if `I_k` contains at least one event with `event_time ∈ [B_k − 1800s, C_k)`.
+- **Targets crossed by one trigger (normative, rev 2.1).** Let `L` be the previous committed event and `F` the committed event being processed. `F` crosses every target `k` with `L.event_time < C_k ≤ F.event_time`, and `F` is `F_k` for each of them. Only the earliest crossed target can satisfy the structural rule: every later one needs an event at or after the earliest target's `B_k`, which is after `L`. Therefore:
+  - If the earliest crossed target is eligible, one `FROZEN` record is written for it.
+  - If the earliest crossed target is ineligible, or more than one target is crossed, exactly one `SKIPPED` record with `discontinuous_feed` is written for the **latest crossed target**. That is the latest target whose cutoff `C_k ≤ F.event_time`, equivalently the target with `B_k = bucket_start(F.event_time + Δ)`.
+  - Nothing is written for crossed targets in between.
+- "The bucket containing `F`" is **not** the rule. With Δ = 0 it coincides with the latest crossed target. With Δ > 0 and `F.event_time ∈ [B − Δ, B)`, the latest crossed target is the bucket after the one containing `F`. The bucket containing `F` has also been crossed, by `F` or by an earlier trigger. It therefore either already holds its own record under its `candle_id`, or it is an in-between target that receives none.
 - **Quant decision (Q-M8):** any further threshold, such as a minimum sample count or a maximum gap. No default is frozen.
 - **Not a skip:** warmup, disabled evidence and invalid inputs produce `bias = UNAVAILABLE` with reason codes.
 

@@ -13,6 +13,7 @@ import pytest
 from nexora.m30_bias import (
     AlgorithmVerdict,
     CommittedRow,
+    FeedIdentity,
     FreezeContext,
     M30BiasCore,
     M30BiasEvidence,
@@ -22,6 +23,7 @@ from nexora.m30_bias import (
     M30Emission,
     M30IdentityError,
     M30IdentityUnavailable,
+    candle_id,
     recompute,
     record_bytes,
     resolve_write,
@@ -500,3 +502,147 @@ def test_hashed_content_has_no_wall_clock_or_lifecycle_fields() -> None:
                 # Only input event times or M30 bucket boundaries (Δ = 0) may appear.
                 boundary = token.endswith(("00:00.000000Z", "30:00.000000Z"))
                 assert token in event_times or boundary, token
+
+
+# --- Δ > 0 (ADR-026 rev 2.1 Decision 3) ---------------------------------------------------
+
+LEAD = 300  # Δ = 5 minutes: C_k = B_k - 5 min
+LEGACY_FEED = FeedIdentity(
+    time_contract="legacy-adr019",
+    feed_key="legacy:MT5-quote-observation:time-offset=0:XAUUSD",
+    instrument_key="XAUUSD",
+    price_source="bid",
+    units="USD",
+)
+
+
+def expected_candle(bucket_start_minutes: int) -> str:
+    return candle_id(LEGACY_FEED, at(bucket_start_minutes))
+
+
+def targets(items: list[M30Emission]) -> list[tuple[datetime, str, str]]:
+    return [(p.target_start, p.status, p.freeze_event_identity) for p in predictions(items)]
+
+
+def lead_scenario() -> list[CommittedRow]:
+    """Δ = 300 s. Cutoffs 10:25 / 10:55 are crossed by events strictly after them."""
+    return [
+        row(ev(at(0), "100.00", "e1", sequence=1)),
+        row(ev(at(20), "100.40", "e2", sequence=2)),
+        row(ev(at(25) - timedelta(microseconds=1), "100.30", "e3", sequence=3)),
+        row(ev(at(26), "100.10", "e4", sequence=4)),  # F for target 10:30 (C = 10:25)
+        row(ev(at(31), "100.90", "e5", sequence=5)),
+        row(ev(at(50), "100.60", "e6", sequence=6)),
+        row(ev(at(57), "100.70", "e7", sequence=7)),  # F for target 11:00 (C = 10:55)
+        row(ev(at(61), "101.00", "e8", sequence=8)),  # closes 10:30
+        row(ev(at(80), "101.10", "e9", sequence=9)),
+    ]
+
+
+def test_lead_gap_one_trigger_freezes_earliest_and_skips_latest_crossed_target() -> None:
+    # F = 11:57 crosses cutoffs 10:25, 10:55, 11:25 and 11:55 (targets 10:30..12:00).
+    # Earliest target 10:30 is eligible (e2 at 10:20 is in [10:00, 10:25)) -> FROZEN.
+    # Latest crossed target is 12:00 (= bucket_start(11:57 + 5 min)), NOT 11:30, the
+    # bucket containing F. Nothing is written for 11:00 and 11:30.
+    rows = [
+        row(ev(at(0), "100.00", "e1", sequence=1)),
+        row(ev(at(20), "100.40", "e2", sequence=2)),
+        row(ev(at(117), "100.70", "e3", sequence=3)),
+    ]
+    emitted = run(rows, delta=LEAD)
+    assert targets(emitted) == [(at(30), "FROZEN", "e3"), (at(120), "SKIPPED", "e3")]
+    frozen, skipped = predictions(emitted)
+    assert frozen.candle_id == expected_candle(30)
+    assert skipped.candle_id == expected_candle(120)
+    assert expected_candle(90) not in {p.candle_id for p in predictions(emitted)}
+    assert frozen.snapshot_event_identity == skipped.snapshot_event_identity == "e2"
+    assert skipped.cutoff_time == at(115)
+    assert skipped.freeze_after_target_open is False and skipped.freeze_lag_seconds == 0
+    assert "discontinuous_feed" in skipped.reason_codes and skipped.bias == "UNAVAILABLE"
+
+
+def test_lead_trigger_inside_latest_target_skips_that_target_as_late_freeze() -> None:
+    # F = 11:10 >= B_final = 11:00. Crossed: 10:30 (C 10:25) and 11:00 (C 10:55).
+    rows = [
+        row(ev(at(0), "100.00", "e1", sequence=1)),
+        row(ev(at(20), "100.40", "e2", sequence=2)),
+        row(ev(at(70), "100.70", "e3", sequence=3)),
+    ]
+    emitted = run(rows, delta=LEAD)
+    assert targets(emitted) == [(at(30), "FROZEN", "e3"), (at(60), "SKIPPED", "e3")]
+    skipped = predictions(emitted)[1]
+    assert skipped.candle_id == expected_candle(60)
+    assert skipped.freeze_after_target_open is True
+    assert skipped.freeze_lag_seconds == Decimal(10 * 60) + Decimal("0.1")
+
+
+def test_lead_trigger_inside_single_crossed_target_is_a_late_frozen_record() -> None:
+    # F = 10:32 crosses only cutoff 10:25; target 10:30 is eligible -> FROZEN, no SKIPPED.
+    rows = [
+        row(ev(at(0), "100.00", "e1", sequence=1)),
+        row(ev(at(20), "100.40", "e2", sequence=2)),
+        row(ev(at(32), "100.70", "e3", sequence=3)),
+    ]
+    emitted = run(rows, delta=LEAD)
+    assert targets(emitted) == [(at(30), "FROZEN", "e3")]
+    frozen = predictions(emitted)[0]
+    assert frozen.freeze_after_target_open is True
+    assert frozen.freeze_lag_seconds == Decimal(2 * 60) + Decimal("0.1")
+
+
+def test_lead_scenario_freeze_points() -> None:
+    emitted = run(lead_scenario(), delta=LEAD)
+    assert targets(emitted) == [(at(30), "FROZEN", "e4"), (at(60), "FROZEN", "e7")]
+    first, second = predictions(emitted)
+    assert (first.cutoff_time, first.snapshot_event_identity) == (at(25), "e3")
+    assert (second.cutoff_time, second.snapshot_event_identity) == (at(55), "e6")
+    assert first.freeze_after_target_open is False and second.freeze_after_target_open is False
+
+
+def test_lead_hashed_timestamps_are_event_times_boundaries_or_cutoffs() -> None:
+    event_times = {
+        t.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        for r in lead_scenario()
+        for t in (r.event.event_time, r.event.received_at)
+    }
+    # Independently stated: targets 10:30 and 11:00, ends 11:00 and 11:30, cutoffs
+    # 10:25 and 10:55 (B_k - 5 min); no cutoff coincides with an input event time.
+    boundaries = {"2026-01-05T10:30:00.000000Z", "2026-01-05T11:00:00.000000Z"}
+    boundaries.add("2026-01-05T11:30:00.000000Z")
+    cutoffs = {"2026-01-05T10:25:00.000000Z", "2026-01-05T10:55:00.000000Z"}
+    assert not cutoffs & event_times
+    seen: set[str] = set()
+    for data in as_bytes(run(lead_scenario(), delta=LEAD)):
+        for token in data.decode().split('"'):
+            if token[:4].isdigit() and token.endswith("Z") and "T" in token:
+                assert token in event_times | boundaries | cutoffs, token
+                seen.add(token)
+    assert cutoffs <= seen
+
+
+def test_lead_prefix_invariance() -> None:
+    rows = lead_scenario()
+    full = predictions(run(rows, delta=LEAD))
+    for end in range(4, len(rows) + 1):  # from F of target 10:30 (e4) onward
+        prefix = predictions(run(rows[:end], delta=LEAD))
+        assert record_bytes(prefix[0]) == record_bytes(full[0])
+    for end in range(7, len(rows) + 1):  # from F of target 11:00 (e7) onward
+        prefix = predictions(run(rows[:end], delta=LEAD))
+        assert record_bytes(prefix[1]) == record_bytes(full[1])
+
+
+def test_lead_future_mutation_from_trigger_cannot_change_prediction() -> None:
+    base = predictions(run(lead_scenario(), delta=LEAD))[0]
+    # Rows from F (e4, after cutoff 10:25 but before B_k 10:30) onward are mutated.
+    injected = predictions(run(_mutate_after(lead_scenario(), 3), delta=LEAD))[0]
+    assert injected.freeze_event_identity == "e4"
+    assert record_bytes(base) == record_bytes(injected)
+
+
+def test_lead_event_between_cutoff_and_target_open_is_not_information() -> None:
+    # An event in [C_k, B_k) is the trigger, never part of I_k, even at exactly C_k.
+    rows = lead_scenario()
+    at_cutoff = rows[:3] + [row(dataclasses.replace(rows[3].event, event_time=at(25)))]
+    first = predictions(run(at_cutoff, delta=LEAD))[0]
+    assert first.snapshot_event_identity == "e3" and first.freeze_event_identity == "e4"
+    assert first.reference_price == Decimal("100.30")

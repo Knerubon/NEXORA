@@ -1,7 +1,7 @@
 ---
 task: M30B1
-status: blocked
-depends_on: ["ADR-026 acceptance (Rin; Quant for outcome/θ/Δ)", "ADR-023 acceptance (Track D) for runtime wiring", "Track B coordination for checkpoint state"]
+status: in_review
+depends_on: ["ADR-026 acceptance for Phase 2A (Rin): recorded 2026-09-25, after 56ba6a7", "Quant Q-M3/Q-M4/Q-M8 (open; no defaults)", "ADR-023 acceptance (Track D) for Phase 2B runtime wiring", "Track B coordination for Phase 2B checkpoint state"]
 agents: []
 skills: []
 docs: ["docs/requirements.md", "docs/architecture.md", "docs/decisions/ADR-026-m30-next-candle-bias-v1.md"]
@@ -42,6 +42,11 @@ Draft [ADR-026](../docs/decisions/ADR-026-m30-next-candle-bias-v1.md).
 
 Rin final approval of ADR-026 rev 2 unblocks Phase 2A. Quant still needs to answer Q-M3, Q-M4 and Q-M8. Phase 2B needs ADR-023 acceptance and Track B coordination.
 
+Status 2026-09-25:
+- The Phase 2A gate is satisfied prospectively. It was satisfied only after implementation; see the execution record.
+- Phase 2A is `in_review`, awaiting independent re-review.
+- Phase 2B remains blocked on ADR-023 and Track B.
+
 ## Rin architecture review — rev 2 (2026-09-24)
 
 Frozen Architect decisions, recorded in ADR-026 Decision 0:
@@ -63,3 +68,25 @@ Still open: Q-M3, Q-M4 and Q-M8 (Quant).
 - 2026-09-24 rev 1: worktree created from origin/main 4f69e9c. The docs-only draft ADR and this task record were committed locally. Nothing was pushed and no PR was opened. Self-review only; independent review pending.
 - The main worktree `D:\NEXORA\NEXORA` has pre-existing uncommitted changes that are not from this task (AGENTS.md, apps/api/nexora_api/main.py, apps/web/{app/page.tsx,package.json,next.config.mjs,tests/gateway.test.mjs}). They were left untouched.
 - 2026-09-24 rev 2: ADR-026 revised per Rin's review. Docs only, local commit, not pushed, no PR. Self-review; Rin's final review is pending.
+- 2026-09-24 Phase 2A: pure core `56ba6a7` was committed locally. It covers `packages/nexora/m30_bias/*` and `tests/test_m30_bias_*.py`, with no runtime, persistence, config, API or UI. **Governance gap:** it was committed while ADR-026 still read "proposed — NOT accepted" and this task was `blocked`, so the Decision 17 gate was not met at that time.
+- 2026-09-25 independent Phase 2A review of HEAD `56ba6a7`: `CHANGES_REQUESTED`. There were no blocking technical defects. Findings:
+  - B-1: the governance gate was unmet.
+  - NB-1: the Decision 3 `SKIPPED` target wording was ambiguous for Δ > 0.
+  - NB-2: Δ > 0 tests were missing.
+  - Validation: 88 M30 tests passed; the full suite had 465 passed and 3 skipped; ruff, format and mypy were clean.
+  - The original review prompt cited `3a4732b`. That commit belongs to the ADR-025 / MT5 multi-broker track, so it was an incorrect cross-track reference and not M30 evidence.
+- 2026-09-25 Rin architecture acceptance: ADR-026 rev 2 was accepted for the Phase 2A Architect scope, subject to the Decision 3 clarification. The current `freeze.py` semantics were accepted: `SKIPPED` goes to the latest crossed target, `bucket_start(F.event_time + Δ)`. The gate is satisfied prospectively, and the earlier sequence is not rewritten.
+- 2026-09-25 governance closure commit on `claude/m30-next-candle-bias-v1` (previous HEAD `56ba6a7`):
+  - ADR-026 rev 2.1: accepted status, acceptance record, normative Decision 3 wording.
+  - Δ > 0 regression tests added in `tests/test_m30_bias_core.py`.
+  - No production code change.
+  - Local commit only; not pushed; no PR; no merge.
+  - Independent re-review is pending. The session that performed the first review also authored this closure, so it cannot re-review.
+
+## Deferred review observations (not Phase 2A work)
+
+- **O-1 (Phase 2B design):** a feed identity change, such as a changed MT5 offset, halts the core permanently instead of starting new `candle_id`s.
+- **O-2 (Phase 2B / algorithm ADR):** `except Exception` around the algorithm and θ policy stores transient failures as write-once content. A later replay surfaces them as a conflict. θ failure has no dedicated reason code.
+- **O-3 (ADR clarification candidate):** when an excursion is 0, `mfe_time`/`mae_time` are null. The behavior is tested, but the ADR does not state it.
+- **O-4 (note):** the `threshold_label`/`first_touch` primitives rely on the core's θ > 0 guard.
+- **O-5:** execution-record evidence for `56ba6a7`, addressed by this record.
