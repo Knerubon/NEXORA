@@ -55,3 +55,7 @@ The "+ x" is the new-snapshot rate: `materialize()` builds a T0 context only for
 ## Not removed
 
 Per-event cost still grows with history. The "after" per-decile `observe` means rise from 3.5 to 7.6 ms (calm 1,000) and from 6.8 to 28.5 ms (volatile 250). Replay remains quadratic in N; see ADR-031 §18.5. Append/write (C4) and `decode` (C5) are unchanged by design.
+
+## Review
+
+Rin code review (2026-09-25 21:29 +07:00) approved C1 → C2 → C3(a, b) for integration preparation on this evidence, and approved the `COVERED_FIELDS` `"_derived"` entry (Option A). See ADR-031 §19. The Decimal-exponent checkpoint-byte observation and the remaining O(N²) growth are deferred.

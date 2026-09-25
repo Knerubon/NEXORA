@@ -1,6 +1,6 @@
 # ADR-031 — Experience Replay Performance Investigation V1 (PERF-2)
 
-Status: **Proposed — Phase 1 approved (Rin); Phase 2A (C1, C2, C3(a, b)) implemented on this branch, pending Rin code review and a Rin decision on `COVERED_FIELDS` (§18.7).** Self-review only.
+Status: **Proposed — Phase 1 approved; Phase 2A (C1, C2, C3(a, b)) approved by Rin code review (2026-09-25 21:29 +07:00) for integration preparation, including the `COVERED_FIELDS` `"_derived"` entry (§19).** Independent code review and integration review pending; no PR, no merge.
 Date: 2026-09-25
 Workstream: PERF-2 (DEV-PERF role) · Branch `claude/experience-replay-performance-v1` · Worktree `D:\NEXORA\NEXORA-EXPERIENCE-PERF` · Base `origin/main` `4f69e9c`
 
@@ -652,7 +652,7 @@ Removing these requires bounding the recorded collections or the frozen context:
 - **O1 (predates this work, not Experience):** a live runtime's checkpoint blob differs from a replayed runtime's even in the baseline. Live events keep their Decimal exponent (`2000.0`) while journal-decoded events do not (`2000`); values and canonical hashes are equal. Byte-exact live-vs-replay or checkpoint-vs-cold comparisons therefore hold only for data without trailing zeros (for example the EXC1 fixture); the recovery suite's `state()` comparison holds generally. This is reported for ADR-022/PERF-1 awareness; PERF-2 does not change it.
 - **O2:** because `engine.py` and `service.py` change, deployment rejects every existing checkpoint once (whole-package code fingerprint) and performs one full replay, now roughly 2–4× faster than before.
 
-### 18.7 `COVERED_FIELDS` / `"_derived"` — Rin decision required (not approved)
+### 18.7 `COVERED_FIELDS` / `"_derived"` — Rin decision required (not approved at the time; decided in §19)
 
 Rin has **not** approved the shared checkpoint contract change: Phase 2A scope is C1 → C2 → C3(a, b), and `checkpoint_state.py` is a shared recovery/checkpoint area. Evidence for that decision:
 
@@ -724,3 +724,37 @@ Rin has **not** approved the shared checkpoint contract change: Phase 2A scope i
 | `git diff --check` | clean |
 
 All suites ran with an absolute `PYTHONPATH` to this worktree.
+
+## 19. Rin code review — Phase 2 (2026-09-25 21:29 +07:00)
+
+Recorded after the fact. Sections 18.1–18.9 describe the state submitted for review and are left unchanged. This record changes documentation only.
+
+**Reviewed HEAD:** `691ca54` on base `ec0aad5`. No production code, tests or harness changed after the reviewed HEAD.
+
+### 19.1 `"_derived"` in `COVERED_FIELDS` — APPROVED (Option A)
+
+Commit `a27899c` is kept, and `"_derived"` stays in `checkpoint_state.py::COVERED_FIELDS` as part of PERF-2 Phase 2 scope. Rin's rationale:
+
+- `_derived` is derived, non-persisted service state introduced by C1 and C3(b). It must stay visible to the component-state contract guard, and it is rebuilt on demand after a restore.
+- It is not part of serialized checkpoint state. The `checkpoint_state()` output, encode/decode, `STATE_VERSION = 1` and `SCHEMA_VERSION = 2` are unchanged, and checkpoint bytes remain equivalent to the baseline.
+- The revert experiment (§18.7) showed that removing the declaration breaks only the contract guard.
+- The caches must **not** be moved to module-level state just to avoid the declaration (Option B rejected).
+
+### 19.2 Candidates
+
+- **C1 → C2 → C3(a, b): APPROVED for integration preparation,** based on the equivalence, EXC1 compatibility, recovery, regression and benchmark evidence in §18.
+- **Not in this branch:** C3(c), C4, C5 and Experience V2.
+
+### 19.3 Deferred backlog
+
+| Item | Owner area | Status |
+|---|---|---|
+| Live-vs-replay checkpoint bytes differ by Decimal exponent (`2000.0` live vs `2000` decoded); values and canonical hashes are equal (§18.6 O1) | Recovery/Checkpoint | Deferred backlog finding. Not fixed in PERF-2. |
+| Remaining O(N²) replay growth (§18.5) | Experience V2 / ADR-027 | Deferred. Phase 2 reduces replay cost while preserving behavior; it does not claim to remove the O(N²). |
+| C3(c) canonical fast path | `artifacts.py` | Deferred |
+| C4 no-op append fast path | `storage.py`, needs a PostgreSQL measurement and Security review | Deferred |
+| C5 `decode` type-hint cache | `artifacts.py`, no owner assigned | Deferred |
+
+### 19.4 Next
+
+Independent code review, then integration review. No push, PR or merge until those are authorized.
