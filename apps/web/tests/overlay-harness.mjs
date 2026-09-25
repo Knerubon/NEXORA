@@ -21,14 +21,15 @@ new Function('require', 'exports', compile(drawingSource))(
   name => name === './manual-drawing-model' ? drawingModel : name === './chart-overlays' ? overlays : require(name), drawings);
 export { model, drawingModel };
 
-export function chartComponent(pageSource) {
+// `deps.useManualDrawings` lets a test supply drawings state (SSR always sees the empty store).
+export function chartComponent(pageSource, deps = {}) {
   const body = pageSource.slice(pageSource.indexOf('function StructureChart('), pageSource.indexOf('export default function Home'));
   const exports = {};
   new Function('require', 'exports', 'useState', 'useRef', 'MatrixFloat', 'ChartOverlays', 'LayerControls', 'OverlayPopup', 'useChartOverlays',
     'DrawingControls', 'DrawingLayer', 'DrawingPopup', 'useManualDrawings', compile('export ' + body))(
     require, exports, useState, useRef, () => null,
     overlays.ChartOverlays, overlays.LayerControls, overlays.OverlayPopup, overlays.useChartOverlays,
-    drawings.DrawingControls, drawings.DrawingLayer, drawings.DrawingPopup, drawings.useManualDrawings);
+    drawings.DrawingControls, drawings.DrawingLayer, drawings.DrawingPopup, deps.useManualDrawings ?? drawings.useManualDrawings);
   return exports.StructureChart;
 }
 export const renderPageChart = (pageSource, props) => renderToStaticMarkup(createElement(chartComponent(pageSource), props));

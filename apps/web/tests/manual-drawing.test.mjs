@@ -3,7 +3,7 @@ import test from 'node:test';
 import { readFileSync, readdirSync } from 'node:fs';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { drawingModel as m, drawingSource, drawings, renderPageChart, svgOf } from './overlay-harness.mjs';
+import { chartComponent, drawingModel as m, drawingSource, drawings, model, renderPageChart, svgOf } from './overlay-harness.mjs';
 import { overlayOutput } from './overlay-fixture.mjs';
 
 const page = readFileSync(new URL('../app/page.tsx', import.meta.url), 'utf8');
@@ -168,4 +168,47 @@ test('boundary: drawings never leave the browser and no decision/evidence module
   const importers = readdirSync(app).filter((f) => /manual-drawing/.test(readFileSync(new URL(f, app), 'utf8')) && !f.startsWith('manual-drawing'));
   assert.deepEqual(importers, ['page.tsx']);
   assert.doesNotMatch(readFileSync(new URL('../app/signal-intelligence.tsx', import.meta.url), 'utf8'), /drawing/i);
+});
+
+// D3 regression guard: the manual Drawings toggle and the automatic evidence layers are independent.
+const withDrawings = (output, visible, initialLayers) => renderToStaticMarkup(createElement(
+  chartComponent(page, { useManualDrawings: () => controller({ doc: doc([h(105, 'h-d3'), t({ column: 2, price: 102 }, { column: 6, price: 103 }, 't-d3')], visible) }) }),
+  { output, initialLayers }));
+const drawingGroup = /<g data-manual-drawings="">[\s\S]*<\/g><\/svg>$/;
+
+test('D3 guard: Drawings OFF hides only manual drawings; Trendline, S/R and Pattern overlays are untouched', () => {
+  const output = overlayOutput();
+  const none = svgOf(renderPageChart(page, { output }));
+  const on = withDrawings(output, true), off = withDrawings(output, false);
+  assert.match(svgOf(on), drawingGroup);
+  assert.equal(svgOf(on).replace(drawingGroup, '</svg>'), none, 'drawings only append their own group');
+  assert.doesNotMatch(svgOf(off), /data-manual-drawings|data-drawing/);
+  assert.equal(svgOf(off), none, 'Drawings OFF leaves every automatic overlay exactly as rendered without drawings');
+  for (const marker of ['data-overlay="trendline"', 'data-overlay="trendline-break"', 'data-overlay="pattern"', 'fill="#527dea"', 'fill="#ef5350"']) {
+    assert.ok(svgOf(off).includes(marker), `automatic overlay still drawn: ${marker}`);
+  }
+  for (const label of ['Trendline', 'S\/R', 'Patterns']) assert.match(off, new RegExp(`aria-pressed="true">${label}</button>`));
+  assert.match(off, /aria-pressed="false"[^>]*>Drawings \(2\)<\/button>/);
+});
+
+test('D3 guard (reverse): automatic layers OFF never hide manual drawings', () => {
+  const svg = svgOf(withDrawings(overlayOutput(), true, model.LAYERS_OFF));
+  assert.doesNotMatch(svg, /data-chart-overlays|fill="#527dea"|fill="#ef5350"/);
+  assert.match(svg, drawingGroup);
+  assert.equal((svg.match(/data-drawing="/g) ?? []).length, 2);
+});
+
+test('future version: a stored version 2 payload with drawings is ignored, never interpreted as V1', () => {
+  const key = m.storageKey('XAUUSD');
+  const future = JSON.stringify({ version: 2, visible: false, drawings: [
+    h(2400, 'v2-h'), t({ column: 1, price: 2390 }, { column: 4, price: 2410 }, 'v2-t'),
+    { id: 'v2-ray', kind: 'ray', created_at: '2027-01-01T00:00:00.000Z', points: [{ column: 1, price: 2390 }] },
+  ] });
+  for (const raw of [future, future.replace('"version":2', '"version":"1"')]) assert.deepEqual(m.parseDrawings(raw), m.EMPTY_DOC);
+  const data = new Map([[key, future]]);
+  const store = m.createDrawingStore(() => ({ getItem: (k) => data.get(k) ?? null, setItem: (k, v) => data.set(k, v) }));
+  const loaded = store.get(key);
+  assert.deepEqual(loaded, m.EMPTY_DOC, 'no V2 drawing and not its visible:false');
+  assert.equal(layer(controller({ doc: loaded })), '<svg></svg>');
+  assert.equal(data.get(key), future, 'reading never rewrites the stored future payload');
 });
