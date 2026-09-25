@@ -42,7 +42,9 @@ from nexora.trendline.models import TrendlineAnchor, TrendlineLine
 STATE_VERSION = 1
 
 # Every attribute of every checkpointed component. Configuration attributes are
-# rebuilt from the current config; all others are persisted below.
+# rebuilt from the current config; all others are persisted below, except
+# ExperienceService._derived: caches derived from the config and pending Experiences,
+# never persisted and rebuilt on demand after restore (ADR-031).
 COVERED_FIELDS: dict[str, frozenset[str]] = {
     "ResearchPipeline": frozenset(
         {
@@ -104,6 +106,7 @@ COVERED_FIELDS: dict[str, frozenset[str]] = {
             "_samples",
             "_completed",
             "_seen",
+            "_derived",
         }
     ),
 }
