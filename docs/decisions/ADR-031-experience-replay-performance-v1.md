@@ -460,3 +460,102 @@ Smoke run of the committed harness before that run: calm N=120 took 0.72 s with 
 
 - **Blocked on ADR-028.** As of 2026-09-25, ADR-028 / EXC1 is still uncommitted in `NEXORA-EXPERIENCE-COMPAT` (no branch commit, not on `origin/main`, which is still `4f69e9c`). It modifies `experience/engine.py`, the file C1–C3 would change.
 - **Unblock condition:** ADR-028 is merged to `main` (or its branch is frozen and approved as the base). PERF-2 then rebases, adds `tests/fixtures/experience_journal_9016004.json` to the equivalence corpus, and re-runs this benchmark as the Phase 2 baseline.
+
+## 17. Integration sync and dependency recheck (main `f2d51ad`, 2026-09-25)
+
+This section records the integration pass only. Sections 1–16 are unchanged in meaning. No optimization was implemented.
+
+### 17.1 Sync
+
+- **Before:** HEAD `3d07870` on base `4f69e9c`. The Phase 1B ADR text was completed and committed first, so the tree was clean before the rebase.
+- **After:** rebased onto `origin/main` `f2d51ad` (PERF-1 merge, PR #35). HEAD is `b99fd3e`. The PERF-2 commits are now `596b393` (Phase 1, content identical to `e75764a`), `8762174` (harness) and `b99fd3e` (Phase 1B record). There were no conflicts. All three PERF-2 files are byte-identical to their pre-rebase versions, and the branch still adds only those three files relative to `origin/main`.
+
+### 17.2 Dependency: ADR-028 / EXC1 — still BLOCKED
+
+Verified from the current git and worktree state, not from notes:
+
+- `NEXORA-EXPERIENCE-COMPAT` (`claude/experience-journal-compat-v1`) is still at `4f69e9c`, with no commits of its own. Six files are **staged but uncommitted**: ADR-028, `experience/engine.py` (M), the EXC1 task, compatibility tests, a fixture helper and the `experience_journal_9016004.json` fixture. File times are from 09:17–09:23 on 2026-09-25.
+- ADR-028 status is `proposed (Rin review pending)`, and EXC1 status is `in_review`. There is no remote branch, and ADR-028 is not on `origin/main`.
+- `packages/nexora/experience/` is **unchanged on main** since `4f69e9c`.
+- Its uncommitted `engine.py` diff changes `freeze()` context construction. That is the same function C2 splits and C3 re-encodes, so the overlap is semantic as well as a shared file.
+- **Other owners:** `NEXORA-TRENDLINE` also shows an `engine.py` diff against its old merge-base, but `git cherry` marks all its commits as patch-equivalent to main, its `engine.py` is identical to main's, and its worktree is clean. It is not an active owner. No other worktree touches `experience/`.
+- **Conclusion:** ADR-028 still owns uncommitted changes to `experience/engine.py`, so PERF-2 cannot safely take ownership of C1–C3.
+
+### 17.3 Main changes since `4f69e9c` — overlap
+
+| Track | Files | Direct overlap with PERF-2 | Semantic overlap / invalidated assumptions |
+|---|---|---|---|
+| PERF-1 (ADR-029, PR #35) | `research/runtime.py` (age trigger, `last_checkpoint`, `recovery_status`), `apps/api/nexora_api/{launch,research,main}.py` (graceful stop, age setting), `scripts/recovery_benchmark.py`, tests | None: PERF-2 changed no runtime file | `_rebuild()`'s replay loop and its `observe` call are **unchanged**. Checkpoint *content* (`checkpoint_state.py`) and `checkpoint.py` are unchanged; only *when* checkpoints are written changed. PERF-1's benchmark independently measured `observe` at 79% / 84% / 86% of full replay at N = 500 / 1,000 / 2,000, matching section 6.1. `code_fingerprint()` still hashes every package file, so any Phase 2 Experience change invalidates all checkpoints and forces one full replay at deploy (ADR-022 by design). |
+| VALID-1 (ADR-030, PR #34) | `packages/nexora/validation/*`, tests | None | Imports only `artifacts` (`canonical_hash`, `canonical_serialize`, `decode`) and engines. It does not import Experience or `storage`. L6 (`freeze()`) and the RECORDED mode are not in its Phase 2A, so section 11 items 1 and 3 remain future options. It is a `decode` consumer, which matters for C5 ownership. |
+| M30 (ADR-026, PR #33) | `packages/nexora/m30_bias/*`, tests | None | Pure core with its own `freeze` state machine; there is no Experience, storage or runtime dependency. |
+| Experience | — | unchanged on main | — |
+| `storage.py`, `artifacts.py`, `pipeline.py`, `checkpoint*.py` | — | unchanged on main | Phase 1 cost-model assumptions hold. |
+
+**Invariants X1–X11:** none is changed by the new main. The post-sync journals are row-identical to the Phase 1 journals (17.4), so Experience output did not change. PERF-1 adds verification obligations for Phase 2 without changing the invariants: X6 must now also hold across the age trigger, graceful-stop checkpoints and `recovery_status`. Phase 2 must therefore pass `test_checkpoint_schedule`, `test_recovery_checkpoint`, `test_startup_recovery`, `test_launch_graceful_stop` and `test_recovery_benchmark` unchanged.
+
+### 17.4 Baseline recheck (committed harness at `b99fd3e`, synthetic temp data only)
+
+Command: `experience_replay_benchmark.py --cases calm:500 calm:1000 volatile:250 --runs 2 --breakdown`, run in a new scratch directory outside the repository. No PROD, TSID runtime or legacy journal was involved.
+
+**Measured:**
+
+| Case | Median replay | ms/event | `observe` share | Phase 1 share | Run state hashes | Journal changed |
+|---|---|---|---|---|---|---|
+| calm:500 | 5.73 s | 11.5 | 78.6% | 79.7% | identical (3 incl. breakdown) | no |
+| calm:1000 | 18.39 s | 18.4 | 83.2% | 84.5% | identical | no |
+| volatile:250 | 29.26 s | 117.0 | 95.3% | 95.5% | identical | no |
+
+- **Output identity:** the post-sync journals equal the Phase 1 (`4f69e9c`) journals row for row. calm:500 has 1,127 rows, calm:1000 has 2,404 rows and volatile:250 has 1,545 rows; all ordered digests are equal.
+- **`freeze()` repetition:** exactly **6.0 `canonical_hash` calls per event** in `freeze` in every case, plus 2.0–2.9 `canonical_serialize` and 4.0–5.9 `frozen_json` calls per event, and 1.0 digest hash per event. The freeze serialize/hash category is 33.2% / 33.1% / 12.7%.
+- **`context_json` parsing:** `Experience.context()` runs 6.4 / 9.7 / **96.1 times per event**, with `plan()` at 6.3 / 9.5 / 93.8 per event. The share is 14.2% / 24.2% / 66.9%.
+- **Append / no-op transactions:** 1.25 / 1.40 / 5.18 Experience appends per event, each with its own `COMMIT`. The journal is unchanged after every replay, so none of them inserted a row. The `COMMIT` share is 15.3% / 9.5% / 6.7%.
+- **`decode`:** `get_type_hints` is called **1.0 time per `decode(NormalizedPriceEvent)`**, at 0.84 ms per decode in isolation. The decode share is 10.1% / 6.3% / 0.9%.
+- **Growth with history:** per-decile `observe` means rise from 6.8 to about 24 ms (calm:1000) and from 16.5 to 192.6 ms (volatile:250). At calm:1000 replay positions 100 → 250 → 500 → 750 → 1,000:
+  - recorded output: 6.1 → 10.2 → 19.3 → 45.5 → 57.4 KB;
+  - `columns`: 3 → 21; `transitions`: 5 → 56; `pivots` and `levels`: 1 → 19;
+  - single `canonical_serialize(output)`: 0.25 → 2.28 ms; single `canonical_hash(output)`: 0.33 → 3.26 ms;
+  - T0 `context_json`: 4.7 KB (first snapshot) → 26.5 KB (median) → 41.6 KB (last snapshot).
+
+**Inferred (not a timing-only claim):** per-event Experience work is proportional to the size of collections that grow with history. `freeze` and the digest re-walk the whole recorded output (measured growing), and each pending experience's `plan()` re-parses a T0 context that embeds the same cumulative collections (measured growing). Replaying N events therefore performs Σ O(i) such walks, which is quadratic in N. That follows from these operation counts and sizes; the timings are consistent with it but are not the basis of the claim. A small calm:500 last-decile dip (7.0 ms) reflects fewer pending experiences at the end of that series, not a contradiction.
+
+### 17.5 Validation (post-sync, `b99fd3e`)
+
+| Suite | Result |
+|---|---|
+| Experience (`test_experience*.py`, 4 files incl. benchmark) | 55 passed, 1 skipped (PostgreSQL DSN not set) |
+| Recovery / checkpoint (`test_checkpoint_schedule`, `test_recovery_checkpoint`, `test_startup_recovery`, `test_launch_graceful_stop`, `test_recovery_benchmark`) | 92 passed |
+| M30 (`test_m30_bias_*.py`) | 96 passed |
+| VALID-1 (`test_validation_*.py`) | 56 passed |
+| Full `pytest` | 563 passed, 3 skipped |
+| `ruff check .` | clean |
+| `ruff format --check` | PERF-2 files clean. 22 files that predate this work are flagged (19 unchanged source/test files plus ADR-021/026/030 code blocks; shared venv ruff 0.16.8); none is a PERF-2 file. |
+| `mypy` (strict) | PERF-2 files clean. 3 errors that predate this work: missing `psutil` stubs in `launch.py`, `test_launch_graceful_stop.py` and `test_environment.py`. |
+| `git diff --check origin/main HEAD` | clean |
+
+**Environment note:** the shared `.venv`'s editable install points at `D:\NEXORA\NEXORA`, a stale main worktree. Tests must run with an **absolute** `PYTHONPATH` to this worktree's `packages` and `apps/api`. With a relative path, `test_launch_graceful_stop`'s child process (`cwd=tmp_path`) resolves the stale `nexora_api` and fails with `ModuleNotFoundError: nexora_api.launch`. That is an environment artifact, not a code failure; with absolute paths the test passes.
+
+### 17.6 Candidate re-assessment (not implemented)
+
+| Candidate | Current evidence (calm 500–1k / volatile 250) | Risk | Files | Owner / conflict | In PERF-2? |
+|---|---|---|---|---|---|
+| C1 memoize `plan()` + parsed T0 context | category B 14–24% / 67% | LOW | `experience/engine.py`, `experience/service.py` | ADR-028 has uncommitted `engine.py` | yes, Phase 2A |
+| C2 identify-then-materialize `freeze()` | about half of A: ~15–17% / small | LOW | `experience/engine.py`, `experience/service.py` | ADR-028 changes `freeze()` itself: direct semantic overlap | yes, Phase 2A (build on ADR-028's `freeze`) |
+| C3 serialize/encode output once (a, b) | A + C 42–44% / 18% | LOW–MEDIUM | `experience/engine.py`, `experience/service.py` | ADR-028. C3(c), a canonical fast path, would need `artifacts.py`: not authorized | (a, b) yes; (c) no |
+| C4 no-op append fast path | D + F 11–17% / 7% (SQLite) | MEDIUM | `storage.py` (shared) | storage/persistence ownership plus Security review; PostgreSQL unmeasured (Q-P2-3) | no, separate scope |
+| C5 cache `decode` type hints | 6–10% / ~1% | LOW | `artifacts.py` (shared; VALID-1 and all packages use `decode`) | not PERF-2 unless transferred (Q-P2-5) | no |
+
+**Recommended Phase 2A scope (when unblocked):** C1 → C2 → C3(a, b), confined to `experience/engine.py` and `experience/service.py`, rebased onto ADR-028. Required with it:
+
+1. a differential equivalence harness (section 11) over calm, volatile and the ADR-028 `experience_journal_9016004.json` fixture, checking X1–X8 and X10;
+2. the PERF-1 recovery suites unchanged (X6);
+3. before/after measurement with `scripts/experience_replay_benchmark.py` on the same machine.
+
+C4 and C5 stay out.
+
+**Q-P2-8 update:** PERF-1's `scripts/recovery_benchmark.py` is now on main, so generator consolidation is possible. It stays deferred, because it is not needed for Phase 2A.
+
+### 17.7 Readiness
+
+**BLOCKED.** The only blocker is ADR-028 / EXC1: it is uncommitted and unmerged, and it owns `experience/engine.py`. Main has not moved beyond `f2d51ad`, and no invariant or Phase 1 assumption was invalidated.
+
+**Unblock condition:** ADR-028 is accepted and merged to main (or committed on an approved branch that PERF-2 is directed to base on). Then rebase, re-run 17.4 as the Phase 2A baseline, and request Rin's Phase 2A decision.
