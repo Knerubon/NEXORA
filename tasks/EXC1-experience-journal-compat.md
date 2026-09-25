@@ -25,3 +25,31 @@ Resolve PROD migration blocker B1. A journal written by 9016004 must recover und
   - NEW→OLD (9016004): FAIL, `journal_identity_conflict`, as expected
   - pre-fix 4f69e9c recovering a journal written only by the fixed code: PASS, so new records are unchanged
 - Self-review; independent review pending. No push, PR or merge.
+
+### Resume and sync onto `f2d51ad` (2026-09-25)
+
+- **Found state:** HEAD `4f69e9c`, no commits. The six files were intent-to-add (`git add -N`), not staged: the index held placeholders and the content was unstaged. Before any change, the exact patch and file copies were preserved outside the repository.
+- **Committed unchanged at `4f69e9c`, then rebased onto `origin/main` `f2d51ad`:** `8d7957e` (fix + fixture + tests) and this docs commit.
+  - The patch is identical before and after the rebase, apart from `index` lines.
+  - File content equals the preserved copies after CRLF normalization (`core.autocrlf=true`).
+  - There were no conflicts.
+- **Main since `4f69e9c`** (M30, VALID-1, PERF-1) changed nothing in `experience/`, `artifacts.py`, `storage.py`, `checkpoint.py` or `checkpoint_state.py`. This branch touches none of M30, VALID-1, research/runtime, apps or scripts.
+- **History check:** `trendline` entered `freeze()` and the pipeline output in the same commit (`f832dcb`, ADR-020). So did `entry_readiness` (`988c542`, ADR-021). No writer ever froze an explicit `null` for a field its recorded output lacked, so the presence rule reproduces every historical writer.
+- **Negative control:** against main's unfixed `engine.py`, 6 of 15 compatibility tests fail (B1 recovery, re-freeze, presence, future-field and mixed-journal cases). With the fix, all 15 pass.
+- **Validation** (absolute `PYTHONPATH` to this worktree):
+
+  | Suite | Result |
+  |---|---|
+  | EXC1 compatibility | 15 passed |
+  | Experience | 62 passed, 1 skipped (PostgreSQL DSN) |
+  | Recovery / checkpoint | 92 passed |
+  | VALID-1 | 56 passed |
+  | M30 | 96 passed |
+  | Full suite | 570 passed, 3 skipped |
+  | `ruff check .` | clean |
+  | `ruff format --check`, changed files | clean |
+  | `mypy` (strict), changed files | clean |
+  | `mypy`, whole repo | 3 errors that predate this work: missing `psutil` stubs |
+  | `git diff --check` | clean |
+
+- **Operational note:** the `engine.py` change alters `code_fingerprint()`, so every existing checkpoint is rejected once and recovery falls back to a full replay (ADR-022 by design). Mixed old/new journals converge exactly between cold replay and checkpoint + delta (C12).
