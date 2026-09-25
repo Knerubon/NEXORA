@@ -1,3 +1,5 @@
+import { EntryReadiness } from "./entry-readiness";
+
 export type SignalEvidence = {
   code: string; reason: string;
   component?: string; points?: number; polarity?: "bullish" | "bearish" | "neutral";
@@ -119,7 +121,9 @@ export function MatrixSummary({ decision: d, decisionContext: c, symbol, matrix,
 }
 
 export function SignalIntelligence({ decision: d, decisionContext: c, symbol, matrix, matrixStatus, feedStatus, quoteTime,
-  researchMode, connectionError, regime, history }: PanelProps) {
+  researchMode, connectionError, regime, history, entryReadiness, entryReadinessInitiallyEnabled }: PanelProps & {
+  entryReadiness?: unknown; entryReadinessInitiallyEnabled?: boolean;
+}) {
   const positive = d?.positive_evidence ?? [];
   const negative = d?.negative_evidence ?? [];
   return <section id="signal-analysis" className="signal-intelligence" aria-label="Matrix decision panel">
@@ -142,6 +146,8 @@ export function SignalIntelligence({ decision: d, decisionContext: c, symbol, ma
         <div className="strength-pair"><Strength side="BUY" value={d?.buy_strength} available={d?.strength_available} /><Strength side="SELL" value={d?.sell_strength} available={d?.strength_available} /></div>
         <div className="decision-line"><span>Decision <strong className={`decision-${d?.action.toLowerCase() ?? "unavailable"}`}>{d?.action ?? "Unavailable"}</strong></span><span>Signal Score <strong>{d ? `${d.score}/100` : "Unavailable"}</strong></span></div>
         <small>Independent evidence strengths; not win probability. They need not sum to 100.</small>
+        <EntryReadiness readiness={entryReadiness} stale={researchMode !== "live_observation" || connectionError}
+          initialEnabled={entryReadinessInitiallyEnabled} />
       </div>
       <div className="market-panel">
         <h3 title="Backend-derived from matrix resolution directions only; never computed in the browser.">Bias ⓘ</h3>

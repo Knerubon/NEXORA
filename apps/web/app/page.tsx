@@ -24,6 +24,7 @@ type Output = {
   structure?: { levels: { side: string; price: string; status: string }[] };
   regime?: { state: { label: string; reason: string } };
   signals?: { history: Signal[]; decision?: SignalDecision };
+  entry_readiness?: unknown;
 };
 type State = {
   sequence: number; research_mode: string; storage_backend: string; matrix_status?: string;
@@ -325,7 +326,8 @@ export default function Home() {
       symbol={output.event?.symbol ?? quote?.quote?.symbol ?? quote?.symbol}
       matrix={output.matrix} matrixStatus={state?.matrix_status} feedStatus={quote?.status}
       quoteTime={quote?.quote?.event_time} researchMode={state?.research_mode}
-      connectionError={Boolean(error)} regime={output.regime?.state} history={output.signals?.history} />
+      connectionError={Boolean(error)} regime={output.regime?.state} history={output.signals?.history}
+      entryReadiness={output.entry_readiness} />
     <section><h2>Backtest Lab</h2><p>Results use recorded event prices. Compare runs only with matching data, costs and evaluation assumptions.</p>
       <label>Saved parameter set <select value={chosen} onChange={(e) => setChosen(e.target.value)}><option value="">Choose a configured set</option>{parameters.map((p) => <option key={p}>{p}</option>)}</select></label>
       <button disabled={busy || !chosen || !state?.research.event_count} onClick={() => void act("/backtest/runs", { parameter_set: chosen })}>Run research</button>
