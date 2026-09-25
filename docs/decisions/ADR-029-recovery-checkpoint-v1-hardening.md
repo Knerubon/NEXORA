@@ -1,8 +1,8 @@
 # ADR-029 — PERF-1 Recovery Snapshot / Checkpoint V1: gap analysis and hardening
 
-Status: **draft** (PERF-1 Phase 1; Rin architecture review pending; no implementation approved)
+Status: **draft**. Direction approved with changes by Rin on 2026-09-25, and Phase 2A (§19) authorized. The ADR as a whole is **not accepted**.
 Date: 2026-09-25
-Role: DEV-PERF (inspection + architecture only; self-review, independent review pending)
+Role: DEV-PERF. PERF-1 owns Recovery Checkpoint Hardening (Rin D9 decision). Self-review; independent review pending.
 Base: `origin/main` `4f69e9c` (PR #32 merged)
 Related: [ADR-022](./ADR-022-startup-recovery-checkpoint-v1.md) (checkpoint-assisted recovery, merged), [ADR-018](./ADR-018-readiness-corrections.md), [ADR-017](./ADR-017-production-hardening-local-operations.md), [environment isolation](../environment-isolation.md), [runtime release gates](../research-runtime.md). In flight, not on `main`: ADR-027 Research Journal Payload V2 (`claude/research-journal-payload-v2`), ADR-028 Experience snapshot additive fields (uncommitted in `NEXORA-EXPERIENCE-COMPAT`), ADR-023/024 Pattern Engine (`claude/pnf-pattern-engine-v1`).
 
@@ -292,6 +292,96 @@ No performance target is proposed until a fresh baseline exists.
 | D6 | Offline pre-build procedure for PROD cutover (H7) | Rin + human (PROD) | Design and test on synthetic data only; any PROD use needs a separate GO |
 | D7 | Checkpoint write outside the lock (H8) | Rin, after measurement (g) | Defer unless measured stalls matter |
 | D8 | ADR-022 acceptance status (H9) | Rin | Accept, reflecting revision 2 as merged |
-| D9 | PERF-1 ownership vs. the Startup Recovery V1 owner session | Rin | Required before Phase 2 |
+| D9 | PERF-1 ownership vs. the Startup Recovery V1 owner session | Rin | **Resolved 2026-09-25**: Startup Recovery V1 is closed; PERF-1 owns hardening (§19) |
 
 No product or quant decision is required. No proposal changes trading semantics, signals, patterns or risk.
+
+## 19. Review record and Phase 2A
+
+### Review record (Rin, 2026-09-25)
+
+- **Direction approved with changes.** PERF-1 is re-scoped as Recovery Checkpoint Hardening, not a second checkpoint implementation.
+- **D9 resolved.**
+  - The Startup Recovery V1 workstream (`claude/startup-recovery-v1`, PR #32) is **closed**.
+  - ADR-022 and its merged implementation are **baseline code**.
+  - PERF-1 owns future hardening under this ADR.
+- **Phase 2A authorized:**
+  - (A) the synthetic benchmark baseline (§13);
+  - (B) H2 graceful shutdown, limited to `apps/api/nexora_api/launch.py` `stop_owned` and its lifecycle;
+  - (C) H3 time/idle trigger, limited to checkpoint scheduling;
+  - (D) H5 observability, limited to the readiness payload in `main.py`.
+- **Not authorized (deferred):**
+  - H1 needs a separate correctness review: an incomplete dependency scope could restore semantically incompatible state.
+  - H4 must be coordinated with ADR-027.
+  - H6 is deferred.
+  - H7 is blocked by the PROD procedure and by EXC1 / `journal_identity_conflict`.
+  - H8 stays gated on measurements.
+- **Constraint:** the ~93–96% `ExperienceService.observe` share of replay cost must be reported in the benchmark evidence. PERF-1 does not optimize `ExperienceService`; that needs its own approved scope.
+- Accepting this ADR is a separate decision. Phase 2A succeeding does not accept it.
+
+### Phase 2A as implemented
+
+**H3, age trigger**
+- Implemented in `ResearchRuntime`: new arguments `checkpoint_max_age`, and `clock` (defaults to `time.monotonic`).
+- Semantics:
+  - A checkpoint is due on a successful new-event ingest when either condition holds:
+    - the count trigger is reached (ADR-022, unchanged), or
+    - the oldest ingest not yet covered by a checkpoint is at least `checkpoint_max_age` seconds old.
+  - Both conditions are checked in one place, so one ingest writes at most one checkpoint.
+  - A successful write resets both conditions. A failed write keeps them, so the next ingest retries, the same as the count trigger.
+- Default and configuration:
+  - **Off by default.** The API enables it only when `NEXORA_RESEARCH_CHECKPOINT_MAX_AGE_SECONDS` is set to a finite positive number; any other value fails startup.
+  - No value of T is chosen here. D3 stays open until measurements exist.
+- **Idle limitation:** a checkpoint while *no* events arrive would need a background timer. §5 excluded that, and Phase 2A did not authorize it. An idle runtime is covered at restart by H2's shutdown checkpoint. A true idle timer needs its own decision.
+- Checkpoint format, journal format and the `checkpoint_state` schema are unchanged.
+
+**H2, graceful stop**
+- Implemented in `launch.py`. `start` gives the API child a random per-run token (`NEXORA_API_STOP_TOKEN`), which the `api` action removes from its environment before serving. The token is stored with the API record in the environment's own `processes.json`.
+- The API runs `uvicorn.Server` together with a daemon thread. The thread polls `<state>/api-stop.request` and sets `should_exit` only when the file holds **this run's** token, so a stale request from an earlier run never matches.
+- `stop_owned` works in this order:
+  1. It runs the unchanged ownership checks: process identity, create time, cwd inside the worktree, and command line.
+  2. It writes the request.
+  3. It waits up to `GRACEFUL_STOP_SECONDS` (30 s) for the process and its captured descendants.
+  4. Anything still alive then goes through terminate, a 10 s wait, and kill.
+- Records without a token (registries from before this change, and the web process) keep the old hard path exactly. `stop` removes the request file afterwards, and `start` removes a stale one.
+- `timeout_graceful_shutdown=5 s` keeps open dashboard WebSockets from delaying the lifespan shutdown.
+- **Deviation from the D2 recommendation (console signal).** The API is started with `CREATE_NO_WINDOW` and stopped from a different launcher invocation, so `GenerateConsoleCtrlEvent` cannot reach it. The file token adds no network surface. Anyone able to write the environment's state directory can already stop its processes through the registry. **D2 needs Rin and Security confirmation** of this mechanism.
+- **Limitation:** during startup recovery, uvicorn is still inside the lifespan startup and does not act on `should_exit`. A stop issued then falls back to the hard path after 30 s, which is today's behavior. No checkpoint is lost, because none can be written before recovery completes.
+
+**H5, observability**
+- `ResearchRuntime.recovery_status()` (read-only, under the runtime lock) is exposed as `/operations/readiness` → `recovery`.
+- The field is informational: it never adds a reason or changes the status.
+
+| Field | Source |
+|---|---|
+| `checkpoints` | whether a `CheckpointStore` is configured (`on`/`off`) |
+| `recovered` | `_recovered`, set when the last `_rebuild()` completed |
+| `mode`, `reason`, `checkpoint_sequence`, `replayed`, `duration_ms` | `last_recovery`, recorded by the last `_rebuild()` (ADR-022) |
+| `uncovered_events` | `_since_checkpoint`: ingests not yet covered by a checkpoint |
+| `last_checkpoint.{sequence, events, bytes, write_ms}` | recorded at a successful `_write_checkpoint()` in this process |
+| `last_checkpoint.age_s` | runtime clock now − the clock value at that write |
+
+- `last_checkpoint` is `null` until this process writes a checkpoint. A restored checkpoint's creation time is not claimed.
+- `duration_ms` covers restore plus replay, not the checkpoint write.
+- `recovery` is `null` when no research runtime is configured.
+
+**Benchmark (§13)**
+- Script: `scripts/recovery_benchmark.py`.
+- The event series is seeded and mean-reverting, with a largest step of 0.3.
+- The step was calibrated so recorded-output rows grow about 55 B/event (at 1,000 events, example config). The legacy development journal averages about 45 B/event. A ±3.0 step made rows grow 852 B/event, which is not representative.
+- The script refuses a non-empty work directory and never opens an existing journal.
+- Components are timed by wrapping existing methods in-process only.
+- Every scenario must reproduce the full-replay state hash and leave the number of journal rows unchanged.
+
+Evidence: [PERF1 benchmark](../../tasks/evidence/PERF1-recovery-benchmark.md) (code `3c571ca`, base `4f69e9c`; median of 3 runs after 1 warm-up). Summary, with no target implied:
+
+| N | full replay | warm restart | checkpoint + 100 | `ExperienceService.observe` share of full replay | checkpoint write / size |
+|---|---|---|---|---|---|
+| 500 | 5.2 s | 0.18 s | 1.4 s | 79% | 66 ms / 0.73 MB |
+| 1,000 | 16.6 s | 0.21 s | 2.5 s | 84% | 100 ms / 1.63 MB |
+| 2,000 | 53.4 s | 0.50 s | 5.6 s | 86% | 179 ms / 3.06 MB |
+| 5,000 | 274.9 s | 1.28 s | 12.4 s | 88% | 485 ms / 7.58 MB |
+
+- A fingerprint mismatch costs the same as a full replay.
+- Every scenario reproduced the full-replay state hash and changed no journal rows.
+- The Experience share is below the earlier 93–96% measurements (different data shape), but it still dominates and grows with history. Experience remains outside PERF-1 scope.
