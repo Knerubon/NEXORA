@@ -1,0 +1,515 @@
+{
+  "meta": {
+    "commit": "4c8fa518e272a99aae10e8963cf25b1c580edb9d",
+    "worktree_dirty": false,
+    "python": "3.13.3",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "processor": "Intel64 Family 6 Model 142 Stepping 11, GenuineIntel",
+    "config": "docs/examples/research-config.json",
+    "seed": 20260925,
+    "deltas": [
+      1,
+      10,
+      100
+    ],
+    "runs": 3,
+    "warmup": 1,
+    "statistic": "median",
+    "timer": "time.perf_counter",
+    "started_at": "2026-09-25T10:41:25.190301+00:00"
+  },
+  "sizes": {
+    "500": {
+      "build": {
+        "ingest_ms": 8686,
+        "last_100_ingest_mean_ms": 25.47,
+        "journal_bytes": 6475776,
+        "checkpoint_bytes": 732190
+      },
+      "scenarios": {
+        "full_replay": {
+          "startup_ms": 5628.5,
+          "recovery_ms": 5623.0,
+          "restore_ms": 0.0,
+          "experience_observe_ms": 4443.3,
+          "engine_replay_ms": 234.1,
+          "paper_ms": 0.8,
+          "checkpoint_write_ms": 0.0,
+          "mode": "full",
+          "reason": "checkpoints_disabled",
+          "replayed": 500,
+          "events": 500,
+          "checkpoint_bytes": null,
+          "state_hash": "dbe9615e699b5b63ba1f591f0ecd711f3d5cc86002f5727365ecfab36d956227",
+          "experience_share_of_recovery": 0.79,
+          "runs": [
+            5623.0,
+            4907.0,
+            5903.0
+          ],
+          "journal_rows_changed": 0
+        },
+        "no_checkpoint": {
+          "startup_ms": 5824.1,
+          "recovery_ms": 5739.0,
+          "restore_ms": 0.2,
+          "experience_observe_ms": 4522.3,
+          "engine_replay_ms": 243.3,
+          "paper_ms": 0.8,
+          "checkpoint_write_ms": 54.1,
+          "mode": "full",
+          "reason": "no_checkpoint",
+          "replayed": 500,
+          "events": 500,
+          "checkpoint_bytes": 731316,
+          "state_hash": "dbe9615e699b5b63ba1f591f0ecd711f3d5cc86002f5727365ecfab36d956227",
+          "experience_share_of_recovery": 0.788,
+          "runs": [
+            5493.0,
+            6716.0,
+            5739.0
+          ],
+          "journal_rows_changed": 0
+        },
+        "warm_checkpoint": {
+          "startup_ms": 187.5,
+          "recovery_ms": 181.0,
+          "restore_ms": 180.7,
+          "experience_observe_ms": 0.0,
+          "engine_replay_ms": 0.0,
+          "paper_ms": 0.0,
+          "checkpoint_write_ms": 0.0,
+          "mode": "checkpoint",
+          "reason": null,
+          "replayed": 0,
+          "events": 500,
+          "checkpoint_bytes": null,
+          "state_hash": "dbe9615e699b5b63ba1f591f0ecd711f3d5cc86002f5727365ecfab36d956227",
+          "experience_share_of_recovery": 0.0,
+          "runs": [
+            156.0,
+            223.0,
+            181.0
+          ],
+          "journal_rows_changed": 0
+        },
+        "checkpoint_plus_1": {
+          "startup_ms": 330.6,
+          "recovery_ms": 254.0,
+          "restore_ms": 239.7,
+          "experience_observe_ms": 10.9,
+          "engine_replay_ms": 0.5,
+          "paper_ms": 0.0,
+          "checkpoint_write_ms": 70.6,
+          "mode": "checkpoint",
+          "reason": null,
+          "replayed": 1,
+          "events": 500,
+          "checkpoint_bytes": 731528,
+          "state_hash": "dbe9615e699b5b63ba1f591f0ecd711f3d5cc86002f5727365ecfab36d956227",
+          "experience_share_of_recovery": 0.043,
+          "runs": [
+            159.0,
+            310.0,
+            254.0
+          ],
+          "journal_rows_changed": 0
+        },
+        "checkpoint_plus_10": {
+          "startup_ms": 400.4,
+          "recovery_ms": 346.0,
+          "restore_ms": 220.1,
+          "experience_observe_ms": 94.1,
+          "engine_replay_ms": 5.9,
+          "paper_ms": 0.0,
+          "checkpoint_write_ms": 49.0,
+          "mode": "checkpoint",
+          "reason": null,
+          "replayed": 10,
+          "events": 500,
+          "checkpoint_bytes": 731524,
+          "state_hash": "dbe9615e699b5b63ba1f591f0ecd711f3d5cc86002f5727365ecfab36d956227",
+          "experience_share_of_recovery": 0.272,
+          "runs": [
+            188.0,
+            406.0,
+            346.0
+          ],
+          "journal_rows_changed": 0
+        },
+        "checkpoint_plus_100": {
+          "startup_ms": 1525.2,
+          "recovery_ms": 1470.0,
+          "restore_ms": 118.9,
+          "experience_observe_ms": 1054.1,
+          "engine_replay_ms": 58.4,
+          "paper_ms": 0.2,
+          "checkpoint_write_ms": 65.4,
+          "mode": "checkpoint",
+          "reason": null,
+          "replayed": 100,
+          "events": 500,
+          "checkpoint_bytes": 731492,
+          "state_hash": "dbe9615e699b5b63ba1f591f0ecd711f3d5cc86002f5727365ecfab36d956227",
+          "experience_share_of_recovery": 0.717,
+          "runs": [
+            1276.0,
+            1757.0,
+            1470.0
+          ],
+          "journal_rows_changed": 0
+        },
+        "fingerprint_mismatch": {
+          "startup_ms": 5896.3,
+          "recovery_ms": 5840.0,
+          "restore_ms": 13.4,
+          "experience_observe_ms": 4576.1,
+          "engine_replay_ms": 245.5,
+          "paper_ms": 0.8,
+          "checkpoint_write_ms": 60.6,
+          "mode": "full",
+          "reason": "code_fingerprint_mismatch",
+          "replayed": 500,
+          "events": 500,
+          "checkpoint_bytes": 731316,
+          "state_hash": "dbe9615e699b5b63ba1f591f0ecd711f3d5cc86002f5727365ecfab36d956227",
+          "experience_share_of_recovery": 0.784,
+          "runs": [
+            5249.0,
+            6577.0,
+            5840.0
+          ],
+          "journal_rows_changed": 0
+        }
+      }
+    },
+    "1000": {
+      "build": {
+        "ingest_ms": 31860,
+        "last_100_ingest_mean_ms": 52.49,
+        "journal_bytes": 32116736,
+        "checkpoint_bytes": 1629126
+      },
+      "scenarios": {
+        "full_replay": {
+          "startup_ms": 19557.9,
+          "recovery_ms": 19549.0,
+          "restore_ms": 0.0,
+          "experience_observe_ms": 16312.5,
+          "engine_replay_ms": 560.2,
+          "paper_ms": 1.9,
+          "checkpoint_write_ms": 0.0,
+          "mode": "full",
+          "reason": "checkpoints_disabled",
+          "replayed": 1000,
+          "events": 1000,
+          "checkpoint_bytes": null,
+          "state_hash": "d2c6e93e12100c02eee0d3c2e399864c9a9c782fda58a52b89f05b0a8dc1a230",
+          "experience_share_of_recovery": 0.834,
+          "runs": [
+            19234.0,
+            22401.0,
+            19549.0
+          ],
+          "journal_rows_changed": 0
+        },
+        "no_checkpoint": {
+          "startup_ms": 19913.1,
+          "recovery_ms": 19774.0,
+          "restore_ms": 0.2,
+          "experience_observe_ms": 16495.6,
+          "engine_replay_ms": 494.6,
+          "paper_ms": 1.7,
+          "checkpoint_write_ms": 133.6,
+          "mode": "full",
+          "reason": "no_checkpoint",
+          "replayed": 1000,
+          "events": 1000,
+          "checkpoint_bytes": 1628053,
+          "state_hash": "d2c6e93e12100c02eee0d3c2e399864c9a9c782fda58a52b89f05b0a8dc1a230",
+          "experience_share_of_recovery": 0.834,
+          "runs": [
+            19774.0,
+            19061.0,
+            20466.0
+          ],
+          "journal_rows_changed": 0
+        },
+        "warm_checkpoint": {
+          "startup_ms": 288.6,
+          "recovery_ms": 282.0,
+          "restore_ms": 281.5,
+          "experience_observe_ms": 0.0,
+          "engine_replay_ms": 0.0,
+          "paper_ms": 0.0,
+          "checkpoint_write_ms": 0.0,
+          "mode": "checkpoint",
+          "reason": null,
+          "replayed": 0,
+          "events": 1000,
+          "checkpoint_bytes": null,
+          "state_hash": "d2c6e93e12100c02eee0d3c2e399864c9a9c782fda58a52b89f05b0a8dc1a230",
+          "experience_share_of_recovery": 0.0,
+          "runs": [
+            289.0,
+            252.0,
+            282.0
+          ],
+          "journal_rows_changed": 0
+        },
+        "checkpoint_plus_1": {
+          "startup_ms": 471.8,
+          "recovery_ms": 333.0,
+          "restore_ms": 308.5,
+          "experience_observe_ms": 19.4,
+          "engine_replay_ms": 0.7,
+          "paper_ms": 0.0,
+          "checkpoint_write_ms": 133.0,
+          "mode": "checkpoint",
+          "reason": null,
+          "replayed": 1,
+          "events": 1000,
+          "checkpoint_bytes": 1628461,
+          "state_hash": "d2c6e93e12100c02eee0d3c2e399864c9a9c782fda58a52b89f05b0a8dc1a230",
+          "experience_share_of_recovery": 0.058,
+          "runs": [
+            392.0,
+            333.0,
+            271.0
+          ],
+          "journal_rows_changed": 0
+        },
+        "checkpoint_plus_10": {
+          "startup_ms": 716.1,
+          "recovery_ms": 574.0,
+          "restore_ms": 295.8,
+          "experience_observe_ms": 244.7,
+          "engine_replay_ms": 4.4,
+          "paper_ms": 0.0,
+          "checkpoint_write_ms": 136.8,
+          "mode": "checkpoint",
+          "reason": null,
+          "replayed": 10,
+          "events": 1000,
+          "checkpoint_bytes": 1628453,
+          "state_hash": "d2c6e93e12100c02eee0d3c2e399864c9a9c782fda58a52b89f05b0a8dc1a230",
+          "experience_share_of_recovery": 0.426,
+          "runs": [
+            574.0,
+            954.0,
+            542.0
+          ],
+          "journal_rows_changed": 0
+        },
+        "checkpoint_plus_100": {
+          "startup_ms": 4042.0,
+          "recovery_ms": 3884.0,
+          "restore_ms": 298.0,
+          "experience_observe_ms": 3061.6,
+          "engine_replay_ms": 54.0,
+          "paper_ms": 0.2,
+          "checkpoint_write_ms": 152.1,
+          "mode": "checkpoint",
+          "reason": null,
+          "replayed": 100,
+          "events": 1000,
+          "checkpoint_bytes": 1628401,
+          "state_hash": "d2c6e93e12100c02eee0d3c2e399864c9a9c782fda58a52b89f05b0a8dc1a230",
+          "experience_share_of_recovery": 0.788,
+          "runs": [
+            3884.0,
+            5957.0,
+            3870.0
+          ],
+          "journal_rows_changed": 0
+        },
+        "fingerprint_mismatch": {
+          "startup_ms": 21253.5,
+          "recovery_ms": 21145.0,
+          "restore_ms": 17.0,
+          "experience_observe_ms": 17747.5,
+          "engine_replay_ms": 565.2,
+          "paper_ms": 1.9,
+          "checkpoint_write_ms": 136.1,
+          "mode": "full",
+          "reason": "code_fingerprint_mismatch",
+          "replayed": 1000,
+          "events": 1000,
+          "checkpoint_bytes": 1628053,
+          "state_hash": "d2c6e93e12100c02eee0d3c2e399864c9a9c782fda58a52b89f05b0a8dc1a230",
+          "experience_share_of_recovery": 0.839,
+          "runs": [
+            20131.0,
+            23416.0,
+            21145.0
+          ],
+          "journal_rows_changed": 0
+        }
+      }
+    },
+    "2000": {
+      "build": {
+        "ingest_ms": 86094,
+        "last_100_ingest_mean_ms": 87.89,
+        "journal_bytes": 121835520,
+        "checkpoint_bytes": 3058145
+      },
+      "scenarios": {
+        "full_replay": {
+          "startup_ms": 62357.2,
+          "recovery_ms": 62351.0,
+          "restore_ms": 0.0,
+          "experience_observe_ms": 53597.4,
+          "engine_replay_ms": 1007.7,
+          "paper_ms": 3.2,
+          "checkpoint_write_ms": 0.0,
+          "mode": "full",
+          "reason": "checkpoints_disabled",
+          "replayed": 2000,
+          "events": 2000,
+          "checkpoint_bytes": null,
+          "state_hash": "8bf93ee35b9e1676c8592de05f4a561bfcb37c39a0f5166571ee1768f67947cf",
+          "experience_share_of_recovery": 0.86,
+          "runs": [
+            62351.0,
+            59730.0,
+            64081.0
+          ],
+          "journal_rows_changed": 0
+        },
+        "no_checkpoint": {
+          "startup_ms": 61235.1,
+          "recovery_ms": 61009.0,
+          "restore_ms": 0.2,
+          "experience_observe_ms": 52446.6,
+          "engine_replay_ms": 991.3,
+          "paper_ms": 3.3,
+          "checkpoint_write_ms": 234.7,
+          "mode": "full",
+          "reason": "no_checkpoint",
+          "replayed": 2000,
+          "events": 2000,
+          "checkpoint_bytes": 3056696,
+          "state_hash": "8bf93ee35b9e1676c8592de05f4a561bfcb37c39a0f5166571ee1768f67947cf",
+          "experience_share_of_recovery": 0.86,
+          "runs": [
+            59615.0,
+            61884.0,
+            61009.0
+          ],
+          "journal_rows_changed": 0
+        },
+        "warm_checkpoint": {
+          "startup_ms": 648.8,
+          "recovery_ms": 643.0,
+          "restore_ms": 642.4,
+          "experience_observe_ms": 0.0,
+          "engine_replay_ms": 0.0,
+          "paper_ms": 0.0,
+          "checkpoint_write_ms": 0.0,
+          "mode": "checkpoint",
+          "reason": null,
+          "replayed": 0,
+          "events": 2000,
+          "checkpoint_bytes": null,
+          "state_hash": "8bf93ee35b9e1676c8592de05f4a561bfcb37c39a0f5166571ee1768f67947cf",
+          "experience_share_of_recovery": 0.0,
+          "runs": [
+            537.0,
+            680.0,
+            643.0
+          ],
+          "journal_rows_changed": 0
+        },
+        "checkpoint_plus_1": {
+          "startup_ms": 908.2,
+          "recovery_ms": 634.0,
+          "restore_ms": 579.9,
+          "experience_observe_ms": 31.0,
+          "engine_replay_ms": 0.6,
+          "paper_ms": 0.0,
+          "checkpoint_write_ms": 240.1,
+          "mode": "checkpoint",
+          "reason": null,
+          "replayed": 1,
+          "events": 2000,
+          "checkpoint_bytes": 3057480,
+          "state_hash": "8bf93ee35b9e1676c8592de05f4a561bfcb37c39a0f5166571ee1768f67947cf",
+          "experience_share_of_recovery": 0.049,
+          "runs": [
+            548.0,
+            634.0,
+            664.0
+          ],
+          "journal_rows_changed": 0
+        },
+        "checkpoint_plus_10": {
+          "startup_ms": 1126.7,
+          "recovery_ms": 933.0,
+          "restore_ms": 577.2,
+          "experience_observe_ms": 285.0,
+          "engine_replay_ms": 6.1,
+          "paper_ms": 0.0,
+          "checkpoint_write_ms": 270.3,
+          "mode": "checkpoint",
+          "reason": null,
+          "replayed": 10,
+          "events": 2000,
+          "checkpoint_bytes": 3057476,
+          "state_hash": "8bf93ee35b9e1676c8592de05f4a561bfcb37c39a0f5166571ee1768f67947cf",
+          "experience_share_of_recovery": 0.305,
+          "runs": [
+            793.0,
+            1192.0,
+            933.0
+          ],
+          "journal_rows_changed": 0
+        },
+        "checkpoint_plus_100": {
+          "startup_ms": 7206.9,
+          "recovery_ms": 6950.0,
+          "restore_ms": 703.3,
+          "experience_observe_ms": 5710.3,
+          "engine_replay_ms": 62.4,
+          "paper_ms": 0.2,
+          "checkpoint_write_ms": 244.5,
+          "mode": "checkpoint",
+          "reason": null,
+          "replayed": 100,
+          "events": 2000,
+          "checkpoint_bytes": 3057440,
+          "state_hash": "8bf93ee35b9e1676c8592de05f4a561bfcb37c39a0f5166571ee1768f67947cf",
+          "experience_share_of_recovery": 0.822,
+          "runs": [
+            6469.0,
+            7911.0,
+            6950.0
+          ],
+          "journal_rows_changed": 0
+        },
+        "fingerprint_mismatch": {
+          "startup_ms": 63940.2,
+          "recovery_ms": 63704.0,
+          "restore_ms": 14.5,
+          "experience_observe_ms": 54745.4,
+          "engine_replay_ms": 1039.0,
+          "paper_ms": 3.3,
+          "checkpoint_write_ms": 229.1,
+          "mode": "full",
+          "reason": "code_fingerprint_mismatch",
+          "replayed": 2000,
+          "events": 2000,
+          "checkpoint_bytes": 3056696,
+          "state_hash": "8bf93ee35b9e1676c8592de05f4a561bfcb37c39a0f5166571ee1768f67947cf",
+          "experience_share_of_recovery": 0.859,
+          "runs": [
+            65341.0,
+            63704.0,
+            60993.0
+          ],
+          "journal_rows_changed": 0
+        }
+      }
+    }
+  }
+}
