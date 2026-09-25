@@ -313,8 +313,13 @@ CATEGORIES: dict[str, tuple[str, ...]] = {
         "freeze.canonical_hash",
         "freeze.frozen_json",
         "freeze.fingerprint",
+        # ADR-031 Phase 2 names for the same work.
+        "freeze.recorded",
+        "observe.recorded",
+        "observe.fingerprint",
+        "materialize",
     ),
-    "experience_context_reparse": ("Experience.context", "plan"),
+    "experience_context_reparse": ("Experience.context", "plan", "plan_of"),
     "experience_digest": ("observe.digest",),
     "experience_lifecycle_measure": ("observe.advance", "measure", "measure.advance"),
     "experience_append_encode": (
@@ -366,6 +371,13 @@ def breakdown_instrumentation(journal: SQLiteJournal) -> Iterator[Breakdown]:
         (Experience, "context", "Experience.context"),
         (experience_service, "freeze", "freeze"),
         (experience_service, "canonical_hash", "observe.digest"),
+        # ADR-031 Phase 2: present only in the optimized implementation.
+        (experience_engine, "recorded", "freeze.recorded"),
+        (experience_service, "recorded", "observe.recorded"),
+        (experience_service, "fingerprint", "observe.fingerprint"),
+        (experience_service, "materialize", "materialize"),
+        (experience_service, "observation_digest", "observe.digest"),
+        (experience_service, "plan_of", "plan_of"),
         (experience_service, "advance", "observe.advance"),
         (experience_service, "measure", "measure"),
         (ExperienceService, "_persist_state", "persist_state"),
@@ -375,7 +387,12 @@ def breakdown_instrumentation(journal: SQLiteJournal) -> Iterator[Breakdown]:
         (research_runtime, "decode", "runtime.decode"),
     ]
     targets: list[tuple[type | ModuleType, str, Any]] = [(SQLiteJournal, "append", append)]
-    targets += [(owner, name, b.wrap(getattr(owner, name), key)) for owner, name, key in wrapped]
+    # Wrap what the loaded implementation has, so one harness measures before and after.
+    targets += [
+        (owner, name, b.wrap(getattr(owner, name), key))
+        for owner, name, key in wrapped
+        if hasattr(owner, name)
+    ]
     originals = [(owner, name, getattr(owner, name)) for owner, name, _ in targets]
     connection = journal.connection
     try:
