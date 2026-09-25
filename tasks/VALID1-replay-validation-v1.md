@@ -43,3 +43,10 @@ Draft [ADR-030](../docs/decisions/ADR-030-replay-validation-framework-v1.md).
 
 - 2026-09-25 Phase 1: self-review; independent review pending. Docs-only change; application tests not run (no code changed).
 - 2026-09-25 Rin architecture review: APPROVED WITH REQUIRED DOC FIXES. The ADR was renamed 029 → 030 and Q-V1/Q-V6/Q-V7/Q-V8/Q-V10 were recorded. Phase 2A (pure offline core) is authorized.
+- 2026-09-25 Phase 2A (pure offline core) implemented in `packages/nexora/validation/` plus tests. Self-review; independent review pending.
+  - Validation tests: 56 passed (`tests/test_validation_causal.py`, `tests/test_validation_core.py`).
+  - Full suite: 433 passed, 3 skipped.
+  - `ruff check .` passes.
+  - `mypy`: no findings in new code. Two pre-existing `psutil` stub errors come from the local environment (`types-psutil` is not installed in the shared `.venv`).
+  - `scripts/recovery_drill.py` passes. `git diff --check` passes.
+  - Rin code review pending.

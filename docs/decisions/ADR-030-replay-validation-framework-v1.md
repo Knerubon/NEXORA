@@ -205,10 +205,10 @@ Each component is evaluated **independently** through a *subject*: a typed evide
 |---|---|---|---|---|
 | **L0** P&F reconstruction | none (consistency) | n/a: determinism, RECOMPUTED-vs-RECORDED parity of columns and transitions, transition counts per `effective_box_size` | n/a | engine / recorded output |
 | **L1** P&F transition | `pnf.reversal`, `pnf.extension` | the event whose processing produced the transition | column direction | `transitions[before:]` |
-| **L2a** Structure | `structure.pivot_confirmed`, `structure.level_invalidated` | the event that confirmed the pivot or invalidated the level | pivot kind or level side | `structure` snapshot delta |
+| **L2a** Structure | `structure.pivot_confirmed`, `structure.level_invalidated` | the event that confirmed the pivot or invalidated the level | neutral (kind and side are recorded; no trading meaning is assigned) | `structure` snapshot delta |
 | **L2b** Pattern (legacy) | `pattern.legacy.<evidence_code>` | first decision point at which `(evidence_code, source_data_reference, algorithm_version)` appears in `decision.patterns` | pattern `direction` | `signals.decision.patterns` |
 | **L2c** Pattern Engine | `pattern.<algorithm_id>` | `PatternResult` first reported `confirmed` (by `pattern_id`) | `direction` | `pattern_engine` key. **Only after ADR-024 Phase 2 merges**; SHADOW output is eligible (its consumer contract is evaluation). |
-| **L3** Trendline | `trendline.<kind>.<state>` | the event whose processing moved a line to `active`, `broken`, `retesting`, `retest_held` or `retest_failed` | from line kind and state | `trendline` snapshot delta |
+| **L3** Trendline | `trendline.<kind>.<state>` | the event whose processing moved a line to `active`, `broken`, `retesting`, `retest_held` or `retest_failed` | neutral (kind and state are recorded; no trading meaning is assigned) | `trendline` snapshot delta |
 | **L4** Signal | `signal.decision.<BUY/SELL/WAIT>`, `signal.issued` | action change, or `ResearchSignal` with `decision_time == t0` (the existing backtest rule) | BUY=long, SELL=short, WAIT=neutral | `signals` |
 | **L5** Entry Readiness | `entry_readiness.<state>` | state change for a BUY/SELL decision (and NOT_READY for completeness) | inherited from `signal_action` | `entry_readiness` |
 | **L6** Experience | `experience.snapshot` | a new Experience fingerprint (the EX1 freeze rule) | `action` | RECORDED only: `experience:v1:snapshots`. In RECOMPUTED mode the pure `freeze()`/`fingerprint()` functions are used. `ExperienceService` is **never** run, because it writes journals. |
@@ -420,6 +420,58 @@ CI: the existing `pytest`, `ruff`, strict `mypy`, `git diff --check`. A bounded 
 | **2C CLI + report** | `scripts/validation_cli.py`, write-once bundle, human-readable report (baseline-adjacent, coverage-first) | Q-V2, Q-V4, Q-V5 answered by Quant for any evidence-grade run |
 | **2D Pattern Engine subjects** | L2c | ADR-024 Phase 2 on `main` |
 | Later (separate ADR) | API or UI read-only views, database index | Q-V6 |
+
+## Phase 2A implementation record (pure offline core)
+
+Package `packages/nexora/validation/`, RECOMPUTED mode only.
+
+| Module | Role |
+|---|---|
+| `models` | Frozen contracts |
+| `inputs` | ADR-014 input boundary |
+| `capture` | Stage A |
+| `causal` | Mandatory acceptance checks |
+| `labeling` | Stage B |
+| `metrics` | Stage C |
+| `sealing` | Record hashes and chain |
+| `runner` | Orchestration and manifest |
+| `artifact` | Write-once bundle |
+| `revision` | Git probe for the future CLI; not used by the core |
+
+Where the implementation narrows or concretizes this ADR:
+
+- **Causal checks run inside every run, not only in tests.** `ValidationSpec.causal_cut_points` is mandatory (at least one, each `< n`).
+  - For each cut `c`, the runner performs prefix replay and three deterministic tail mutations: `reflect_tail`, `flatten_tail`, `shock_tail`. No seeds are needed.
+  - Any mismatch makes the result `INVALID` (`causal_acceptance_failed`), and an invalid result has no outcomes or metrics.
+  - A detected E2 violation gives `INVALID` (`evidence_after_decision_point`).
+- **Direction is taken only from what the producing engine states.**
+  - P&F column direction: X gives `long`, O gives `short`.
+  - Pattern `direction`.
+  - Signal and Entry Readiness action.
+  - Pivots, levels, trendline states and baseline anchors are `neutral`. No trading meaning is assigned to them.
+- **Subjects in 2A:**
+  - `pnf.transition` (structure resolution), `structure.pivot_confirmed`, `structure.level_invalidated`;
+  - `pattern.legacy` (first appearance of `(evidence_code, source_data_reference, algorithm_version, confirmation_time)`);
+  - `trendline.state` (first appearance of each `(line_id, state)`, as observed at end of event);
+  - `signal.decision` (action change), `signal.issued` (decision-time artifact only), `entry_readiness.state` (state, action or blocker change);
+  - `baseline.every_nth_event` (only with an explicit `BaselineRule`; the rule itself is Q-V2).
+- **Entry Readiness** is read by calling the same pure `evaluate_entry_readiness` with the same arguments as `ResearchPipeline._process`. A contract test pins equality with the pipeline output. No private pipeline state is read.
+- **Outcome definitions have no defaults.** `box_unit` and `gap_policy` are required fields.
+  - Implemented window kinds: `time`, `events`.
+  - Implemented reference kind: `anchor_price`.
+  - Box units: `none`, `fixed_price_unit`, or `observed_effective_box_size`, which is the `effective_box_size` of the latest structure-resolution transition at or before `k`. This is a recorded fact, not an Adaptive Box interpretation (Q-V3).
+  - Barriers are in `price` or `boxes`. When no box unit is available, box fields are `null` and box barriers are `not_applicable`.
+  - Adverse P&F reversal is labelled from later captured `pnf.transition` observations, only when that kind was captured.
+- **Metrics:** counts, denominators and nearest-rank distributions over COMPLETE outcomes, plus overlap and concurrency, a baseline link, and a groups-evaluated count. No rates, intervals or tests are emitted (Q-V5).
+- **Qualification (Q-V7):** `REVISION_QUALIFIED` only with a clean 40-hex commit and a VALID result; otherwise `DEVELOPMENT_ONLY`. Citation additionally requires Quant-approved pre-registered definitions.
+- **Bundle:** `manifest.json`, `result.json`, `observations.jsonl`, `outcomes.jsonl`, `metrics.json`, `integrity.json`, and an optional non-hashed `envelope.json`. It is written to a unique `.partial-*` directory and then renamed. It is never overwritten, and partial directories are never deleted.
+- **`time_contract`** is recorded as `dataset_recorded_utc_event_time_and_received_at`, because ADR-014 datasets do not carry the ADR-019/ADR-025 offset provenance.
+- **Deferred beyond 2A:**
+  - RECORDED mode, the journal extractor, L0 parity and L6 Experience subjects;
+  - Pattern Engine subjects (L2c);
+  - `pnf_columns` and `until_barrier` windows, and the `next_event_price` and `signal_entry_zone_mid` references;
+  - breakout-continuation labels, which need Quant semantics;
+  - CLI and report, the production-environment refusal (a 2C CLI concern), and API, UI or database.
 
 ## Consequences
 
