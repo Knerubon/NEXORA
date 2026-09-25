@@ -70,7 +70,16 @@ Required context:
   no unrelated reformatting performed.
 - `D:/NEXORA/NEXORA/.tools/Scripts/uv.exe lock --check` and `.../uv.exe build`:
   PASS (shared executable only; output in this worktree's ignored `dist/`).
-- Recovery/PERF-2 and full regression: pending.
+- Recovery/PERF-2 (Codex session): 100 passed. Broader regression started by Codex
+  was interrupted by a usage limit; its result was not recoverable from logs.
+- Closure (2026-09-25): committed as 11e9e7b (feat) + e2427d9 (docs); merged
+  origin/main fb0ff3b (UI-DECISION-1: 3 frontend/task files only, no overlap) as
+  1123dfd without conflicts; Pattern files byte-identical across the merge.
+- Broader regression after sync (all test files except the already-passed Pattern,
+  P&F and recovery suites; NEXORA_* runtime variables unset):
+  `.venv/Scripts/python -m pytest tests -q -p no:cacheprovider --ignore=<12 files>`
+  — 438 passed, 3 skipped (PostgreSQL/environment-gated), 97.30s.
+- `git diff --check aecefb8 HEAD`: PASS.
 
 ## Runtime and review boundary
 
