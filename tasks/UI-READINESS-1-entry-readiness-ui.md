@@ -1,6 +1,6 @@
 # UI-READINESS-1 — Entry Readiness UI + Display Toggle
 
-status: in_progress
+status: in_review
 translation_needed: false
 base_commit: 816c8d701d9678e2cc78fe46857eb28cf0b19c3f (origin/main, Merge PR #39)
 branch: claude/entry-readiness-ui-v1
@@ -90,11 +90,35 @@ persistence/API for toggle.
 
 ## Cross-lane
 
-DRAW-1 (`claude/chart-manual-drawing-v1`, `D:\NEXORA\NEXORA-MANUAL-DRAWING`) had no commits
-or working-tree changes over 816c8d7 at inspection time and no task file on main. Only shared
-production file expected: `apps/web/app/page.tsx` (this task: `Output` type field + one
-`SignalIntelligence` prop, outside `StructureChart`). `globals.css`: append-only block.
+DRAW-1 (`claude/chart-manual-drawing-v1`, `D:\NEXORA\NEXORA-MANUAL-DRAWING`): no commits over
+816c8d7; uncommitted work appeared during this task in `page.tsx`, `globals.css`,
+`chart-overlays.tsx`, `tests/overlay-harness.mjs` (+ new `manual-drawing*` files).
+
+- `apps/web/app/page.tsx`: DRAW-1 hunks are imports + inside `StructureChart` (base lines
+  10, 94–135); UI-READINESS-1 hunks are the `Output` type (line 25) and the `Home`
+  `<SignalIntelligence>` call (line 321). Disjoint; non-material.
+- `apps/web/app/globals.css`: DRAW-1 appends at EOF; this block is placed after the
+  `.wait-context` rules (line 147) to avoid an EOF append conflict. Distinct selectors.
+- No shared component, state or contract. Entry Readiness does not read chart layers or
+  drawings; `entry-readiness.test.mjs` asserts `StructureChart` never references it.
 
 ## Execution record
 
-(pending)
+Self-review; independent review pending (Rin). Base 816c8d7 (origin/main unchanged at final
+check). Implementation commit 568fda9. Not pushed, no PR, no merge.
+
+- Files: `apps/web/app/entry-readiness.tsx` (new), `apps/web/app/signal-intelligence.tsx`,
+  `apps/web/app/page.tsx`, `apps/web/app/globals.css`, `apps/web/tests/entry-readiness.test.mjs`
+  (new), `apps/web/tests/entry-readiness-harness.mjs` (new),
+  `apps/web/tests/signal-intelligence.test.mjs` and `decision-signal-summary.test.mjs`
+  (resolver shim for `./entry-readiness`; the UI-DECISION-1 full-panel guard now strips only
+  the Entry Readiness block before comparing with its baseline).
+- `node --experimental-strip-types --test tests/entry-readiness.test.mjs` (in `apps/web`):
+  pass 14/14.
+- Signal Intelligence + UI-DECISION-1 tests: pass 26/26. Page/chart/overlay/structure/matrix
+  position tests: pass 27/27.
+- `npm test`: pass 82/82 · `npm run lint`: pass · `npm run typecheck`: pass ·
+  `npm run build`: pass · `git diff --check`: clean.
+- Python/backend: not_run. No Python, API or backend file changed.
+- Not verified in a live browser against a running backend: layout covered by CSS and markup
+  assertions only.
