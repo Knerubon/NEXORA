@@ -1,13 +1,13 @@
 # ADR-031 — Experience Replay Performance Investigation V1 (PERF-2)
 
-Status: **Proposed (draft, Phase 1 investigation only)** — self-review; independent review pending (Rin architecture review)
+Status: **Proposed — Phase 1 approved (Rin), Phase 1B tooling complete; production optimization (Phase 2) not started and blocked on ADR-028.** Phase 1B is self-reviewed; independent review is pending.
 Date: 2026-09-25
 Workstream: PERF-2 (DEV-PERF role) · Branch `claude/experience-replay-performance-v1` · Worktree `D:\NEXORA\NEXORA-EXPERIENCE-PERF` · Base `origin/main` `4f69e9c`
 
 Related (on `main`): [EX1](../../tasks/EX1-experience-engine-v1.md) (Experience V1 contract), [architecture — Experience memory](../architecture.md), [ADR-018](./ADR-018-readiness-corrections.md), [ADR-022](./ADR-022-startup-recovery-checkpoint-v1.md) (checkpoint-assisted recovery).
 In flight, not on `main` (read-only inputs to this ADR): ADR-027 Research Journal Payload V2 (`claude/research-journal-payload-v2`, Decision 5 "Experience V2"), ADR-028 Experience snapshot additive fields (uncommitted in `NEXORA-EXPERIENCE-COMPAT`), ADR-029 Recovery Checkpoint V1 Hardening / PERF-1 (`claude/recovery-checkpoint-v1`), ADR-030 Replay Validation Framework V1 / VALID-1 (`claude/replay-validation-v1`).
 
-This ADR changes **no code, no contract, no formula and no stream**. It records evidence and proposes candidates. Every candidate needs its own acceptance before implementation (Phase 2).
+This ADR changes **no production code, contract, formula or stream**. Phase 1 recorded evidence and proposed candidates. Phase 1B added benchmark tooling only: `scripts/experience_replay_benchmark.py` and its tests (section 16). Every candidate needs its own acceptance before implementation (Phase 2).
 
 ## 1. Problem
 
@@ -118,7 +118,7 @@ Scales: calm N = 500, 1,000, 2,000, 5,000; volatile N = 250, 500, 1,000. The vol
 
 **Not measured.** PostgreSQL: `not_run`, because no isolated PostgreSQL instance was used in Phase 1. The same statement sequence runs there as network round trips; see section 7.4. Lock wait: replay is single-threaded and the journal `RLock` is uncontended. SQLite `BEGIN IMMEDIATE` and `COMMIT` time is reported as its own category. Allocation: not traced with `tracemalloc`. The cProfile call counts in section 6.3 stand in for container-rebuild volume.
 
-The harness (`perf2_profile.py`, `run_matrix.sh`, `summarize.py`) is a Phase 1 scratch artifact. It is **not committed**, because Phase 1 delivers the ADR only. Whether to commit it as `scripts/experience_replay_benchmark.py` is decision Q-P2-4.
+Phase 1 used a scratch harness (`perf2_profile.py`, `run_matrix.sh`, `summarize.py`) that was not committed. Phase 1B moved it into the repository as `scripts/experience_replay_benchmark.py`, which resolves Q-P2-4. The same generator, profiles and attribution method are described in section 16. The numbers in sections 6–7 come from the Phase 1 scratch harness; section 16.5 re-measures them with the committed tool.
 
 ## 6. Performance findings
 
@@ -374,13 +374,89 @@ VALID-1 does not replace the PERF-2 proof obligation. Phase 2 of PERF-2 must add
 | Q-P2-1 | Architect (Rin) | Accept C1 → C2 → C3(a,b) as the Phase 2 scope, sequenced after ADR-028 lands? | Yes. C3(c) and C4 each get a separate review. |
 | Q-P2-2 | Architect + Security | C4: an opt-in `append_idempotent` for Experience, or the `COUNT(*)`-only fix (a) in shared `append`? | Start with (a), which is behavior-identical. Then (b) as opt-in with a Security review. |
 | Q-P2-3 | Architect | Is a PostgreSQL measurement on an isolated, non-PROD instance required before C4 is prioritized? | Yes, if PROD uses PostgreSQL. Its per-append round trips are the unmeasured risk. |
-| Q-P2-4 | Architect | Commit the Phase 1 harness as `scripts/experience_replay_benchmark.py` (evidence only, like PERF-1's)? | Yes, in Phase 2, reusing PERF-1's generator once PERF-1 merges. |
+| Q-P2-4 | Architect | Commit the Phase 1 harness as `scripts/experience_replay_benchmark.py` (evidence only, like PERF-1's)? | **RESOLVED (Rin, Phase 1B):** yes. Committed in Phase 1B (section 16). The generator is duplicated, not imported, because PERF-1's script is not on `main`; see Q-P2-8. |
 | Q-P2-5 | Architect | Owner for C5 (`decode` type-hint cache, `artifacts.py`)? | A small separate fix outside PERF-2. |
 | Q-P2-6 | Architect + Quant | Is Experience V2 (C7 / ADR-027 Decision 5) the intended path to remove the O(N²) term? | Separate ADR. PERF-2 does not decide policy. |
 | Q-P2-7 | Architect | Acceptable Phase 2 target, for example calm N=5,000 full replay ≤ X s? | No target frozen here. Measure after each candidate. |
+| Q-P2-8 | Architect / Integrator | After PERF-1 merges, should both benchmarks share one generator module? The calm profile is currently a byte-identical copy of PERF-1's `synthetic_events` (section 16.3). | Consolidate after both land. No change in Phase 1B, to avoid touching PERF-1. |
 
 ## 15. Consequences
 
 - No behavior, stream, identity, checkpoint or config change in Phase 1.
 - The prior "93–96%" figure is corrected to be **profile-dependent** (80–88% calm, rising with N; 95–97% volatile). The dominant sub-cost differs by profile (serialize/hash on calm data vs. context re-parse on volatile data), so both profiles must be kept in every future measurement.
 - Experience cost affects **live ingest latency** as well as recovery. Live `observe` grows to tens to hundreds of milliseconds per event as history grows.
+
+## 16. Rin Phase 1 decisions and Phase 1B record
+
+### 16.1 Phase 1 decisions (Rin, relayed 2026-09-25)
+
+Rin's decisions reached this workstream as a relayed instruction, not as a written review document. Only what was relayed is recorded here:
+
+- **Phase 1 is APPROVED.**
+- **Phase 1B scope:** move the synthetic profiling harness into the PERF-2 branch as reproducible repository tooling; support deterministic calm and volatile profiles with configurable N; report total replay time and the `ExperienceService.observe` contribution; add tests for deterministic generation and harness safety; update this ADR.
+- **Not in Phase 1B:** C1, C2, C3, C4 and C5 are not implemented. `ExperienceService` production behavior is not modified. `storage.py` and `artifacts.py` are not modified. The PERF-1 and ADR-028 worktrees are not touched. PROD and the legacy 51.8 GB journal are not used.
+- **ADR-028 remains the blocker for production optimization.**
+- Q-P2-4 is resolved (harness committed).
+
+Q-P2-1, 2, 3, 5, 6 and 7 were not part of the relayed decision. They stay **open** in section 14 until Rin's written record is available. This ADR does not infer them.
+
+### 16.2 Harness (`scripts/experience_replay_benchmark.py`)
+
+```text
+.venv/Scripts/python scripts/experience_replay_benchmark.py --workdir <new empty dir> \
+    --cases calm:500 calm:1000 volatile:250 --runs 3 [--warmup K] [--breakdown] \
+    [--seed S] [--reuse] [--output results.json]
+```
+
+- **Cases:** `profile:N`, with any positive N and any mix of profiles.
+- **Build:** each case builds its journal by live `ResearchRuntime.ingest` into `<workdir>/<profile>-n<N>/journal.sqlite`. It records the live `observe` cost, then writes `benchmark-manifest.json`, which holds the harness id, profile, N, seed, the events' SHA-256 and the ordered journal row digest.
+- **Replay:** each run is a fresh `ResearchRuntime(config, journal)` with checkpoints disabled, i.e. a full replay. The harness asserts `mode == "full"` and `replayed == N`. It reports total wall time, the summed `observe` time and its share, per-call `observe` latency (mean, median, p95, max, per-decile means) and the canonical hash of the encoded checkpoint state.
+- **Breakdown:** `--breakdown` adds one attributed replay. It records exclusive time per category (Phase 1 categories A–H plus non-Experience work) and call counts.
+- **Instrumentation:** functions are wrapped in-process with `setattr` and restored in `finally`, including the benchmark-owned connection proxy. No product file is modified. A test asserts that every wrapped attribute is restored.
+- **Nondeterminism check:** the run fails with `nondeterministic_replay_state` if replay state hashes differ between runs, including the breakdown run. It fails with `replay_changed_journal` if any replay changes the journal row digest.
+
+### 16.3 Profiles and determinism
+
+| Profile | `step_tenths` | Seed | First-100-events SHA-256 (pinned in tests) |
+|---|---|---|---|
+| calm | 3 | 20260925 | `aece8bbb…517525fef` |
+| volatile | 20 | 20260925 | `d282d886…bef9798e89` |
+
+Determinism evidence:
+
+1. **Generator:** identical output on repeated calls. It is prefix-stable (`events(N)[:m] == events(m)`), a different seed changes the output, and the golden digests above are pinned in tests.
+2. **PERF-1 comparability:** `synthetic_events("calm", 5000)` equals PERF-1's `recovery_benchmark.synthetic_events(5000)` event for event. This was checked once by reading PERF-1's script without modifying its worktree. No `.pyc` was written there; the existing cache file's timestamp is unchanged.
+3. **Build:** two independent builds produce identical ordered journal digests (test, N=40). Across harnesses: the committed harness's calm builds match the Phase 1 scratch-harness journals, built hours earlier, row for row. N=500: 1,127 rows, `8c9f7d80df3169fc…`. N=1,000: 2,404 rows, `00dad59916f7a819…`. N=2,000: 4,844 rows, `b0a48c8f55c476d0…`. All three are identical.
+4. **Replay:** every case's runs, including the attributed run, produced one identical checkpoint-state hash, and no replay changed the journal (section 16.5).
+
+### 16.4 Safety
+
+The harness refuses to run (`BenchmarkRefused`) when:
+
+- `NEXORA_ENV=production`;
+- the work directory is inside, equal to, or a parent of any `NEXORA_RUNTIME_ROOT`, `NEXORA_JOURNAL_PATH`, `NEXORA_STATE_PATH`, `NEXORA_CHECKPOINT_PATH`, `NEXORA_CACHE_PATH` or `NEXORA_LOG_PATH`;
+- the work directory overlaps the repository;
+- the work directory is a file;
+- the work directory is non-empty without `--reuse`.
+
+With `--reuse`, a journal is opened only when its manifest matches this exact case and the journal's row digest still matches the manifest. A foreign journal without a manifest, or a tampered one, is refused. The harness creates only `SQLiteJournal` instances on paths it built. It never reads a DSN and never constructs `PostgresJournal`. Each test asserts that a refused directory is left untouched.
+
+### 16.5 Benchmark evidence (committed harness)
+
+Harness file SHA-256 `93a815ce…a1a4fd2135` (commit `756341f`). The run's metadata records commit `e75764a`, because the file was committed with identical content after the run started. Environment: same workstation and Python 3.13.3 as Phase 1, SQLite, runs sequential.
+
+**The Phase 1B full benchmark run did not complete.** The session hosting it ended during case `calm:2000`, so no result file was written. The builds for calm N=500, 1,000 and 2,000 completed, with manifests, and supply determinism evidence item 3. Timing evidence for the committed harness is the post-sync recheck in section 17.4, which supersedes this run.
+
+Smoke run of the committed harness before that run: calm N=120 took 0.72 s with `observe` at 76.6%; volatile N=80 took 2.67 s with `observe` at 92.3%. Each case had 2 runs plus a breakdown, and the state hashes were identical within each case.
+
+### 16.6 Tests and validation (Phase 1B)
+
+- `tests/test_experience_replay_benchmark.py`: 8 passed. It covers generator determinism, prefix stability and golden pins; invalid profile and size input; identical independent builds; replay that never changes the journal, with an `observe` share in (0, 1] and restored wrappers; `--reuse` accepting only matching manifests and refusing tampered or foreign journals; and workdir safety (production, runtime paths, repository, non-empty directory, file).
+- Full `pytest` at `756341f`: 385 passed, 3 skipped (PostgreSQL/environment-gated).
+- `ruff check` / `ruff format --check` / strict `mypy` on the two new files: clean.
+- Repository-wide findings that predate this work: `ruff format --check` flags 19 unchanged source and test files plus the ADR-021 code block under the shared venv's ruff 0.16.8, and `mypy` reports missing `psutil` stubs in `apps/api/nexora_api/launch.py` and `tests/test_environment.py`. None of these files is touched by PERF-2.
+
+### 16.7 Status of Phase 2
+
+- **Blocked on ADR-028.** As of 2026-09-25, ADR-028 / EXC1 is still uncommitted in `NEXORA-EXPERIENCE-COMPAT` (no branch commit, not on `origin/main`, which is still `4f69e9c`). It modifies `experience/engine.py`, the file C1–C3 would change.
+- **Unblock condition:** ADR-028 is merged to `main` (or its branch is frozen and approved as the base). PERF-2 then rebases, adds `tests/fixtures/experience_journal_9016004.json` to the equivalence corpus, and re-runs this benchmark as the Phase 2 baseline.
