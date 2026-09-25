@@ -1,18 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import ts from 'typescript';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createElement } from 'react';
+import { appRequire } from './entry-readiness-harness.mjs';
 
-const require = createRequire(import.meta.url);
 const source = readFileSync(new URL('../app/signal-intelligence.tsx', import.meta.url), 'utf8');
 const { outputText } = ts.transpileModule(source, { compilerOptions: {
   target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX,
 } });
 const exports = {};
-new Function('require', 'exports', outputText)(require, exports);
+new Function('require', 'exports', outputText)(appRequire, exports);
 const render = (decision, props = {}) => renderToStaticMarkup(createElement(exports.SignalIntelligence, { decision, ...props }));
 const decision = {
   action: 'WAIT', score: 47, buy_strength: 78, sell_strength: 31, strength_available: true,

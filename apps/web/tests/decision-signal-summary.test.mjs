@@ -2,19 +2,18 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { createRequire } from 'node:module';
 import ts from 'typescript';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createElement } from 'react';
+import { appRequire, withoutEntryReadiness } from './entry-readiness-harness.mjs';
 
 // UI-DECISION-1: Signal Score + P&F explanation under `Decision · Bias` in MatrixSummary.
-const require = createRequire(import.meta.url);
 const load = (source) => {
   const { outputText } = ts.transpileModule(source, { compilerOptions: {
     target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX,
   } });
   const exports = {};
-  new Function('require', 'exports', outputText)(require, exports);
+  new Function('require', 'exports', outputText)(appRequire, exports);
   return exports;
 };
 const source = readFileSync(new URL('../app/signal-intelligence.tsx', import.meta.url), 'utf8');
@@ -142,5 +141,6 @@ test('desktop and mobile share the same MatrixSummary; responsive CSS and full p
   assert.match(css, /@media\(max-width:700px\) \{\s+\.matrix-float \{ position: static;/);
   assert.ok(!css.includes('signal-summary'));
   const full = (module) => renderToStaticMarkup(createElement(module.SignalIntelligence, { decision: decision(), decisionContext: context }));
-  assert.equal(full(current), full(baseline));
+  // UI-READINESS-1 intentionally adds only the Entry Readiness block to the strength panel.
+  assert.equal(withoutEntryReadiness(full(current)), full(baseline));
 });
