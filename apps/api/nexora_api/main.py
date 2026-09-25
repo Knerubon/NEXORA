@@ -418,6 +418,7 @@ def create_app(
 
     def readiness_payload() -> dict[str, Any]:
         payload = state_payload()
+        engine: ResearchRuntime | None = app.state.runtime
         reasons = []
         if payload["research"]["event_count"] == 0:
             reasons.append("research_not_initialized")
@@ -437,6 +438,8 @@ def create_app(
             "scope": "local_observation",
             "remote_access": "disabled",
             "production_hardening": "unverified",
+            # Informational only (ADR-029 H5): never adds a reason or changes status.
+            "recovery": engine.recovery_status() if engine is not None else None,
         }
 
     @app.get("/operations/readiness")
