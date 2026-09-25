@@ -8,6 +8,7 @@ import { MatrixFloat } from "./matrix-float";
 import { latestQuote, type QuoteSnapshot } from "./live-quote";
 import { ChartOverlays, LayerControls, OverlayPopup, useChartOverlays } from "./chart-overlays";
 import type { OverlayLayers, TrendlineSnapshot } from "./overlay-model";
+import { DrawingControls, DrawingLayer, DrawingPopup, useManualDrawings } from "./manual-drawing";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -93,6 +94,9 @@ function StructureChart({ output, liveQuote, panelProps, initialLayers }: { pane
   const scale = zoom / 100;
   // Visual layers render existing backend evidence only (chart-overlays.tsx).
   const overlays = useChartOverlays(output, initialLayers);
+  // Manual drawings are the viewer's own annotations (manual-drawing.tsx): browser-only, never evidence.
+  const drawings = useManualDrawings(liveQuote?.symbol ?? output.event?.symbol ?? null);
+  const visibleColumnIds = columns.map((c) => c.column_id);
   function latestPrice() {
     const viewport = scrollRef.current;
     if (!viewport) return;
@@ -102,10 +106,11 @@ function StructureChart({ output, liveQuote, panelProps, initialLayers }: { pane
       behavior: "smooth",
     });
   }
-  return <div className={`pnf-workspace${focused ? " is-focused" : ""}`} onKeyDown={(event) => { if (event.key === "Escape") setFocused(false); }}>
+  return <div className={`pnf-workspace${focused ? " is-focused" : ""}`} onKeyDown={(event) => { if (event.key !== "Escape") return; if (drawings.tool !== "none") drawings.cancel(); else setFocused(false); }}>
     <div className="chart-toolbar">
       <div className="chart-title"><strong>{symbol}</strong><span>Point &amp; Figure · box {transitions.length ? safeStep : "—"}</span></div>
       <LayerControls layers={overlays.layers} onToggle={overlays.toggle} />
+      <DrawingControls drawings={drawings} canDraw={columns.length > 0} />
       <div className="chart-controls" role="group" aria-label="Chart controls">
         <button aria-label="Zoom out" disabled={zoom <= 60} onClick={() => setZoom((value) => value - 20)}>−</button>
         <output aria-label="Chart zoom">{zoom}%</output>
@@ -115,7 +120,7 @@ function StructureChart({ output, liveQuote, panelProps, initialLayers }: { pane
       </div>
     </div>
     <div className="chart-body">
-    <div ref={scrollRef} className="pnf-scroll" tabIndex={0} aria-label="Scrollable point and figure chart" onClick={overlays.close}>
+    <div ref={scrollRef} className="pnf-scroll" tabIndex={0} aria-label="Scrollable point and figure chart" onClick={() => { overlays.close(); drawings.close(); }}>
       <svg width={width * scale} height={(height + 52) * scale} viewBox={`0 0 ${width} ${height + 52}`} role="img" aria-label="Point and figure: green X rising boxes, red O falling boxes">
         <defs><pattern id="pnf-grid" x="75" y="26" width="30" height="26" patternUnits="userSpaceOnUse"><path d="M 30 0 L 0 0 0 26" fill="none" stroke="#dfe3e7" strokeWidth="1" /></pattern></defs>
         <rect width="100%" height="100%" fill="white" /><rect x="75" y="13" width={width-75} height={height+26} fill="url(#pnf-grid)" />
@@ -123,11 +128,13 @@ function StructureChart({ output, liveQuote, panelProps, initialLayers }: { pane
         {Array.from({length: rows+1},(_,i) => {const price = top-i*rowStep; return <g key={i}><line x1="0" x2={width} y1={y(price)} y2={y(price)} stroke="#e5e7eb" />{Array.from({ length: Math.ceil(width / 240) }, (_, label) => <text key={label} x={8 + label * 240} y={y(price)+4} fontSize="11" fill="#707780">{price.toFixed(2)}</text>)}</g>;})}
         {cells.map((c,i) => {const x = 90 + columns.findIndex((col) => col.column_id === c.column)*30; return <g key={i} data-pnf-glyph="" data-price={c.price}><title>{`Column ${c.column} · ${c.direction} · ${c.price.toFixed(2)}`}</title>{c.direction === "X" ? <path d={`M ${x-5} ${glyphY(c.price)-5} l 10 10 m 0 -10 l -10 10`} stroke="#09a77a" strokeWidth="2" fill="none" /> : <circle cx={x} cy={glyphY(c.price)} r="5" stroke="#f34b55" strokeWidth="2" fill="none" />}</g>;})}
         {prices.length > 0 && <g><line x1="75" x2={width} y1={y(latest)} y2={y(latest)} stroke="#64748b" strokeDasharray="4 5" /><title>{liveQuote ? `Latest live quote: ${latest.toFixed(2)}` : `Latest observed price: ${latest}`}</title></g>}
-        <ChartOverlays model={overlays.model} layers={overlays.layers} visibleColumnIds={columns.map((c) => c.column_id)} y={y} width={width} height={height} selectedKey={overlays.inspection?.key} onInspect={overlays.inspect} />
+        <ChartOverlays model={overlays.model} layers={overlays.layers} visibleColumnIds={visibleColumnIds} y={y} width={width} height={height} selectedKey={overlays.inspection?.key} onInspect={(inspection) => { drawings.close(); overlays.inspect(inspection); }} />
+        <DrawingLayer drawings={drawings} grid={{ top, rowStep, visibleColumnIds }} y={y} width={width} height={height} onSelect={overlays.close} />
       </svg>
     </div>
     <MatrixFloat {...panelProps} decision={output.signals?.decision} matrix={output.matrix} onDetails={() => setFocused(false)} />
     <OverlayPopup model={overlays.model} layers={overlays.layers} inspection={overlays.inspection} onClose={overlays.close} />
+    <DrawingPopup drawings={drawings} />
     </div>
     <div className="chart-caption">{liveQuote ? `Box ${safeStep} | ${columns.length} columns | ${cells.length} confirmed boxes | Latest live quote ${latest.toFixed(2)} · ${liveQuote.bid} / ${liveQuote.ask}` : cells.length ? `${columns.length} columns · ${cells.length} confirmed boxes · latest box ${safeStep}` : "Waiting for the first confirmed box — no sample data"} · {output.config_version ?? "Unconfigured"}</div>
   </div>;
