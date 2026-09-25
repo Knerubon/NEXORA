@@ -91,13 +91,29 @@ export function MatrixResolutions({ matrix }: Pick<PanelProps, "matrix">) {
         </div>);
 }
 
-export function MatrixSummary({ decision: d, decisionContext: c, symbol, matrix, matrixStatus, connectionError, researchMode }: PanelProps) {
+// Presentation-only toggle (UI-DECISION-1). No trading calculation reads it.
+export const DECISION_SIGNAL_SUMMARY_ENABLED = true;
+
+// Renders backend fields verbatim: SignalDecision.score and the P&F positive-evidence
+// reason. Never computes a score or infers an explanation from raw P&F state.
+function SignalSummary({ decision: d }: Pick<PanelProps, "decision">) {
+  const valid = d?.strength_available === true && Number.isInteger(d.score) && d.score >= 0 && d.score <= 100;
+  const pnf = d?.positive_evidence?.find(e => e.component === "pnf");
+  return <>
+    <p className="signal-summary-score">Signal Score <strong>{valid ? `${d.score}/100` : "Unavailable"}</strong></p>
+    {pnf?.reason && <p className="signal-summary-reason">{pnf.reason}</p>}
+  </>;
+}
+
+export function MatrixSummary({ decision: d, decisionContext: c, symbol, matrix, matrixStatus, connectionError, researchMode,
+  signalSummaryEnabled = DECISION_SIGNAL_SUMMARY_ENABLED }: PanelProps & { signalSummaryEnabled?: boolean }) {
   return <div className="matrix-summary">
     <header><strong>{symbol ?? "Symbol unavailable"}</strong><span>{connectionError ? "Snapshot only" : (matrixStatus ?? "unavailable").toUpperCase()}</span></header>
     {(researchMode !== "live_observation" || connectionError) && <small>Recorded / last received calculation</small>}
     <MatrixResolutions matrix={matrix} />
     <div className="strength-pair"><Strength side="BUY" value={d?.buy_strength} available={d?.strength_available} /><Strength side="SELL" value={d?.sell_strength} available={d?.strength_available} /></div>
     <p>Decision <strong className={`decision-${d?.action.toLowerCase() ?? "unavailable"}`}>{d?.action ?? "Unavailable"}</strong> · Bias: <strong className={biasClass(c?.bias)}>{biasLabels[c?.bias ?? "UNAVAILABLE"]}</strong></p>
+    {signalSummaryEnabled && <SignalSummary decision={d} />}
     <small>Independent evidence strength · not win probability</small>
   </div>;
 }
