@@ -329,9 +329,7 @@ Any failure means no adoption and a deterministic full journal replay (ADR-022 D
 - Checkpoint restore equals the cold full-replay result.
 - Both hold for engine DISABLED, SHADOW, and SHADOW with individual units DISABLED.
 
-**13h. Boundary.** This ADR defines requirements only. The section name, encoder/restorer integration in `checkpoint_state.py`, the `STATE_VERSION`/header `schema_version` bump, the validation ordering and the `feature_config_hash` mismatch reason code are **ARCHITECT / DEV-PERF COORDINATION REQUIRED** (ADR-023 Decision 11d). Track B-owned files are not changed by this ADR.
-
-## Consequences
+**13h. Boundary.** The original proposal defined requirements only and reserved checkpoint integration for ARCHITECT / DEV-PERF coordination. After PERF-2 merged, the user authorized Lane C to resolve and implement the remaining Phase 2 integration against accepted architecture. The concrete contract is recorded in §13i and ADR-023 §11e; it preserves PERF-2's derived-state contract.
 
 **13i. Concrete Phase 2 integration (2026-09-25).** ADR-023 §11e resolves the
 checkpoint integration points against merged PERF-2 (`6cdff36`):
@@ -355,6 +353,7 @@ checkpoint integration points against merged PERF-2 (`6cdff36`):
   resolved config to runtime. Unset defaults to DISABLED; invalid/unreadable config or
   ACTIVE fails startup. The existing runtime output/API publishes the additive block.
 
+## Consequences
 
 - One pattern-evidence owner, with a safe path to it. V1 changes no decision, Experience identity, chart, backtest result or stream id.
 - Journal rows grow by one bounded block per event.

@@ -244,7 +244,7 @@ Lifecycle-controlled features follow ADR-022's explicit, versioned JSON checkpoi
 
 **11c. Fail-closed restore.** Any missing, unknown, ill-typed or incompatible feature section, or feature-state schema version, is `state_invalid` under ADR-022 and falls back to full replay. A restored feature is adopted only together with every other component, after every check passes (ADR-022: no partial adoption). Restored feature state must be cross-checked against the components it derives from (for example Structure's transition sequence), in addition to its own invariants.
 
-**11d. ARCHITECT / DEV-PERF COORDINATION REQUIRED.** `checkpoint_state.py`, `checkpoint.py` and `runtime.py` are owned by DEV-PERF (ADR-022). Track D states requirements only and does not change them. The following are decided jointly in Phase 2:
+**11d. Checkpoint coordination points (resolved for Phase 2 in 11e).** `checkpoint_state.py`, `checkpoint.py` and `runtime.py` originated in DEV-PERF (ADR-022). The initial proposal stated requirements only. The authorized Phase 2 integration after PERF-2 merged resolves these points in 11e:
 
 - where `feature_config_hash` lives (checkpoint header field or state field), and its position in the ADR-022 validation order (required: before adoption; preferred: before state decode);
 - the reason code for a mismatch (proposed: `feature_config_mismatch`);
