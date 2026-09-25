@@ -1,10 +1,10 @@
 ---
 task: VALID1
-status: in_review
-depends_on: ["ADR-029 acceptance (Rin); Quant Q-V2–Q-V5 before any evidence-grade run", "ADR-024 Phase 2 on main for Pattern Engine subjects (L2c)", "ADR-027 coordination for RECORDED mode (Q-V9)"]
+status: in_progress
+depends_on: ["ADR-030 architecture approved (Rin 2026-09-25); Quant Q-V2–Q-V5 before any evidence-grade run", "ADR-024 Phase 2 on main for Pattern Engine subjects (L2c)", "ADR-027 coordination for RECORDED mode (Q-V9)"]
 agents: []
 skills: []
-docs: ["docs/requirements.md", "docs/architecture.md", "docs/decisions/ADR-029-replay-validation-framework-v1.md"]
+docs: ["docs/requirements.md", "docs/architecture.md", "docs/decisions/ADR-030-replay-validation-framework-v1.md"]
 translation_needed: false
 ---
 
@@ -29,9 +29,9 @@ This task is a user-authorized Phase 1 only: repository inspection, replay/valid
 
 ## Phase 1 result
 
-Draft [ADR-029](../docs/decisions/ADR-029-replay-validation-framework-v1.md).
+Draft [ADR-030](../docs/decisions/ADR-030-replay-validation-framework-v1.md).
 
-- ADR-028 is the highest number already in use, so this ADR takes 029.
+- Drafted as ADR-029 (`ba5c388`), then renamed to ADR-030 on Rin's instruction because PERF-1 reserves ADR-029.
 - Proposed Phase 2 split:
   - 2A: pure core with RECOMPUTED mode and the G1–G10 harness;
   - 2B: journal-backup extraction and RECORDED mode;
@@ -42,3 +42,4 @@ Draft [ADR-029](../docs/decisions/ADR-029-replay-validation-framework-v1.md).
 ## Execution record
 
 - 2026-09-25 Phase 1: self-review; independent review pending. Docs-only change; application tests not run (no code changed).
+- 2026-09-25 Rin architecture review: APPROVED WITH REQUIRED DOC FIXES. The ADR was renamed 029 → 030 and Q-V1/Q-V6/Q-V7/Q-V8/Q-V10 were recorded. Phase 2A (pure offline core) is authorized.

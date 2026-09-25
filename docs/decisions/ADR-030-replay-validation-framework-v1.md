@@ -1,6 +1,6 @@
-# ADR-029 — Replay Validation Framework V1 (VALID-1)
+# ADR-030 — Replay Validation Framework V1 (VALID-1)
 
-Status: **draft — NOT accepted**. This is the Phase 1 architecture proposal (inspection, design, ADR only). No production code exists. It awaits Rin's architecture review. Quant decisions Q-V2–Q-V5 are open, and no default for any of them is frozen here.
+Status: **architecture approved with required doc fixes** (Rin architecture review 2026-09-25; the fixes are applied in revision 2). Phase 2A (pure offline core) is authorized. Quant decisions Q-V2–Q-V5 remain open, and no default for any of them is frozen here.
 Date: 2026-09-25
 Workstream: VALID-1, `claude/replay-validation-v1`, worktree `D:\NEXORA\NEXORA-REPLAY-VALIDATION`, acting as ARCHITECT for the proposal
 Base: `origin/main` `4f69e9c38803796ccfc8afc01480deffd8499c38`
@@ -14,7 +14,7 @@ These ADRs are not on `main` and are referenced by name only:
 - ADR-027 (Research Journal Payload V2, draft) on `claude/research-journal-payload-v2`.
 - ADR-028 (Experience snapshot additive fields, proposed) in the `NEXORA-EXPERIENCE-COMPAT` worktree.
 
-ADR-028 is the highest number in use across branches and worktrees, so this ADR takes 029.
+ADR-029 is reserved by the concurrently active PERF-1 Recovery Checkpoint Hardening workstream, so this ADR is numbered 030. Revision 1 (`ba5c388`) was drafted as ADR-029 and renamed on Rin's instruction.
 
 ## Objective
 
@@ -88,6 +88,16 @@ All engines run in `ResearchPipeline._process` (`packages/nexora/research/pipeli
 | Signal outcome | Backtest trade PnL | Trade-shaped only (one entry/exit rule), and it collapses to win rate |
 | Leak protection | Engine-level cutoffs and prefix invariance, component by component | No **framework-level** guarantee, no automatic truncation or future-injection test applied to whatever is evaluated |
 | Provenance | Dataset, config and assumption hashes (ADR-014); `code_fingerprint` (ADR-022) | No single run manifest binding dataset, code, config, outcome definition and generation mode |
+
+## Rin architecture review (2026-09-25) — frozen decisions
+
+- Architecture approved. Q-V1, Q-V6, Q-V7, Q-V8 and Q-V10 are resolved (see *Open decisions*).
+- **Mandatory causal acceptance properties.** These are acceptance requirements, not optional test ideas. Failure of either one invalidates the replay result.
+  1. **Prefix invariance.** For a cutoff event `c`, `replay(full_dataset)[≤c]` equals `replay(dataset_cut_at_c)` for every decision-time observation through `c` (G3).
+  2. **Future mutation invariance.** Changing events strictly after `c` does not change any captured observation at or before `c` (G4).
+- Decision-time evidence uses confirmation time where applicable, never future knowledge of an underlying structure (E3). Outcome information never enters decision-time engine input (G2).
+- **Phase 2A scope:** the pure offline core in RECOMPUTED mode, as listed under *Implementation phases*. Not in 2A: the legacy journal extractor, Pattern Engine integration, database, API, UI, M30 Bias evaluation, optimization, production-rule changes, AI scoring, win probability, `ExperienceService` changes and production journal changes. RECORDED mode keeps its contract in this ADR, but its integration with historical journal rows waits for its dependencies.
+- Unresolved Quant items (Q-V2–Q-V5) stay explicit and configurable, or fail closed. Adaptive Box semantics are not guessed.
 
 ## Decision 1 — Placement and boundaries
 
@@ -405,7 +415,7 @@ CI: the existing `pytest`, `ruff`, strict `mypy`, `git diff --check`. A bounded 
 
 | Phase | Deliverable | Gate |
 |---|---|---|
-| **2A Pure core** | `validation/{models,driver,capture,labeling,metrics,manifest}.py`; RECOMPUTED mode on ADR-014 fixture datasets; L1, L2a, L2b, L3, L4, L5 capturers; G1–G10 harness; outcome kernel; full Decision 12 test set except RECORDED | ADR-029 accepted by Architect; Q-V1 answered. Quant items may stay open: definitions are test fixtures, **not** defaults. |
+| **2A Pure core** | `validation/{models,driver,capture,labeling,metrics,manifest}.py`; RECOMPUTED mode on ADR-014 fixture datasets; L1, L2a, L2b, L3, L4, L5 capturers; G1–G10 harness; outcome kernel; full Decision 12 test set except RECORDED | Authorized by Rin 2026-09-25 (Q-V1 approved). Quant items may stay open: definitions are test fixtures, **not** defaults. |
 | **2B Journal extraction + RECORDED** | Offline extractor from a journal **backup** to segmented datasets + sidecar; RECORDED mode; L0 parity; L6 | ADR-027 coordination settled; Security review (reads journal copies) |
 | **2C CLI + report** | `scripts/validation_cli.py`, write-once bundle, human-readable report (baseline-adjacent, coverage-first) | Q-V2, Q-V4, Q-V5 answered by Quant for any evidence-grade run |
 | **2D Pattern Engine subjects** | L2c | ADR-024 Phase 2 on `main` |
@@ -448,13 +458,13 @@ CI: the existing `pytest`, `ruff`, strict `mypy`, `git diff --check`. A bounded 
 
 | Id | Owner | Question |
 |---|---|---|
-| **Q-V1** | Architect (Rin) | Accept the Decision 1 placement, the two-mode model (Decision 3b) and the file-bundle storage (Decision 11) for Phase 2A? Confirm the ADR number 029. |
+| **Q-V1** | Architect (Rin) | **RESOLVED — approved.** Offline package `packages/nexora/validation/`; Capture, Labeling and Metrics stay separated; RECOMPUTED and RECORDED are distinct and never pooled; V1 results are file-based immutable artifacts. ADR number is 030. |
 | **Q-V2** | Quant | The first pre-registered outcome definition set (window kinds and lengths, reference kind, barrier distances) and the **baseline anchor rule** (for example every k-th event, or every P&F transition). No value is frozen here. |
 | **Q-V3** | Quant | Box unit policy under Adaptive Box: `t0_effective_box_size` vs a fixed price unit, and which resolution's box is used. |
 | **Q-V4** | Quant | Gap policy default (`label_censored` vs `measure_through`) and the maximum tolerated `max_sample_gap_s` inside a window. |
 | **Q-V5** | Quant | Statistical reporting: interval method for frequencies, minimum `n` before rates are shown, and whether any hypothesis test is shown at all. |
-| **Q-V6** | Architect | A future persistent index (PostgreSQL table or API) for results: needed, and in which phase? |
-| **Q-V7** | Architect + human | May `EXPLORATORY` (dirty or unknown commit) runs ever be cited? This proposal says no. |
-| **Q-V8** | Architect | Keep separate outcome kernels (VALID-1 + Experience, pinned by a parity test) or later extract a shared pure kernel, which would touch EX1-owned code? |
+| **Q-V6** | Architect | **RESOLVED — deferred.** No database or API index in V1. |
+| **Q-V7** | Architect | **RESOLVED.** Runs from a dirty or uncommitted source tree may be used for development and debugging, but never qualify as official or citable evidence. Official evidence records an identifiable committed revision and reproducibility metadata. |
+| **Q-V8** | Architect | **RESOLVED.** Validation outcome computation stays independent in V1. `ExperienceService` is not modified. Parity/contract tests cover the overlapping Experience measurement semantics. |
 | **Q-V9** | Architect + DEV-PERF (Journal V2 owner) | Which recorded-output fields does ADR-027 guarantee to keep, so RECORDED mode stays possible for new rows? |
-| **Q-V10** | Architect | Ownership of the journal→dataset extractor: VALID-1 (proposed) or the Backtest/Data owner. |
+| **Q-V10** | Architect | **RESOLVED.** VALID-1 owns the journal-extractor **input contract** only. The legacy journal extraction implementation is not part of Phase 2A. The 51.8 GB legacy journal is never opened or modified in place. |
