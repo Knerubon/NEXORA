@@ -43,3 +43,11 @@ Not authorized: H1, H4, H6, H7, H8. Do not modify `packages/nexora/experience/**
   - ruff and mypy pass. The format check matches pristine main. `git diff --check` is clean.
 - Benchmark re-run (N ≤ 2,000): deterministic outputs are identical to Phase 2A. Wall time was higher because of machine load that was not controlled.
 - Status: in_review, ready for PR review. Nothing pushed or merged.
+
+### Architecture closure (Rin, recorded 2026-09-25 18:06 +07; not backdated)
+- Phase 2A scope accepted: H2 graceful stop, H3 age-trigger infrastructure, H5 informational readiness recovery facts, and the synthetic benchmark with its evidence. ADR-029 as a whole stays draft. Details in [ADR-029 §20](../docs/decisions/ADR-029-recovery-checkpoint-v1-hardening.md).
+- D2 resolved for Phase 2A: the per-run stop-token mechanism is accepted under its invariants (ownership checks first, per-run token, stale token cannot stop a newer run, bounded wait, terminate/kill fallback, no network stop surface, WebSocket/trust unchanged). It must not be broadened.
+- D3 deferred as a configuration/product decision, not a merge blocker: the age trigger stays disabled by default, no T is authorized, and idle checkpointing stays deferred.
+- Still deferred: H1 (its future review must include VALID-1 `run_id` identity), H4, H6, H7, H8, Experience optimization, the idle timer, and any PROD configuration.
+- Clarification: the integration record's machine-load explanation for the slower wall-clock re-run is a possible explanation, not a proven cause.
+- Status: in_review, PR prepared for review. Merge requires a human.

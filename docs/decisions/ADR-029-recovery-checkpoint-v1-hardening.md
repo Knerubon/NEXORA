@@ -1,6 +1,6 @@
 # ADR-029 — PERF-1 Recovery Snapshot / Checkpoint V1: gap analysis and hardening
 
-Status: **draft**. Direction approved with changes by Rin on 2026-09-25, and Phase 2A (§19) authorized. The ADR as a whole is **not accepted**.
+Status: **draft**. Direction approved with changes by Rin on 2026-09-25, and Phase 2A (§19) authorized. The ADR as a whole is **not accepted**. Addendum 2026-09-25 18:06 +07: the Phase 2A scope (H2, H3 infrastructure, H5, benchmark) was accepted by Rin (§20); the ADR stays draft.
 Date: 2026-09-25
 Role: DEV-PERF. PERF-1 owns Recovery Checkpoint Hardening (Rin D9 decision). Self-review; independent review pending.
 Base: `origin/main` `4f69e9c` (PR #32 merged)
@@ -285,8 +285,8 @@ No performance target is proposed until a fresh baseline exists.
 | Id | Decision | Owner | Recommendation |
 |---|---|---|---|
 | D1 | Scoped compatibility key (H1) vs. keep the whole-package fingerprint | Rin (Architect) | Scoped, with a computed import-closure test; the fallback is to keep it whole |
-| D2 | Graceful-stop mechanism on Windows (console signal vs. loopback route) | Rin + Security | Console signal to its own process group; no new HTTP surface |
-| D3 | Time/idle checkpoint trigger `T` | Rin, after §13 measurements | No value until measured |
+| D2 | Graceful-stop mechanism on Windows (console signal vs. loopback route) | Rin + Security | Console signal to its own process group; no new HTTP surface. **Resolved for Phase 2A** (§20): per-run stop token accepted |
+| D3 | Time/idle checkpoint trigger `T` | Rin, after §13 measurements | No value until measured. **Deferred** (§20): infrastructure accepted, disabled by default, no T authorized |
 | D4 | Postgres anchors in PERF-1 or a separate task | Rin | Include; small and additive |
 | D5 | Deferred skipped-row verification (H6) default | Rin + Security | Implement, default off |
 | D6 | Offline pre-build procedure for PROD cutover (H7) | Rin + human (PROD) | Design and test on synthetic data only; any PROD use needs a separate GO |
@@ -385,3 +385,44 @@ Evidence: [PERF1 benchmark](../../tasks/evidence/PERF1-recovery-benchmark.md) (c
 - A fingerprint mismatch costs the same as a full replay.
 - Every scenario reproduced the full-replay state hash and changed no journal rows.
 - The Experience share is below the earlier 93–96% measurements (different data shape), but it still dominates and grows with history. Experience remains outside PERF-1 scope.
+
+## 20. Phase 2A architecture acceptance (Rin, recorded 2026-09-25 18:06 +07)
+
+Rin accepted this after reviewing the integration handoff at `92315b8` (integration base `f5bbdfa`; integration assessment `READY_FOR_PR_REVIEW`). Acceptance takes effect from this record; it is not backdated. §19 and the evidence files remain as originally written.
+
+**Accepted Phase 2A scope:**
+- **H2:** graceful stop before hard termination.
+- **H3:** age-trigger infrastructure for checkpoint scheduling.
+- **H5:** informational recovery facts in `/operations/readiness`.
+- **Benchmark:** the synthetic recovery benchmark and its evidence ([Phase 2A](../../tasks/evidence/PERF1-recovery-benchmark.md), [integration](../../tasks/evidence/PERF1-integration-sync-f5bbdfa.md)).
+
+**The ADR as a whole stays draft.** H1, H4, H6, H7, H8 and later hardening are outside this acceptance.
+
+**D2, resolved for Phase 2A.** The per-run stop-token mechanism is accepted as the Phase 2A architecture and security boundary, under these invariants:
+
+1. Ownership checks (identity, create time, worktree cwd, command line) run before any stop request is written.
+2. The token is per run.
+3. A stale token cannot stop a newer run.
+4. The graceful wait is bounded.
+5. The terminate/kill fallback stays available.
+6. No network-accessible stop surface is added.
+7. WebSocket and trust behavior is unchanged.
+
+The mechanism must not be broadened without a new decision.
+
+**D3, deferred.** This is a configuration/product decision, not a merge blocker:
+- the age-trigger infrastructure is accepted but stays **disabled by default**;
+- no default or production value of T is authorized;
+- idle checkpointing without incoming events stays deferred.
+
+**Still deferred (not implemented):**
+- H1 fingerprint narrowing: needs a separate correctness review. Changing `code_fingerprint()` would also change VALID-1 (ADR-030) run-manifest and `run_id` identity, so that review must include VALID-1.
+- H4 PostgreSQL anchors: to be coordinated with ADR-027.
+- H6 skipped-row verification.
+- H7 offline pre-build: blocked by the PROD procedure and by EXC1.
+- H8 checkpoint write outside the lock: measurement-gated.
+- `ExperienceService` optimization: needs a separate approved scope.
+- The idle timer.
+- Any new PROD configuration.
+
+**Evidence wording.** The integration record gives uncontrolled machine load as the explanation for the higher wall-clock medians of the post-integration benchmark re-run. That is a **possible explanation, not a proven cause**: PROD and other workloads were active, and load was not controlled. The deterministic results and state parity are unaffected.
