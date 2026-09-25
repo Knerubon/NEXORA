@@ -45,7 +45,7 @@ export function LayerControls({ layers, onToggle }: { layers: OverlayLayers; onT
   </div>;
 }
 
-function place(event: MouseEvent<Element> | KeyboardEvent<Element>, key: string): Inspection {
+export function place(event: MouseEvent<Element> | KeyboardEvent<Element>, key: string): Inspection {
   const target = event.currentTarget as Element;
   const body = target.closest(".chart-body")?.getBoundingClientRect();
   const own = target.getBoundingClientRect();
