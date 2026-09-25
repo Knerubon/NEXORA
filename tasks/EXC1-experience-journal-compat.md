@@ -2,7 +2,7 @@
 
 Status: in_review
 Role: developer (Experience journal compatibility owner)
-Requirements: [requirements](../docs/requirements.md); Architecture: [architecture](../docs/architecture.md), [EX1](EX1-experience-engine-v1.md), [ADR-020](../docs/decisions/ADR-020-pnf-trendline-v1.md), [ADR-021](../docs/decisions/ADR-021-entry-readiness-v1.md), [ADR-022](../docs/decisions/ADR-022-startup-recovery-checkpoint-v1.md), proposed [ADR-028](../docs/decisions/ADR-028-experience-snapshot-additive-fields.md)
+Requirements: [requirements](../docs/requirements.md); Architecture: [architecture](../docs/architecture.md), [EX1](EX1-experience-engine-v1.md), [ADR-020](../docs/decisions/ADR-020-pnf-trendline-v1.md), [ADR-021](../docs/decisions/ADR-021-entry-readiness-v1.md), [ADR-022](../docs/decisions/ADR-022-startup-recovery-checkpoint-v1.md), accepted [ADR-028](../docs/decisions/ADR-028-experience-snapshot-additive-fields.md)
 
 ## Goal
 
@@ -53,3 +53,16 @@ Resolve PROD migration blocker B1. A journal written by 9016004 must recover und
   | `git diff --check` | clean |
 
 - **Operational note:** the `engine.py` change alters `code_fingerprint()`, so every existing checkpoint is rejected once and recovery falls back to a full replay (ADR-022 by design). Mixed old/new journals converge exactly between cold replay and checkpoint + delta (C12).
+
+### Governance closure (2026-09-25 19:51 +07:00)
+
+This is the actual sequence; nothing is backdated:
+
+1. The implementation (`engine.py` change, golden fixture, C1–C12 tests) existed before any formal architecture acceptance. It was first held as intent-to-add changes at `4f69e9c`.
+2. It was inspected against ADR-028 on resume, including the history check that each field entered `freeze()` and the pipeline output in the same commit.
+3. **Negative control:** without the fix (main's `engine.py`), 6 of 15 compatibility tests fail.
+4. **With the fix:** 15 of 15 pass, and the suites recorded above pass at `ab97e62`.
+5. Rin then reviewed the completion handoff (`ab97e62` on `f2d51ad`) and **accepted ADR-028**, including its deployment consequences: no reverse compatibility with `9016004` (rollback needs the preserved pre-cutover store), and one intentional full replay after deployment because of the checkpoint fingerprint change, which must be scheduled.
+6. The acceptance is prospective, from 2026-09-25 19:51 +07:00.
+
+The governance-closure commit changes only ADR-028 and this task. Production code and tests are unchanged. Status moves from `in_review` to PR review; merge requires explicit human approval. **PERF-2 C1/C2/C3 must not start until the EXC1 PR is merged.**

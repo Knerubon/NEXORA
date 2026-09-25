@@ -1,6 +1,6 @@
 # ADR-028 — Experience snapshot additive context fields (backward compatibility)
 
-Status: proposed (Rin review pending)
+Status: **accepted** (Rin, 2026-09-25 19:51 +07:00, for EXC1 — Experience Journal Compatibility V1). Proposed earlier the same day; see *Acceptance* for the sequence.
 Date: 2026-09-25
 Related: [EX1](../../tasks/EX1-experience-engine-v1.md) (Experience V1 contract), [ADR-020](./ADR-020-pnf-trendline-v1.md) Decision 13, [ADR-021](./ADR-021-entry-readiness-v1.md) Decision 12, [ADR-022](./ADR-022-startup-recovery-checkpoint-v1.md)
 Task: [EXC1](../../tasks/EXC1-experience-journal-compat.md)
@@ -42,3 +42,23 @@ Fields that were part of the original V1 context (`matrix`, `structure`, `regime
 | C (generic). Omit every null field | Would change V1 snapshots whose recorded `matrix`/`structure`/`regime` was null. |
 | D. Normalize or strip nulls before hashing | Weakens identity checks for every stream and treats different content as equal. |
 | E. Skip `save()` when a snapshot already exists | Needs a database lookup per record, and hides genuine historical conflicts. |
+
+## Acceptance (2026-09-25 19:51 +07:00)
+
+Rin accepted this ADR for EXC1 (Experience Journal Compatibility V1) after reviewing the EXC1 completion handoff at `ab97e62`, based on `f2d51ad`. The acceptance is **prospective**: it is recorded now and is not backdated. The implementation existed before the acceptance; the sequence is recorded in the [EXC1 task](../../tasks/EXC1-experience-journal-compat.md).
+
+**Accepted architecture:**
+
+- Compatibility is decided by field **presence**, not by field value.
+- Additive compatibility applies only to `trendline` and `entry_readiness` (`ADDITIVE_OUTPUT_CONTEXT`).
+- Those fields are frozen into the Experience context only when the recorded output contains them. A recorded `null` stays `null`.
+- The original V1 fields keep their existing behavior.
+- Journal history is never rewritten.
+- Journal identity and conflict detection stay enabled and unchanged.
+- `experience_id`, `fingerprint()` and policy semantics are unchanged.
+- Trading and decision semantics are unchanged.
+
+**Accepted deployment consequences:**
+
+- Reverse compatibility with writer `9016004` is **not** guaranteed. Rollback requires the pre-cutover store preserved as the [migration checklist](../environment-migration-checklist.md) §6 describes.
+- Deploying this code change alters the checkpoint code fingerprint (ADR-022), so every existing checkpoint is rejected and recovery performs **one intentional full replay**. Experience replay is still expensive (ADR-031), so this replay must be scheduled operationally.
