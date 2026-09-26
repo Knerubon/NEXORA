@@ -13,6 +13,10 @@ from typing import Any, Protocol
 
 from nexora.artifacts import canonical_hash, canonical_serialize
 
+# Rows per verified read page. Late research rows carry the whole cumulative pipeline
+# output (MBs each); a page of raw row text is replay's largest transient (REPLAY-MEM-1).
+_PAGE_ROWS = 8
+
 
 class Journal(Protocol):
     backend: str
@@ -94,13 +98,13 @@ class SQLiteJournal:
                 rows = self.connection.execute(
                     "SELECT sequence,content_hash,payload FROM research_journal NOT INDEXED "
                     "WHERE stream=? AND sequence>? AND sequence<=? "
-                    "ORDER BY sequence LIMIT 32",
-                    (stream, after, end),
+                    "ORDER BY sequence LIMIT ?",
+                    (stream, after, end, _PAGE_ROWS),
                 ).fetchall()
             if not rows:
                 break
-            for sequence, digest, payload in rows:
-                yield sequence, _verify(digest, payload)
+            for sequence, value in _drain(rows):
+                yield sequence, value
                 after = sequence
 
     def row_identity(self, stream: str, sequence: int) -> tuple[str, str] | None:
@@ -151,6 +155,20 @@ def _verify(digest: str, payload: str) -> dict[str, Any]:
     if hashlib.sha256(encoded.encode()).hexdigest() != digest:
         raise ValueError("journal_corrupt")
     return value  # type: ignore[no-any-return]
+
+
+def _drain(rows: list[Any]) -> Iterator[tuple[Any, dict[str, Any]]]:
+    """Verify one page in order, releasing each raw payload before its row is consumed.
+
+    The page list is emptied as it is read, so no raw text of an earlier page is still
+    alive when the caller fetches the next one.
+    """
+    rows.reverse()
+    while rows:
+        sequence, digest, payload = rows.pop()
+        value = _verify(digest, payload)
+        del payload
+        yield sequence, value
 
 
 def _verified(rows: Any) -> tuple[dict[str, Any], ...]:
@@ -221,13 +239,13 @@ class PostgresJournal:
                 rows = self.connection.execute(
                     "SELECT sequence,content_hash,payload FROM research_journal "
                     "WHERE stream=%s AND sequence>%s AND sequence<=%s "
-                    "ORDER BY sequence LIMIT 32",
-                    (stream, after, end),
+                    "ORDER BY sequence LIMIT %s",
+                    (stream, after, end, _PAGE_ROWS),
                 ).fetchall()
             if not rows:
                 break
-            for sequence, digest, payload in rows:
-                yield _verify(digest, payload)
+            for sequence, value in _drain(rows):
+                yield value
                 after = sequence
 
     def close(self) -> None:
