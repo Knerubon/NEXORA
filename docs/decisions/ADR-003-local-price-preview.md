@@ -10,7 +10,7 @@ Runtime ต้องกำหนด NEXORA_MT5_PATH และ NEXORA_MT5_SYMBOL;
 ตรวจ process ก่อน initialize เพื่อไม่เปิด terminal ที่ปิดอยู่; ไม่เปลี่ยน Market Watch, account หรือ terminal settings
 
 ## Data / transport
-Read-only calls: initialize, terminal_info (อ่าน connected เท่านั้น), symbol_info, symbol_info_tick, shutdown
+Read-only calls: initialize, terminal_info (อ่านเฉพาะ connected, company, path — ดู Amendment 1), symbol_info, symbol_info_tick, shutdown
 MT5 calls อยู่ใน adapter thread แยกจาก event loop; หนึ่ง poll ต่อวินาทีและแชร์ snapshot ให้ clients
 Quote: symbol, bid/ask/spread เป็น decimal strings ตาม symbol digits, event_time จาก time_msc ใน UTC, received_at UTC
 เก็บทั้ง Bid และ Ask; UI เลือกเส้นที่แสดงได้ ไม่มี default price source สำหรับ engine
@@ -29,6 +29,12 @@ Disconnected/unavailable/error snapshot ไม่มี quote; browser ปิด
 API/web bind 127.0.0.1; REST/WS ปฏิเสธ non-loopback clients; WS รับ Origin เฉพาะ local web ports 3000/3100
 Host allowlist คงอยู่; ไม่มี permissive CORS หรือ remote tunnel; local origin checks ไม่ใช่ remote authentication
 MT5 dependencies เป็น optional extra; tests ใช้ fake และไม่ require terminal
+
+## Amendment 1 — terminal identity fields (ADR-025)
+Status: accepted พร้อม [ADR-025](ADR-025-mt5-instrument-resolution-v1.md) rev 3 (Rin, 2026-09-25); มีผลกับ runtime เมื่อ Phase 2B wiring merge — ก่อนหน้านั้น runtime ยังอ่าน "connected เท่านั้น" ตามเดิม
+terminal_info อ่านได้เฉพาะ `connected`, `company`, `path` — `company`/`path` เป็น terminal identity metadata (ใช้ตรวจ terminal ที่ bind ไว้) ไม่ใช่ account identity
+field อื่นของ terminal_info (เช่น `community_*`, `mqid`, `data_path`, `commondata_path`) ยังห้ามอ่าน เว้นแต่มี accepted ADR อื่นอนุญาตโดยตรง
+account_info() ยังห้ามเรียก; ไม่อ่าน login, server, balance, equity, positions, orders, history หรือ credentials; ส่วนอื่นของ ADR นี้ไม่เปลี่ยน
 
 ## Sources
 - [MT5 initialize](https://www.mql5.com/en/docs/python_metatrader5/mt5initialize_py)
