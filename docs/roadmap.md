@@ -49,6 +49,10 @@ Reconciled against `main` `8437cdc` (Merge PR #42). This ledger is a navigation 
 3. **Release 1.4.0 candidate:** `a449f19` is **SUPERSEDED / NOT CURRENT RELEASE CANDIDATE**, because `main` advanced to `8437cdc` when PR #42 merged. `8437cdc` is **not** frozen as a new candidate, and release 1.4.0 is not being prepared. A new candidate SHA is frozen only when Rin authorizes preparation of release 1.4.0. Until then Gate 2 stays deferred and not passed, Gate 2 is not run, and `1.4.0` is not tagged.
 4. **Historical text is preserved for auditability.** Old statements such as "not pushed", "no PR", old branch state or old review state are never rewritten. Appended dated status notes supersede them.
 
+**Superseding note (Rin-authorized Codex takeover, 2026-09-27, PR #43):** Decisions 1–4 above are recorded decisions, not pending questions. They supersede the earlier PR description's "Needs Rin decision" questions, including any suggestion that a human merge could count as independent review or that a new release candidate should now be frozen. P8A remains unresolved from repository evidence; historical task statements remain preserved.
+
+The takeover does not reopen deferred work: MT5 Phase 2A remains COMPLETE / merged via PR #42; MT5 Phase 2B remains NOT STARTED / BLOCKED with all carried items below; VALID-1 Phase 2B remains HOLD / BLOCKED. Release preparation and Gate 2 remain deferred, with no current release candidate. This documentation continuation is self-reviewed; independent review of PR #43 remains pending, and the PR stays draft for Rin's review.
+
 ### Complete: merged, independent review recorded
 | Work | Record | PR (merge) | Review evidence |
 |---|---|---|---|
