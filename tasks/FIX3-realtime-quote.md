@@ -141,3 +141,9 @@ network boundary checked. No independent approval is claimed. Task remains
 in_review, not done; next action is independent review of the draft PR. PostgreSQL
 integration and the 15 baseline formatting failures remain explicitly unverified
 or failing outside this fix's scope. No merge, PR #21 operation or tag operation.
+
+## Status reconciliation (2026-09-27, `main` `8437cdc`)
+
+- Merged in PR #22 (merge `f5f388f`, 2026-09-21).
+- Review evidence found in the task record and PR: self-review only; no independent review is recorded. Status stays `in_review` because AGENTS.md §17 requires required-review evidence for `done`. This is merged work, not active work; do not re-implement it.
+- Index: [roadmap status ledger](../docs/roadmap.md#status-ledger-2026-09-27).

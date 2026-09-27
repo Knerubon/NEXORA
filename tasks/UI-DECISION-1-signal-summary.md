@@ -1,6 +1,6 @@
 # UI-DECISION-1 — Decision Clarity Signal Summary
 
-status: in_review
+status: done
 translation_needed: false
 base_commit: ec0aad50c97b67006414f2156b0bbc1b47fb4766 (origin/main, Merge PR #36)
 branch: claude/ui-decision-signal-summary-v1
@@ -70,3 +70,9 @@ Self-review; independent review pending (Rin code review).
 - `git diff --check`: pass
 
 Not pushed; no PR; not merged.
+
+## Status reconciliation (2026-09-27, `main` `8437cdc`)
+
+- Merged in PR #38 (merge `fb0ff3b`, 2026-09-25) by human merge. PR #38 records an independent review (a separate session, not the author) that returned APPROVED. Status `in_review` → `done`.
+- The lines above that say 'Not pushed; no PR; not merged' describe the state before PR #38 and are superseded.
+- Index: [roadmap status ledger](../docs/roadmap.md#status-ledger-2026-09-27).

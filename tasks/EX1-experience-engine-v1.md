@@ -275,3 +275,9 @@ Integration resolution and evidence:
 - CI with PostgreSQL required on the integrated commit before user-authorized merge.
 Self-review of integration completed; user merge authorization supersedes prior no-merge
 instructions. No independent approval or target-host production certification invented.
+
+## Status reconciliation (2026-09-27, `main` `8437cdc`)
+
+- Merged in PR #21 (merge `130f260`, 2026-09-21).
+- Review evidence found in the task record and PR: self-review only; no independent review is recorded. Status stays `in_review` because AGENTS.md §17 requires required-review evidence for `done`. This is merged work, not active work; do not re-implement it.
+- Index: [roadmap status ledger](../docs/roadmap.md#status-ledger-2026-09-27).

@@ -1,6 +1,6 @@
 # UI-READINESS-1 — Entry Readiness UI + Display Toggle
 
-status: in_review
+status: done
 translation_needed: false
 base_commit: 816c8d701d9678e2cc78fe46857eb28cf0b19c3f (origin/main, Merge PR #39)
 branch: claude/entry-readiness-ui-v1
@@ -122,3 +122,8 @@ check). Implementation commit 568fda9. Not pushed, no PR, no merge.
 - Python/backend: not_run. No Python, API or backend file changed.
 - Not verified in a live browser against a running backend: layout covered by CSS and markup
   assertions only.
+
+## Status reconciliation (2026-09-27, `main` `8437cdc`)
+
+- Merged in PR #41 (merge `ad9dcb9`, 2026-09-25) by human merge. PR #41 records 'Independent Review — APPROVED'. Status `in_review` → `done`.
+- Index: [roadmap status ledger](../docs/roadmap.md#status-ledger-2026-09-27).

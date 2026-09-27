@@ -207,3 +207,9 @@ fix found only through this re-check.
 - Outcome: with the `launch.py` fix applied, this branch is ready to be pushed as the new
   PR #23 head; CI must still be checked on that actual new head (not assumed from this local
   run) before this task can report a passing CI result.
+
+## Status reconciliation (2026-09-27, `main` `8437cdc`)
+
+- Merged in PR #23 (merge `ee1d88d`, 2026-09-22).
+- Review evidence found in the task record and PR: self-review only; no independent review is recorded. Status stays `in_review` because AGENTS.md §17 requires required-review evidence for `done`. This is merged work, not active work; do not re-implement it.
+- Index: [roadmap status ledger](../docs/roadmap.md#status-ledger-2026-09-27).

@@ -1,6 +1,6 @@
 # Matrix decision panel
 
-Status: in_progress. Base: origin/main 8dd31a256cc654f79d404718973478d7d43a9a59.
+Status: in_review. Base: origin/main 8dd31a256cc654f79d404718973478d7d43a9a59.
 Scope: apps/web/app, apps/web/tests; presentation only.
 Inputs: docs/requirements.md, docs/architecture.md, docs/development.md,
 root/scoped AGENTS.md, tasks/P8B-signal-intelligence.md, apps/web/app,
@@ -73,3 +73,9 @@ Python tests unnecessary unless backend changed. Independent review pending.
   typecheck and build passed; Python CI passed 127 tests, Ruff, mypy and recovery.
 - Merge remains gated on fresh CI for this correction. Browser pointer/resize
   integration coverage remains a non-blocking follow-up, not a claimed pass.
+
+## Status reconciliation (2026-09-27, `main` `8437cdc`)
+
+- Merged in PR #20 (merge `81854be`, 2026-09-20). Status `in_progress` → `in_review`.
+- Review evidence found in the task record and PR: self-review only; no independent review is recorded. Status stays `in_review` because AGENTS.md §17 requires required-review evidence for `done`. This is merged work, not active work; do not re-implement it.
+- Index: [roadmap status ledger](../docs/roadmap.md#status-ledger-2026-09-27).

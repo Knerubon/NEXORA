@@ -51,3 +51,9 @@ Not authorized: H1, H4, H6, H7, H8. Do not modify `packages/nexora/experience/**
 - Still deferred: H1 (its future review must include VALID-1 `run_id` identity), H4, H6, H7, H8, Experience optimization, the idle timer, and any PROD configuration.
 - Clarification: the integration record's machine-load explanation for the slower wall-clock re-run is a possible explanation, not a proven cause.
 - Status: in_review, PR prepared for review. Merge requires a human.
+
+## Status reconciliation (2026-09-27, `main` `8437cdc`)
+
+- Phase 2A merged in PR #35 (merge `f2d51ad`, 2026-09-25). ADR-029 stays draft; D3 (time/idle trigger) and H6 (deferred skipped-row verification) are deferred by the ADR.
+- Review evidence found in the task record and PR: self-review only; no independent review is recorded. Status stays `in_review` because AGENTS.md §17 requires required-review evidence for `done`. This is merged work, not active work; do not re-implement it.
+- Index: [roadmap status ledger](../docs/roadmap.md#status-ledger-2026-09-27).

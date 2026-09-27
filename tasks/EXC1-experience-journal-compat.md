@@ -66,3 +66,9 @@ This is the actual sequence; nothing is backdated:
 6. The acceptance is prospective, from 2026-09-25 19:51 +07:00.
 
 The governance-closure commit changes only ADR-028 and this task. Production code and tests are unchanged. Status moves from `in_review` to PR review; merge requires explicit human approval. **PERF-2 C1/C2/C3 must not start until the EXC1 PR is merged.**
+
+## Status reconciliation (2026-09-27, `main` `8437cdc`)
+
+- Merged in PR #36 (merge `ec0aad5`, 2026-09-25). ADR-028 was accepted by Rin on 2026-09-25.
+- Review evidence found in the task record and PR: self-review only; no independent review is recorded. Status stays `in_review` because AGENTS.md §17 requires required-review evidence for `done`. This is merged work, not active work; do not re-implement it.
+- Index: [roadmap status ledger](../docs/roadmap.md#status-ledger-2026-09-27).
