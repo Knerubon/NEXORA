@@ -32,3 +32,9 @@ No calculation, threshold, feed configuration, UI or backup tag changes.
 - git diff --check: PASS.
 - Self-review; independent review pending. User explicitly requests merge.
 - Next: run GitHub CI including PostgreSQL and web; merge only after success.
+
+## Status reconciliation (2026-09-27, `main` `8437cdc`)
+
+- Merged in PR #18 (merge `c136dc7`, 2026-09-18).
+- Review evidence found in the task record and PR: self-review only; no independent review is recorded. Status stays `in_review` because AGENTS.md §17 requires required-review evidence for `done`. This is merged work, not active work; do not re-implement it.
+- Index: [roadmap status ledger](../docs/roadmap.md#status-ledger-2026-09-27).

@@ -178,3 +178,9 @@ temporal Signal Stability are not part of this state). Renamed the value everywh
 the existing Signal action." No BUY/SELL/WAIT logic, confirmation rules, or SignalEngine
 scoring/thresholds changed — this is a rename plus documentation/test update only. `DEVELOPING`
 and `UNAVAILABLE` are unchanged. Kept: `DEVELOPING`, `DIRECTION_CONFIRMED`, `UNAVAILABLE`.
+
+## Status reconciliation (2026-09-27, `main` `8437cdc`)
+
+- Merged in PR #24 (merge `33fc471`, 2026-09-22).
+- Review evidence found in the task record and PR: self-review only; no independent review is recorded. Status stays `in_review` because AGENTS.md §17 requires required-review evidence for `done`. This is merged work, not active work; do not re-implement it.
+- Index: [roadmap status ledger](../docs/roadmap.md#status-ledger-2026-09-27).

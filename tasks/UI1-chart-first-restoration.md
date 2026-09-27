@@ -59,3 +59,9 @@ Existing grid spacing and whole-box price anchoring preserved; screenshot
 therefore is not pixel-identical. Existing tests cover geometry/rendering of
 the separate legacy chart; runtime DOM check also covers the active page chart.
 Next action: independent review of UI diff and live-market visual verification.
+
+## Status reconciliation (2026-09-27, `main` `8437cdc`)
+
+- Merged in PR #17 (merge `d856884`, 2026-09-18).
+- Review evidence found in the task record and PR: self-review only; no independent review is recorded. Status stays `in_review` because AGENTS.md §17 requires required-review evidence for `done`. This is merged work, not active work; do not re-implement it.
+- Index: [roadmap status ledger](../docs/roadmap.md#status-ledger-2026-09-27).

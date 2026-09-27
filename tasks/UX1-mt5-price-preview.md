@@ -1,6 +1,6 @@
 ---
 task: UX1
-status: in_progress
+status: in_review
 depends_on: ["tasks/P1-foundation.md"]
 agents: ["agents/rin/AGENT.md","agents/architect/AGENT.md","agents/developer/AGENT.md","agents/tester/AGENT.md","agents/reviewer/AGENT.md","agents/security/AGENT.md"]
 skills: ["skills/market-data/SKILL.md","skills/fastapi/SKILL.md","skills/websocket/SKILL.md","skills/frontend/SKILL.md","skills/testing/SKILL.md","skills/security/SKILL.md"]
@@ -42,3 +42,9 @@ Conflict ที่คงไว้: P&F/Matrix/structure/live research state ต�
 ข้อความ P6/P2–P5 และ context additions ด้านบนเป็น historical preview record ก่อน roadmap refactor; ไม่อัปเดต execution evidence ย้อนหลัง
 Current full dashboard คือ [P9](P9-web-dashboard.md); current structure/Matrix/regime/signals คือ P5–P8 ตาม [ADR-007](../docs/decisions/ADR-007-task-roadmap.md)
 Paths ของ generated/untracked AGENTS/CLAUDE และ node_modules ด้านบนเป็น historical local context ไม่ใช่ required checkout links; การทำงานต่อใช้ tracked context ใน metadata และตรวจ scoped instructions ที่มีจริง
+
+## Status reconciliation (2026-09-27, `main` `8437cdc`)
+
+- Merged in PR #3 (merge `10564eb`, 2026-09-17). `docs/roadmap.md` already treats UX1 as a historical bounded preview, not as completion evidence for P9. Status `in_progress` → `in_review`.
+- Review evidence found in the task record and PR: self-review only; no independent review is recorded. Status stays `in_review` because AGENTS.md §17 requires required-review evidence for `done`. This is merged work, not active work; do not re-implement it.
+- Index: [roadmap status ledger](../docs/roadmap.md#status-ledger-2026-09-27).

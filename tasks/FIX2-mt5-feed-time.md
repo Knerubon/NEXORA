@@ -31,3 +31,9 @@ Local verification: 86 passed, 1 PostgreSQL test skipped (service unavailable), 
 User requested Point & Figure X/O cells matching the supplied visual reference. Scope adds apps/web/app/page.tsx and globals.css; use skills/frontend/SKILL.md. Render confirmed transition box prices (including per-transition effective box sizes), no browser trading-rule calculation. White grid, green X/red O, actual confirmed support/resistance bands and floating Fast/Medium/Slow matrix. No inferred BOX 10/20/30 or H1/H4 indicators. Retain real feed status, explicit time correction and local-only paper boundary. Render window capped to 60 columns/2500 cells; history is not fabricated.
 
 Chart follow-up verification: web lint/typecheck/build PASS; browser shows green X and red O per confirmed price, blue confirmed support band, actual Bid/Ask and resolution states. Narrow layout keeps chart scrolling inside its panel; Matrix moves below chart. No fabricated historical columns.
+
+## Status reconciliation (2026-09-27, `main` `8437cdc`)
+
+- Merged in PR #14 (merge `e2b0bed`, 2026-09-18).
+- Review evidence found in the task record and PR: self-review only; no independent review is recorded. Status stays `in_review` because AGENTS.md §17 requires required-review evidence for `done`. This is merged work, not active work; do not re-implement it.
+- Index: [roadmap status ledger](../docs/roadmap.md#status-ledger-2026-09-27).

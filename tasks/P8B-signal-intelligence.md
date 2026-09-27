@@ -139,3 +139,9 @@ no retrospective new signal, and genuine identity-conflict rejection. Validated:
 changed-file format and `git diff --check` passed.
 User's explicit merge request supersedes the earlier draft-only/no-merge instruction.
 Self-review of the fix completed; merge remains gated on updated CI checks.
+
+## Status reconciliation (2026-09-27, `main` `8437cdc`)
+
+- Merged in PR #19 (merge `8dd31a2`, 2026-09-19).
+- Review evidence found in the task record and PR: self-review only; no independent review is recorded. Status stays `in_review` because AGENTS.md §17 requires required-review evidence for `done`. This is merged work, not active work; do not re-implement it.
+- Index: [roadmap status ledger](../docs/roadmap.md#status-ledger-2026-09-27).

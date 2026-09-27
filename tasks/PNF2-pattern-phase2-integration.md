@@ -1,6 +1,6 @@
 # PNF2 — Pattern Engine Phase 2 integration
 
-Status: in_progress
+Status: done
 Owner: DEV-PNF / Codex Lane C (current session)
 Branch: `claude/pnf-pattern-engine-v1`
 Worktree: `D:\NEXORA\NEXORA-PATTERN-ENGINE`
@@ -97,3 +97,9 @@ Required context:
 - No push, PR or merge to main. API TestClient coverage used without binding service ports;
   frontend validation and the external API smoke script are not run (no frontend changes;
   startup and output verified in isolated API tests). No benchmark commands executed.
+
+## Status reconciliation (2026-09-27, `main` `8437cdc`)
+
+- ADR-024 Phase 2 merged in PR #39 (merge `816c8d7`, 2026-09-25) by human merge. PR #39 records a final independent review APPROVED by session 52e6af50, which authored none of the commits. Status `in_progress` → `done`.
+- Pattern lifecycle stays DISABLED unless configured (ADR-023). Phase 3 (legacy SignalEngine pattern migration) is not started and is blocked on Quant Q-PE2 and Q-PE3 (ADR-024).
+- Index: [roadmap status ledger](../docs/roadmap.md#status-ledger-2026-09-27).

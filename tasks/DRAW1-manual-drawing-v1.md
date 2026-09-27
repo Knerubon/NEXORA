@@ -1,6 +1,6 @@
 # DRAW1 — Manual Drawing V1 on the P&F Chart
 
-status: in_review
+status: done
 translation_needed: false
 role: DEV-CHART (independent review APPROVED at ce5a934, no BLOCKING findings; Rin integration decisions below)
 base_commit: 816c8d701d9678e2cc78fe46857eb28cf0b19c3f (origin/main, Merge PR #39)
@@ -103,3 +103,8 @@ Entry Readiness, signals, backtests or the Pattern Engine.
   - Future-version fixture: a stored `version: 2` payload with non-empty drawings (and
     `visible: false`) parses to the empty V1 document, renders nothing and is not rewritten
     by reading. No implementation bug found.
+
+## Status reconciliation (2026-09-27, `main` `8437cdc`)
+
+- Merged in PR #40 (merge `a449f19`, 2026-09-25) by human merge after independent review APPROVED at `ce5a934` (recorded above and in PR #40). Status `in_review` → `done`.
+- Index: [roadmap status ledger](../docs/roadmap.md#status-ledger-2026-09-27).

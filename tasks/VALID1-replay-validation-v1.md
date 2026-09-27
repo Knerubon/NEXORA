@@ -1,6 +1,6 @@
 ---
 task: VALID1
-status: in_progress
+status: blocked
 depends_on: ["ADR-030 architecture approved (Rin 2026-09-25); Quant Q-V2–Q-V5 before any evidence-grade run", "ADR-024 Phase 2 on main for Pattern Engine subjects (L2c)", "ADR-027 coordination for RECORDED mode (Q-V9)"]
 agents: []
 skills: []
@@ -69,3 +69,10 @@ This record is separate from the Phase 2A evidence above, which stays historical
 - `git diff --check` passes.
 - ADR-030's current ADR-026 status wording was updated, because ADR-026 is now on `main` and accepted for the M30 Phase 2A Architect scope. Historical text is unchanged.
 - Integration assessment: READY_FOR_PR_REVIEW (accepted by Rin).
+
+## Status reconciliation (2026-09-27, `main` `8437cdc`)
+
+- Phase 2A (pure offline core) merged in PR #34 (merge `f5bbdfa`, 2026-09-25). PR #34 states that an independent code review was still pending at merge, and none is recorded since.
+- Phase 2B (offline read-only journal extraction) and Phase 2C (CLI) are not started. On 2026-09-27 Rin placed Phase 2B on HOLD while the REPLAY-MEM-1 review was open, because it overlaps the journal read path. Status `in_progress` → `blocked`.
+- Unblock: explicit Rin authorization of Phase 2B. Quant Q-V2–Q-V5 remain open before any evidence-grade run.
+- Index: [roadmap status ledger](../docs/roadmap.md#status-ledger-2026-09-27).

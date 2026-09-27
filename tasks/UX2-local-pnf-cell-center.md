@@ -26,3 +26,9 @@ Validation: lint/type/build; ตรวจ DOM geometry และภาพขอ�
 - Preserve live-feed timestamp provenance and status fields. No engine semantics changed by conflict resolution.
 - Existing uncommitted zoom/layout/FIX2 edits stay in the original checkout and are excluded from this PR.
 - Integration validation and CI are recorded in the PR. User explicitly requested push and merge; independent review remains unrecorded.
+
+## Status reconciliation (2026-09-27, `main` `8437cdc`)
+
+- Merged in PR #15 (merge `fa562c9`, 2026-09-18).
+- Review evidence found in the task record and PR: self-review only; no independent review is recorded. Status stays `in_review` because AGENTS.md §17 requires required-review evidence for `done`. This is merged work, not active work; do not re-implement it.
+- Index: [roadmap status ledger](../docs/roadmap.md#status-ledger-2026-09-27).

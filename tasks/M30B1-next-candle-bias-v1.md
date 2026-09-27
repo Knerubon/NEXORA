@@ -1,6 +1,6 @@
 ---
 task: M30B1
-status: in_review
+status: blocked
 depends_on: ["ADR-026 acceptance for Phase 2A (Rin): recorded 2026-09-25, after 56ba6a7", "Quant Q-M3/Q-M4/Q-M8 (open; no defaults)", "ADR-023 acceptance (Track D) for Phase 2B runtime wiring", "Track B coordination for Phase 2B checkpoint state"]
 agents: []
 skills: []
@@ -90,3 +90,10 @@ Still open: Q-M3, Q-M4 and Q-M8 (Quant).
 - **O-3 (ADR clarification candidate):** when an excursion is 0, `mfe_time`/`mae_time` are null. The behavior is tested, but the ADR does not state it.
 - **O-4 (note):** the `threshold_label`/`first_touch` primitives rely on the core's θ > 0 guard.
 - **O-5:** execution-record evidence for `56ba6a7`, addressed by this record.
+
+## Status reconciliation (2026-09-27, `main` `8437cdc`)
+
+- Phase 2A (pure core) merged in PR #33 (merge `f8267da`, 2026-09-25) after independent re-review of `9bc4494` returned APPROVED (recorded in PR #33). Phase 2A is complete.
+- Phase 2B (sidecar, checkpoint section, runtime wiring) is not started. Status `in_review` → `blocked`.
+- Unblock: Quant Q-M3/Q-M4/Q-M8, then Track B coordination on the shared recovery files `research/runtime.py` and `checkpoint_state.py`.
+- Index: [roadmap status ledger](../docs/roadmap.md#status-ledger-2026-09-27).
