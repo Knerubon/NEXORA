@@ -43,6 +43,12 @@ Future live execution อยู่นอก task graph นี้และต้�
 
 Reconciled against `main` `8437cdc` (Merge PR #42). This ledger is a navigation index only. Completion evidence still lives in each task Execution record plus its review/merge evidence (see "Status and decision gates" above). `done` requires recorded required review **and** human merge (AGENTS.md §17). Merged work without recorded independent review stays `in_review`: it is merged and not active, so do not re-implement it.
 
+### Governance decisions (Rin, 2026-09-27)
+1. **A human merge is not an independent review.** A merge by Rin/Knerubon does not satisfy the independent-review requirement, and no review may be inferred from a merge event. The lifecycle for new work is IMPLEMENTATION → INDEPENDENT REVIEW → RIN DECISION → HUMAN MERGE → DONE. Tracks whose implementation is merged but which have no recorded independent review keep governance status `in_review`. They are not marked `done` retroactively, and no retroactive review is launched just to clean up status.
+2. **P8A:** status unresolved from repository evidence; historical record preserved. It is not classified as done.
+3. **Release 1.4.0 candidate:** `a449f19` is **SUPERSEDED / NOT CURRENT RELEASE CANDIDATE**, because `main` advanced to `8437cdc` when PR #42 merged. `8437cdc` is **not** frozen as a new candidate, and release 1.4.0 is not being prepared. A new candidate SHA is frozen only when Rin authorizes preparation of release 1.4.0. Until then Gate 2 stays deferred and not passed, Gate 2 is not run, and `1.4.0` is not tagged.
+4. **Historical text is preserved for auditability.** Old statements such as "not pushed", "no PR", old branch state or old review state are never rewritten. Appended dated status notes supersede them.
+
 ### Complete: merged, independent review recorded
 | Work | Record | PR (merge) | Review evidence |
 |---|---|---|---|
@@ -77,7 +83,7 @@ Reconciled against `main` `8437cdc` (Merge PR #42). This ledger is a navigation 
 | DC1 Decision Clarity + Bias V1 | [DC1](../tasks/DC1-decision-clarity-bias-v1.md) | #24 (`33fc471`) |
 | UX1 local quote preview (historical bounded preview) | [UX1](../tasks/UX1-mt5-price-preview.md) | #3 (`10564eb`) |
 
-P1–P3 are `done`. P4–P13, DQ1 and FIX1 keep their historical records unchanged: they are merged, and independent review, acceptance and release gates remain as stated above and in [FIX1](../tasks/FIX1-system-readiness.md). REMOTE1 is implemented and awaits external 5G verification and tunnel provisioning (#25, #27). [P8A](../tasks/P8A-signal-pattern-scoring.md) has no status field and its completion is unverified; this needs a Rin decision.
+P1–P3 are `done`. P4–P13, DQ1 and FIX1 keep their historical records unchanged: they are merged, and independent review, acceptance and release gates remain as stated above and in [FIX1](../tasks/FIX1-system-readiness.md). REMOTE1 is implemented and awaits external 5G verification and tunnel provisioning (#25, #27). [P8A](../tasks/P8A-signal-pattern-scoring.md) — status unresolved from repository evidence; historical record preserved (governance decision 2).
 
 ### In progress
 None active as of `8437cdc`.
@@ -93,8 +99,8 @@ None active as of `8437cdc`.
 | TS1 time semantics | separate task approval and Architect/Quant versioned time contract |
 
 ### Release / recovery (deferred)
-- REPLAY-MEM-1 (`claude/replay-memory-bound-v1`, including `daa065e`): the independent review concluded **NO_MEMORY_BLOCKER_FOUND**. The historical `MemoryError` root cause remains unconfirmed. The branch is preserved and not merged or deployed. Do not reopen without Rin.
-- Gate 2 / release `1.4.0`: not passed and not re-run; `1.4.0` is not tagged. The validated candidate `a449f19` is no longer the `main` HEAD.
+- REPLAY-MEM-1 (`claude/replay-memory-bound-v1`, including `daa065e`): the independent review concluded **NO_MEMORY_BLOCKER_FOUND**. The historical `MemoryError` root cause remains unconfirmed. The investigation is deferred. The branch is preserved and not merged, and `daa065e` is not deployed to PROD. Do not reopen without Rin.
+- Gate 2 / release `1.4.0`: deferred and not passed; Gate 2 is not run and `1.4.0` is not tagged. `a449f19` is SUPERSEDED / NOT CURRENT RELEASE CANDIDATE. No new candidate is frozen: `8437cdc` is not a candidate, and freezing one needs Rin's authorization to prepare 1.4.0 (governance decision 3).
 - ADR-029 D3 (time/idle checkpoint trigger) and H6 (deferred skipped-row verification); ADR-031 C3(c) and C8: deferred by their ADRs.
 
 ### Backlog (not started)
