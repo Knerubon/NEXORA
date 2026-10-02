@@ -8,18 +8,28 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import Literal
 
 import pytest
-from nexora.autonomous_contracts import TradeIntentKind, TradeState
+from nexora.autonomous_contracts import PositionOrigin, TradeIntentKind, TradeState
 from nexora.position.models import (
+    ExitAction,
     ExitDecision,
     PositionInputError,
     PositionRecord,
+    PositionSide,
     ProtectionLevels,
     open_position_from_signal,
 )
 from nexora.position.supervisor import apply_exit_decision, build_trade_intent, mark_closed
 from nexora.signals.models import SignalDecision, SignalEvidence, SignalTarget
+
+# Mirrors SignalEvidence.component exactly (packages/nexora/signals/models.py) —
+# no named alias exists there to import, so this is kept identical rather than
+# inventing a new, competing domain Literal.
+_EvidenceComponent = Literal[
+    "pnf", "structure", "support_resistance", "matrix", "regime", "pattern"
+]
 
 SYMBOL = "XAUUSD"
 BASE = datetime(2026, 1, 1, tzinfo=UTC)
@@ -46,7 +56,7 @@ def _signal_decision(
     )
 
 
-def _evidence(component: str = "structure") -> tuple[SignalEvidence, ...]:
+def _evidence(component: _EvidenceComponent = "structure") -> tuple[SignalEvidence, ...]:
     return (
         SignalEvidence(
             component=component,
@@ -63,7 +73,7 @@ def _position(
     *,
     state: TradeState = TradeState.OPEN,
     quantity: Decimal = Decimal("1"),
-    side: str = "long",
+    side: PositionSide = "long",
     stop_price: Decimal = Decimal("1900"),
 ) -> PositionRecord:
     return PositionRecord(
@@ -82,7 +92,7 @@ def _position(
 
 def _exit_decision(
     *,
-    action: str,
+    action: ExitAction,
     reduce_quantity: Decimal | None = None,
     new_stop_price: Decimal | None = None,
     position_id: str = "pos:1",
@@ -497,22 +507,28 @@ def test_mark_closed_rejects_wrong_state_even_with_zero_quantity() -> None:
 
 
 @pytest.mark.parametrize(
-    ("action", "kwargs", "expected_kind"),
+    ("action", "reduce_quantity", "new_stop_price", "expected_kind"),
     [
-        ("PARTIAL_CLOSE", {"reduce_quantity": Decimal("0.1")}, TradeIntentKind.REDUCE),
-        ("CLOSE", {}, TradeIntentKind.CLOSE),
-        ("TIGHTEN", {"new_stop_price": Decimal("1930")}, TradeIntentKind.MODIFY_PROTECTION),
+        ("PARTIAL_CLOSE", Decimal("0.1"), None, TradeIntentKind.REDUCE),
+        ("CLOSE", None, None, TradeIntentKind.CLOSE),
+        ("TIGHTEN", None, Decimal("1930"), TradeIntentKind.MODIFY_PROTECTION),
     ],
 )
 def test_build_trade_intent_maps_action_to_expected_kind(
-    action: str, kwargs: dict[str, Decimal], expected_kind: TradeIntentKind
+    action: ExitAction,
+    reduce_quantity: Decimal | None,
+    new_stop_price: Decimal | None,
+    expected_kind: TradeIntentKind,
 ) -> None:
     position = _position()
-    decision = _exit_decision(action=action, **kwargs)
+    decision = _exit_decision(
+        action=action, reduce_quantity=reduce_quantity, new_stop_price=new_stop_price
+    )
     intent = build_trade_intent(position, decision, proposal_id="proposal:1")
     assert intent.kind is expected_kind
     assert intent.symbol == position.symbol
     assert intent.side == position.side
+    assert isinstance(intent.origin, PositionOrigin)
     assert intent.origin.position_id == position.position_id
     assert intent.origin.exit_decision_ref == decision.decision_id
     assert not hasattr(intent.origin, "signal_id")
