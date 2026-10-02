@@ -236,15 +236,28 @@ validation path. `OPEN` and risk-reducing kinds (`REDUCE`/`CLOSE`/`MODIFY_PROTEC
 | Requires | `EntryReadiness == READY` | an existing `OPEN`/`MANAGING` `TradeLifecycle` instance for the referenced position |
 | Blocked by degraded health | always (new exposure) | only when the fault is `broker: UNHEALTHY` (connectivity) — see section 15 |
 | Sizing source | `RiskEngine.evaluate()` on the entry proposal | sizing is a *reduction* of already-approved size; never re-runs new-trade risk approval |
-| Can increase exposure | yes, bounded by Risk Guard | **never** — `REDUCE`/`CLOSE`/`MODIFY_PROTECTION` must not be constructible with an effect that increases net exposure; this is a type-level invariant, not a runtime check only |
+| Can increase exposure | yes, bounded by Risk Guard | **never**, as a *policy* invariant — see enforcement note below |
 | Origin type | `EntryOrigin` (wraps `SignalDecision`) | `PositionOrigin` (wraps `ExitDecision`) — **never** a synthetic/fake `ResearchSignal` |
 
 This directly answers instruction F: yes, `OPEN` and risk-reducing intents need distinct validation
 semantics, and the discriminated `origin` field is the boundary that prevents `ExitDecision` from
 ever being coerced into looking like a `ResearchSignal`.
 
-Status: contract shape **FROZEN**. No implementation beyond the minimal pure scaffold in
-`packages/nexora/autonomous_contracts.py` (section 21) — no wiring to `RiskEngine`, no I/O.
+**Enforcement note (review correction):** today, `TradeIntent`'s type only guarantees
+*kind-vs-origin* discrimination — `OPEN` requires `EntryOrigin`, the three risk-reducing kinds
+require `PositionOrigin` (enforced in `__post_init__`, validated by
+`tests/test_autonomous_contracts.py`). **"Must never increase exposure" is not yet enforceable by
+`TradeIntent`'s type alone**, because `TradeIntent` as frozen here carries no size/quantity field to
+constrain — there is nothing for the type system to bound. Enforcement of the actual
+never-increases-exposure invariant belongs to the future risk-reduction / position validation path
+(`RiskEngine.evaluate_reduction()`, section 12), which is where a concrete size comparison against
+current exposure can exist. This keeps the invariant's disposition **PROVISIONAL**, consistent with
+section 25 — it is a frozen *requirement* on the future implementation, not a property already
+guaranteed by the contract shape frozen today.
+
+Status: contract shape **FROZEN**. The never-increases-exposure invariant itself is **PROVISIONAL**
+(see enforcement note above). No implementation beyond the minimal pure scaffold in
+`packages/nexora/autonomous_contracts.py` — no wiring to `RiskEngine`, no I/O.
 
 ## 11. Frozen entry-vs-position safety model
 
@@ -392,7 +405,32 @@ profit-lock threshold, trailing distance, P&F-vs-Structure trailing precedence, 
 ratios, time exit policy, re-entry cooldown. Freezing the `ExitDecision` action vocabulary does not
 freeze any of the thresholds that decide which action fires.
 
-Status: interfaces **FROZEN**; all policy values **BLOCKED** on Quant.
+**Partial-close lifecycle semantics (fast-follow clarification):** a successful `PARTIAL_CLOSE`
+does **not**, by itself, close the `TradeLifecycle`. If residual position quantity remains after
+the partial close, the lifecycle returns to — or remains in — `MANAGING`; it does not advance to
+`EXIT_PENDING`/`CLOSED`. Only a position whose quantity has gone fully to zero may progress
+`MANAGING → EXIT_PENDING → CLOSED` (the existing transition table in `autonomous_contracts.py`
+already permits this path; it does not need to change). This is a clarification of intent, not a new
+transition: `PartialClose` is one of potentially several `MANAGING`-state events a future
+`PositionSupervisor` would need to track residual-quantity bookkeeping for, and that bookkeeping is
+explicitly **not** designed here — `PositionSupervisor` behavior remains unimplemented per
+instruction J.
+
+**Architecture note for future Risk migration:** `packages/nexora/risk/models.py`'s existing
+`RiskDecision` requires a `signal_id: str` field (confirmed by inspection — `RiskDecision.signal_id`
+is non-optional today). The future risk-reduction contract (section 12's `evaluate_reduction()`)
+must **not** paper over this by inventing a synthetic `ResearchSignal` or a fake `signal_id` for
+position-management actions — that would silently reintroduce the exact
+"risk-reducing-action-pretending-to-be-a-signal" anti-pattern this ADR's `TradeIntent`/`PositionOrigin`
+boundary (section 10) was built to prevent. Before `evaluate_reduction()` is implementation-ready,
+the future Risk-reduction contract must explicitly resolve how a position-management action
+satisfies (or replaces) `RiskDecision.signal_id` — e.g. a new, distinct decision type for
+reductions, or a widened `RiskDecision` with an explicit non-signal identity field — rather than
+leaving this gap for an implementer to improvise around. This is additive to section 12's existing
+PROVISIONAL disposition, not a new blocker.
+
+Status: interfaces **FROZEN**; all policy values **BLOCKED** on Quant; partial-close lifecycle
+interaction clarified above, still **BLOCKED** on `PositionSupervisor` implementation.
 
 ## 16. Frozen News/Social boundary
 
@@ -516,9 +554,9 @@ Unchanged list from TASK 1A, plus one addition from this task:
 ## 23. Compatibility / migration plan
 
 1. This ADR introduces no runtime wiring, so nothing currently deployed changes behavior.
-2. The minimal pure scaffold (section 24) adds a new, unimported-by-anything module; it cannot
-   affect `code_fingerprint()`/checkpoint compatibility because nothing in `research/pipeline.py`
-   or `checkpoint_state.py` references it.
+2. The minimal pure scaffold (`packages/nexora/autonomous_contracts.py`) adds a new,
+   unimported-by-anything module; it cannot affect `code_fingerprint()`/checkpoint compatibility
+   because nothing in `research/pipeline.py` or `checkpoint_state.py` references it.
 3. Future migration order, once Quant/Architect unblock each piece: (a) Pattern ownership
    reconciliation (section 9) first, since Signal Engine's scoring output is an input to almost
    everything else; (b) `TradeIntent`/Risk migration (sections 10/12) next, as a pure-contract
@@ -542,7 +580,7 @@ or the UI will have nothing honest to render beyond its current mock state.
 |---|---|
 | TradingMode / TradingModeGate | **FROZEN** |
 | TradeLifecycle / TradeState | **FROZEN** (table adopted verbatim from TASK 1A/instruction E) |
-| TradeIntent / TradeIntentKind | **FROZEN** (shape only) |
+| TradeIntent / TradeIntentKind | **FROZEN** (shape only); never-increases-exposure invariant is **PROVISIONAL** — not enforceable by the type alone, belongs to the future risk-reduction path (section 10/12) |
 | ExitDecision | **FROZEN** (action vocabulary only; policy BLOCKED) |
 | RiskDecision ↔ TradeIntent relationship | **PROVISIONAL** (migration path frozen, Quant sign-off pending) |
 | ExecutionIntent / ExecutionResult | **FROZEN** (shape only) |
