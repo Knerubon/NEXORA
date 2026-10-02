@@ -1,6 +1,7 @@
 # MANUAL-EXEC-1 — Manual Execution Test Panel V1
 
-status: in_review
+status: in_review (approved with documentation fix — Rin verdict 2026-10-02; this revision
+  applies the requested correction and opens a draft PR)
 translation_needed: false
 base_commit: 1689675 (origin/main, Merge PR #44 "claude/autonomous-contract-freeze-v1")
 branch: claude/manual-execution-ui-v1
@@ -14,16 +15,31 @@ Add a WEB-only "Manual Order Test" panel (BUY / SELL / CLOSE ALL) intended as a 
 Test Harness proving the same execution pipeline AUTO will eventually use. **V1 is UI + contract/
 scaffold only**: no broker/MT5 call, no execution wiring, AUTO stays unavailable. Sources:
 [AGENTS.md](../AGENTS.md) sections 0, 9, 10; [apps/web/AGENTS.md](../apps/web/AGENTS.md);
-[ADR-033](../docs/decisions/ADR-033-autonomous-trading-contracts-v1.md) (status: **PROPOSED —
-Rin review required; contract freeze NOT declared**); `packages/nexora/autonomous_contracts.py`.
+[ADR-033](../docs/decisions/ADR-033-autonomous-trading-contracts-v1.md) (approved/merged via PR
+#44 — see governance update below); `packages/nexora/autonomous_contracts.py`.
+
+## Governance update (post Rin review, 2026-10-02)
+
+- **ADR-033 is approved**, merged via PR #44, and is the governing Autonomous V1 contract
+  baseline — per Rin's explicit review verdict. Note for traceability: the ADR document's own
+  `Status:` line on `origin/main` still literally reads `PROPOSED — Rin review required; CONTRACT
+  FREEZE V1 NOT DECLARED until Rin approves` (unchanged since merge, including through the later
+  "review fast-follow" commit `9cde9b9`); this task does not edit that file (out of scope, see
+  "What this task explicitly did not do"), and records Rin's verdict here rather than silently
+  overriding the document text.
+- **Autonomous Core Phase 1** (deterministic authority/health-gate implementation of ADR-033) is
+  merged via **PR #47** (`packages/nexora/autonomous/{authority,health,broker_capabilities,
+  risk_migration}.py` + `tests/test_autonomous_core_phase1.py`, commit `0c98ce5`). Zero file
+  overlap with this branch; inspected directly — it consumes only `EntryOrigin`/`PositionOrigin`
+  from `autonomous_contracts.py`. No manual-origin concept was introduced, so the gap this task
+  documents (see "Proposed future contract" below) still stands unchanged.
+- **Position Supervisor Phase 1** exists as **PR #48** ("Position Supervisor Phase 1 —
+  Deterministic Lifecycle Core") but is **not on `main` yet** — its `python` CI check is
+  `FAILURE` (two runs), `web` CI check is `SUCCESS`; still under triage, not merged. This task
+  does not depend on it and does not treat it as available.
 
 ## Inspection evidence (base 1689675)
 
-- **ADR-033 status**: the document itself states `Status: PROPOSED — Rin review required;
-  CONTRACT FREEZE V1 NOT DECLARED until Rin approves` (unchanged by the later
-  "review fast-follow" commit `9cde9b9`). It was merged to `main` as a proposal under review, not
-  as a ratified freeze. This task treats ADR-033's shapes as *directional* evidence of where the
-  system is headed, not as an approved contract to build execution logic against.
 - `packages/nexora/autonomous_contracts.py` (123 lines) is a pure, unimported, no-I/O module per
   its own docstring: `TradingMode`, `TradeState`/`TRADE_STATE_TRANSITIONS`, `TradeIntentKind`,
   `EntryOrigin`, `PositionOrigin`, `TradeIntent`. **No `ManualTradeOrigin` or equivalent exists.**
@@ -36,9 +52,10 @@ Rin review required; contract freeze NOT declared**); `packages/nexora/autonomou
   the same logic applied to the symmetric case.
 - Position Phase 1 / Position Supervisor: **not implemented anywhere on `origin/main`**
   (`git ls-tree -r origin/main | grep -i position` returns only `matrix-position.ts`, an unrelated
-  chart UI module, plus ADR-033 itself). ADR-033 section 15 confirms Position Supervisor is
-  interface-only and unimplemented. Ownership resolution for "positions NEXORA owns and manages"
-  (required for a real CLOSE ALL) does not exist yet.
+  chart UI module, plus ADR-033 itself). A candidate implementation exists as unmerged **PR #48**
+  (see "Governance update" above) but is not available to this task. ADR-033 section 15 confirms
+  Position Supervisor is interface-only and unimplemented on `main`. Ownership resolution for
+  "positions NEXORA owns and manages" (required for a real CLOSE ALL) does not exist yet.
 - Control Center: no Control Center UI exists on `main`; it lives only in the separate, unmerged
   worktree `D:\NEXORA\NEXORA-CONTROL-CENTER` (per ADR-033 section 6). Not touched by this task.
 - `apps/web/app/page.tsx` (349 lines, base) is a single-file dashboard composed of small,
@@ -119,7 +136,7 @@ enforces in code.
 - No `order_send()`, no broker/MT5 call, no direct Web→MT5 path.
 - No change to `RiskEngine`, `PaperSimulator`, `PositionSupervisor` (doesn't exist), or any Python
   module.
-- No change to ADR-033 or `autonomous_contracts.py` — the frozen (proposed) contract is read-only
+- No change to ADR-033 or `autonomous_contracts.py` — the approved contract (PR #44) is read-only
   to this task.
 - No AUTO activation path, no toggle, no backend call for trading mode.
 - No PROD contact. No merge to `main`. No tags/releases. No change to PR #45.
@@ -131,9 +148,10 @@ enforces in code.
 - Files changed: `apps/web/app/page.tsx` (import + mount, 5 lines added, nothing removed),
   `apps/web/app/globals.css` (new `.manual-execution*` rules appended; no existing rule changed).
 - Tests: `npm test` (full `apps/web` suite, Node test runner) — **111 passed, 0 failed**, including
-  12 new tests covering the 9 required acceptance proofs plus 3 supporting checks.
-- Typecheck: `npm run typecheck` (`next typegen && tsc --noEmit`) — **clean**.
-- Lint: `npm run lint` (`eslint . --max-warnings 0`) — see handoff for result captured after this
-  file was written.
+  12 new tests covering the 9 required acceptance proofs plus 3 supporting checks. Re-run after
+  the governance documentation correction (this revision), still 111/0.
+- Typecheck: `npm run typecheck` (`next typegen && tsc --noEmit`) — **clean**. Re-run, still clean.
+- Lint: `npm run lint` (`eslint . --max-warnings 0`) — **clean** (0 errors, 0 warnings). Re-run
+  after the documentation correction, still clean.
 
 MANUAL EXECUTION UI V1 READY FOR RIN REVIEW
