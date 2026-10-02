@@ -63,6 +63,8 @@ class ProtectionLevels:
     def __post_init__(self) -> None:
         if not self.stop_price.is_finite() or self.stop_price <= 0:
             raise PositionInputError("invalid_stop_price")
+        if not self.target_prices:
+            raise PositionInputError("missing_target_prices")
         for target in self.target_prices:
             if not target.is_finite() or target <= 0:
                 raise PositionInputError("invalid_target_price")
@@ -76,6 +78,13 @@ class PositionRecord:
     fully to zero may progress ``EXIT_PENDING -> CLOSED`` (ADR-033 section 15
     partial-close lifecycle clarification); a successful partial close with
     residual quantity remaining advances/stays at ``MANAGING`` only.
+
+    Quantity/state consistency is enforced here, not only by the factory and
+    supervisor call paths, so an invalid ``PositionRecord`` can never be
+    constructed directly: ``OPEN``/``MANAGING`` require ``quantity > 0``;
+    ``EXIT_PENDING``/``CLOSED`` require ``quantity == 0``. ``EMERGENCY`` gets
+    no quantity invariant here — that is not established by the frozen
+    contract and is not invented by this fix.
     """
 
     position_id: str
@@ -96,6 +105,10 @@ class PositionRecord:
             raise PositionInputError("invalid_position_lifecycle_state")
         if self.quantity < 0:
             raise PositionInputError("negative_quantity")
+        if self.state in (TradeState.OPEN, TradeState.MANAGING) and self.quantity <= 0:
+            raise PositionInputError("open_or_managing_requires_positive_quantity")
+        if self.state in (TradeState.EXIT_PENDING, TradeState.CLOSED) and self.quantity != 0:
+            raise PositionInputError("exit_pending_or_closed_requires_zero_quantity")
         if not self.entry_price.is_finite() or self.entry_price <= 0:
             raise PositionInputError("invalid_entry_price")
         if self.opened_at.tzinfo is None or self.opened_at.utcoffset() is None:

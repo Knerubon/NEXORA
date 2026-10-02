@@ -100,6 +100,98 @@ def _exit_decision(
     )
 
 
+def _position_record(*, state: TradeState, quantity: Decimal) -> PositionRecord:
+    """Constructs ``PositionRecord`` directly (no factory/supervisor path),
+    to prove quantity/state consistency is enforced at the model boundary
+    itself (FIX M1)."""
+    return PositionRecord(
+        position_id="pos:1",
+        symbol=SYMBOL,
+        side="long",
+        state=state,
+        quantity=quantity,
+        entry_price=Decimal("1950"),
+        protection=ProtectionLevels(stop_price=Decimal("1900"), target_prices=(Decimal("2000"),)),
+        opened_at=BASE,
+        source_signal_decision_ref="signal:1",
+        source_entry_readiness_ref="readiness:1",
+    )
+
+
+# --- PositionRecord quantity/state invariants at the model boundary (FIX M1) --
+
+
+def test_direct_construction_rejects_open_with_zero_quantity() -> None:
+    with pytest.raises(PositionInputError, match="open_or_managing_requires_positive_quantity"):
+        _position_record(state=TradeState.OPEN, quantity=Decimal("0"))
+
+
+def test_direct_construction_rejects_managing_with_zero_quantity() -> None:
+    with pytest.raises(PositionInputError, match="open_or_managing_requires_positive_quantity"):
+        _position_record(state=TradeState.MANAGING, quantity=Decimal("0"))
+
+
+def test_direct_construction_rejects_exit_pending_with_positive_quantity() -> None:
+    with pytest.raises(PositionInputError, match="exit_pending_or_closed_requires_zero_quantity"):
+        _position_record(state=TradeState.EXIT_PENDING, quantity=Decimal("0.1"))
+
+
+def test_direct_construction_rejects_closed_with_positive_quantity() -> None:
+    with pytest.raises(PositionInputError, match="exit_pending_or_closed_requires_zero_quantity"):
+        _position_record(state=TradeState.CLOSED, quantity=Decimal("0.1"))
+
+
+def test_direct_construction_accepts_open_with_positive_quantity() -> None:
+    position = _position_record(state=TradeState.OPEN, quantity=Decimal("1"))
+    assert position.state is TradeState.OPEN
+    assert position.quantity == Decimal("1")
+
+
+def test_direct_construction_accepts_managing_with_positive_quantity() -> None:
+    position = _position_record(state=TradeState.MANAGING, quantity=Decimal("0.5"))
+    assert position.state is TradeState.MANAGING
+    assert position.quantity == Decimal("0.5")
+
+
+def test_direct_construction_accepts_exit_pending_with_zero_quantity() -> None:
+    position = _position_record(state=TradeState.EXIT_PENDING, quantity=Decimal("0"))
+    assert position.state is TradeState.EXIT_PENDING
+    assert position.quantity == Decimal("0")
+
+
+def test_direct_construction_accepts_closed_with_zero_quantity() -> None:
+    position = _position_record(state=TradeState.CLOSED, quantity=Decimal("0"))
+    assert position.state is TradeState.CLOSED
+    assert position.quantity == Decimal("0")
+
+
+def test_direct_construction_still_rejects_negative_quantity() -> None:
+    with pytest.raises(PositionInputError, match="negative_quantity"):
+        _position_record(state=TradeState.OPEN, quantity=Decimal("-1"))
+
+
+def test_direct_construction_imposes_no_quantity_invariant_for_emergency() -> None:
+    """EMERGENCY deliberately gets no quantity invariant (FIX M1 scope limit):
+    neither zero nor positive quantity is rejected by the model for it."""
+    zero = _position_record(state=TradeState.EMERGENCY, quantity=Decimal("0"))
+    positive = _position_record(state=TradeState.EMERGENCY, quantity=Decimal("1"))
+    assert zero.quantity == Decimal("0")
+    assert positive.quantity == Decimal("1")
+
+
+# --- ProtectionLevels target_prices invariant (FIX m1) ----------------------
+
+
+def test_protection_levels_rejects_empty_target_prices() -> None:
+    with pytest.raises(PositionInputError, match="missing_target_prices"):
+        ProtectionLevels(stop_price=Decimal("1900"), target_prices=())
+
+
+def test_protection_levels_accepts_nonempty_target_prices() -> None:
+    protection = ProtectionLevels(stop_price=Decimal("1900"), target_prices=(Decimal("2000"),))
+    assert protection.target_prices == (Decimal("2000"),)
+
+
 # --- open_position_from_signal: initial SL/TP consumption ------------------
 
 
@@ -181,9 +273,7 @@ def test_open_position_never_invents_stop_or_target_when_absent() -> None:
 
 
 def test_partial_close_requires_positive_reduce_quantity() -> None:
-    with pytest.raises(
-        PositionInputError, match="partial_close_requires_positive_reduce_quantity"
-    ):
+    with pytest.raises(PositionInputError, match="partial_close_requires_positive_reduce_quantity"):
         _exit_decision(action="PARTIAL_CLOSE", reduce_quantity=None)
 
 
@@ -280,8 +370,12 @@ def test_partial_close_cannot_reduce_below_zero() -> None:
         apply_exit_decision(position, decision)
 
 
-def test_partial_close_rejected_once_already_exit_pending() -> None:
-    position = _position(state=TradeState.EXIT_PENDING, quantity=Decimal("1"))
+def test_partial_close_rejected_from_a_state_with_no_managing_transition() -> None:
+    """EXIT_PENDING/CLOSED cannot hold nonzero quantity (FIX M1), so the only
+    reachable state here to exercise the *transition* guard in isolation
+    from the quantity guard is EMERGENCY, which carries no quantity
+    invariant of its own."""
+    position = _position(state=TradeState.EMERGENCY, quantity=Decimal("1"))
     decision = _exit_decision(action="PARTIAL_CLOSE", reduce_quantity=Decimal("0.1"))
     with pytest.raises(PositionInputError, match="illegal_position_state_transition"):
         apply_exit_decision(position, decision)
@@ -356,6 +450,16 @@ def test_tighten_rejected_once_exit_pending() -> None:
         apply_exit_decision(position, decision)
 
 
+def test_tighten_fails_closed_from_emergency() -> None:
+    """FIX m2 (test-only): TIGHTEN must never succeed on an EMERGENCY
+    position. Existing behavior already fails closed here (EMERGENCY is not
+    in the OPEN/MANAGING allow-list) — this adds explicit coverage for it."""
+    position = _position(state=TradeState.EMERGENCY, quantity=Decimal("1"))
+    decision = _exit_decision(action="TIGHTEN", new_stop_price=Decimal("1930"))
+    with pytest.raises(PositionInputError, match="tighten_requires_open_or_managing_position"):
+        apply_exit_decision(position, decision)
+
+
 def test_apply_exit_decision_rejects_position_id_mismatch() -> None:
     position = _position()
     decision = _exit_decision(action="HOLD", position_id="pos:other")
@@ -373,13 +477,18 @@ def test_mark_closed_from_exit_pending_with_zero_quantity() -> None:
 
 
 def test_mark_closed_rejects_nonzero_quantity() -> None:
-    position = _position(state=TradeState.EXIT_PENDING, quantity=Decimal("0.1"))
+    """EXIT_PENDING/CLOSED can no longer hold nonzero quantity (FIX M1), so
+    mark_closed's own quantity guard is exercised via EMERGENCY, the only
+    lifecycle state without a quantity invariant of its own."""
+    position = _position(state=TradeState.EMERGENCY, quantity=Decimal("0.1"))
     with pytest.raises(PositionInputError, match="cannot_close_nonzero_quantity"):
         mark_closed(position)
 
 
 def test_mark_closed_rejects_wrong_state_even_with_zero_quantity() -> None:
-    position = _position(state=TradeState.MANAGING, quantity=Decimal("0"))
+    """MANAGING can no longer hold zero quantity (FIX M1); EMERGENCY (no
+    quantity invariant) is used to isolate the transition-table guard."""
+    position = _position(state=TradeState.EMERGENCY, quantity=Decimal("0"))
     with pytest.raises(PositionInputError, match="illegal_position_state_transition"):
         mark_closed(position)
 

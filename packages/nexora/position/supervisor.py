@@ -99,9 +99,7 @@ def _require_tightening_only(position: PositionRecord, new_stop_price: Decimal) 
         raise PositionInputError("invalid_new_stop_price")
     current_stop = position.protection.stop_price
     tightened = (
-        new_stop_price > current_stop
-        if position.side == "long"
-        else new_stop_price < current_stop
+        new_stop_price > current_stop if position.side == "long" else new_stop_price < current_stop
     )
     if not tightened:
         raise PositionInputError("protection_must_only_tighten")
