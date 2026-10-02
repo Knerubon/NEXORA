@@ -9,6 +9,7 @@ import { latestQuote, type QuoteSnapshot } from "./live-quote";
 import { ChartOverlays, LayerControls, OverlayPopup, useChartOverlays } from "./chart-overlays";
 import type { OverlayLayers, TrendlineSnapshot } from "./overlay-model";
 import { DrawingControls, DrawingLayer, DrawingPopup, useManualDrawings } from "./manual-drawing";
+import { ManualExecutionPanel } from "./manual-execution";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -328,6 +329,11 @@ export default function Home() {
       quoteTime={quote?.quote?.event_time} researchMode={state?.research_mode}
       connectionError={Boolean(error)} regime={output.regime?.state} history={output.signals?.history}
       entryReadiness={output.entry_readiness} />
+    <ManualExecutionPanel
+      symbol={output.event?.symbol ?? quote?.quote?.symbol ?? quote?.symbol}
+      currentPrice={quote?.quote ? (Number(quote.quote.bid) + Number(quote.quote.ask)) / 2 : output.event?.price}
+      systemHealth={connectionStatus === "live" ? "UNKNOWN (SystemHealthGate not wired — ADR-033 §18)" : connectionStatus}
+      brokerHealth={quote?.status ?? null} />
     <section><h2>Backtest Lab</h2><p>Results use recorded event prices. Compare runs only with matching data, costs and evaluation assumptions.</p>
       <label>Saved parameter set <select value={chosen} onChange={(e) => setChosen(e.target.value)}><option value="">Choose a configured set</option>{parameters.map((p) => <option key={p}>{p}</option>)}</select></label>
       <button disabled={busy || !chosen || !state?.research.event_count} onClick={() => void act("/backtest/runs", { parameter_set: chosen })}>Run research</button>
