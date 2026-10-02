@@ -10,6 +10,8 @@ TradeIntent boundary, and the explicit list of what remains PROVISIONAL/BLOCKED.
 
 from nexora.autonomous.authority import (
     AuthorityDecision,
+    AuthorityPolicyStatus,
+    ExecutionTransmissibility,
     ExistingPositionAuthority,
     NewTradeAuthority,
     ProtectionChange,
@@ -23,16 +25,19 @@ from nexora.autonomous.health import (
     SystemHealthGate,
     SystemHealthSnapshot,
 )
-from nexora.autonomous.risk_migration import RiskReductionProposal
+from nexora.autonomous.risk_migration import RiskReductionDecision, RiskReductionProposal
 
 __all__ = [
     "HEALTH_AXES",
     "AuthorityDecision",
+    "AuthorityPolicyStatus",
     "BrokerCapabilities",
+    "ExecutionTransmissibility",
     "ExistingPositionAuthority",
     "Health",
     "NewTradeAuthority",
     "ProtectionChange",
+    "RiskReductionDecision",
     "RiskReductionProposal",
     "SystemHealthGate",
     "SystemHealthSnapshot",
