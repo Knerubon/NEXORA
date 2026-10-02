@@ -1,0 +1,57 @@
+/* Scoped styles for the Control Center tree. Kept out of globals.css on
+   purpose: globals.css is a shared, high-conflict file edited by several
+   concurrent workstreams (DRAW-1, UI-READINESS-1, etc.) — importing this file
+   only from control-center/* components avoids colliding with them. */
+
+.cc-root { display: flex; flex-direction: column; gap: 1rem; }
+.cc-header { display: flex; flex-direction: column; gap: 0.25rem; }
+.cc-phase-banner {
+  background: #3a2a0d; color: #e8b84b; border: 1px solid #5c431a;
+  padding: 0.4rem 0.75rem; border-radius: 6px; font-size: 0.85rem; width: fit-content;
+}
+.cc-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 0.75rem; }
+.cc-panel { border: 1px solid #1f2b33; border-radius: 8px; padding: 0.75rem 1rem; background: #101a20; }
+.cc-panel header { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.cc-panel-note { opacity: 0.7; font-size: 0.85rem; }
+
+/* Trading mode */
+.cc-mode-options { display: flex; gap: 0.5rem; margin: 0.5rem 0; }
+.cc-mode-option { flex: 1; border: 1px solid #243442; border-radius: 6px; background: transparent; color: inherit; padding: 0.5rem; cursor: pointer; }
+.cc-mode-option.cc-mode-active { border-color: #4b9fff; background: #16222c; }
+.cc-mode-option.cc-mode-locked { opacity: 0.5; cursor: not-allowed; }
+.cc-mode-lock-badge { display: block; color: #c43650; }
+.cc-mode-safety-note { color: #c49a3a; font-size: 0.85rem; }
+.cc-auto-chip { border-radius: 999px; padding: 0.15rem 0.6rem; font-size: 0.75rem; font-weight: 600; }
+.cc-auto-chip.cc-auto-off { background: #1d2f24; color: #5fb98a; }
+.cc-auto-chip.cc-auto-on { background: #3a151c; color: #e8536f; }
+
+/* System health */
+.cc-health-chip { border-radius: 999px; padding: 0.1rem 0.5rem; font-size: 0.75rem; }
+.cc-health-ok { background: #1d2f24; color: #5fb98a; }
+.cc-health-degraded { background: #3a2a0d; color: #e8b84b; }
+.cc-health-unavailable { background: #2a2a2a; color: #9aa4ab; }
+.cc-block-reasons ul { list-style: none; padding: 0; margin: 0.25rem 0 0; display: flex; flex-direction: column; gap: 0.25rem; }
+
+/* Risk settings */
+.cc-risk-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem 1rem; }
+.cc-kill-armed { color: #e8536f; }
+
+/* Positions */
+.cc-position-row { border-top: 1px solid #1f2b33; padding-top: 0.5rem; margin-top: 0.5rem; }
+.cc-position-row:first-of-type { border-top: none; margin-top: 0; padding-top: 0; }
+.cc-side-buy { color: #5fb98a; }
+.cc-side-sell { color: #e8536f; }
+.cc-position-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.3rem 1rem; font-size: 0.85rem; }
+.cc-partial-close { list-style: none; padding: 0; font-size: 0.8rem; opacity: 0.8; }
+.cc-partial-done { text-decoration: line-through; }
+
+/* Scanners */
+.cc-scanner-row { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; padding: 0.35rem 0; font-size: 0.85rem; }
+.cc-scanner-status { opacity: 0.7; }
+.cc-inert-toggle { display: inline-flex; align-items: center; gap: 0.3rem; opacity: 0.6; }
+
+/* Emergency controls */
+.cc-emergency-stop { width: 100%; padding: 0.6rem; border-radius: 6px; border: 1px solid #e8536f; background: transparent; color: #e8536f; font-weight: 700; cursor: pointer; }
+.cc-emergency-stop.cc-emergency-armed { background: #3a151c; }
+.cc-alert-channels { margin-top: 0.5rem; display: flex; align-items: center; gap: 1rem; font-size: 0.85rem; }
+.cc-telegram-status[data-cc-telegram="disconnected"] { opacity: 0.6; }
