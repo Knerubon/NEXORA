@@ -221,7 +221,7 @@ def test_policy_denial_is_denied_and_not_applicable() -> None:
     decision = NewTradeAuthority.evaluate(
         config=TradingConfig(mode=TradingMode.ASSISTED, assisted_confirmation=True),
         health=_healthy_snapshot(),
-        entry_readiness="NOT_READY",  # type: ignore[arg-type]
+        entry_readiness="NOT_READY",
         risk_decision=_allow_risk_decision(),
     )
     assert not decision.allowed
@@ -351,6 +351,45 @@ def test_risk_reduction_decision_allowed_modify_protection_requires_resulting_pr
             action=TradeIntentKind.MODIFY_PROTECTION,
             allowed=True,
             reason_codes=(),
+        )
+
+
+def test_risk_reduction_decision_allowed_modify_protection_valid_positive_value() -> None:
+    decision = RiskReductionDecision(
+        decision_id="rrd:1",
+        proposal_id="rr:1",
+        position_id="pos:1",
+        action=TradeIntentKind.MODIFY_PROTECTION,
+        allowed=True,
+        reason_codes=(),
+        resulting_protection=Decimal("1.5"),
+    )
+    assert decision.resulting_protection == Decimal("1.5")
+
+
+@pytest.mark.parametrize(
+    "resulting_protection",
+    [
+        Decimal("0"),
+        Decimal("-1"),
+        Decimal("NaN"),
+        Decimal("Infinity"),
+        Decimal("-Infinity"),
+    ],
+    ids=["zero", "negative", "nan", "positive_infinity", "negative_infinity"],
+)
+def test_risk_reduction_decision_rejects_invalid_resulting_protection(
+    resulting_protection: Decimal,
+) -> None:
+    with pytest.raises(ValueError, match="invalid_resulting_protection"):
+        RiskReductionDecision(
+            decision_id="rrd:1",
+            proposal_id="rr:1",
+            position_id="pos:1",
+            action=TradeIntentKind.MODIFY_PROTECTION,
+            allowed=True,
+            reason_codes=(),
+            resulting_protection=resulting_protection,
         )
 
 

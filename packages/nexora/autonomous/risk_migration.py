@@ -113,7 +113,9 @@ class RiskReductionDecision:
                 not self.resulting_quantity.is_finite() or self.resulting_quantity < 0
             ):
                 raise ValueError("invalid_resulting_quantity")
-            if self.resulting_protection is not None and not self.resulting_protection.is_finite():
+            if self.resulting_protection is not None and (
+                not self.resulting_protection.is_finite() or self.resulting_protection <= 0
+            ):
                 raise ValueError("invalid_resulting_protection")
         elif self.resulting_quantity is not None or self.resulting_protection is not None:
             raise ValueError("denied_decision_must_not_carry_resulting_state")
