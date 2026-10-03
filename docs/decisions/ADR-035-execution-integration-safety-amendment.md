@@ -75,7 +75,7 @@ meaning made precise or extended additively; **unchanged** = deliberately retain
 |---|---|---|
 | s1 item 3 (broker symbol is the only instrument identity) and s9.1 (legacy-mode promises) | **clarified** | Still true for market data and research. For **execution**, legacy mode needs an explicit operator-declared `ExecutionInstrumentBinding` (section 5); a legacy symbol is never accepted as canonical identity by execution. |
 | s3 (`instrument_id` canonical, immutable once used by a stream), s5/s6 (exact binding, `feed_id`) | **unchanged** | Reused as the canonical identity authority for execution. |
-| s4.3 ("no `order_*` call is introduced") | **clarified** | The no-order rule is reaffirmed. |
+| s4.3 ("No `symbol_select`, `market_book_*` or `order_*` call is introduced.") | **clarified** | The no-order rule is reaffirmed. |
 | s15 row "Future Trade Journal" (records `instrument_id`, `feed_id`, `broker_symbol`) | **superseded in part** | An execution record carries `instrument_id`, `feed_id` (binding mode; it lives on `ResolvedFeed`) and the binding reference. The **broker symbol stays adapter-owned** and is not recorded by core, which departs from the ADR-025 row. |
 
 ### 2.2 ADR-033
@@ -118,7 +118,9 @@ the stop-on-first-denial rule. Any step that cannot establish safety (missing, s
 malformed, or contradictory input; any exception) denies and **nothing proceeds**.
 
 ```text
-Intent + AuthorityDecision are inputs (produced upstream; ADR-033/034). Then:
+Inputs: TradeIntent, SystemHealthSnapshot (used by step 2b and by the INV-12 axis), TradingConfig,
+kill switch, and the upstream AuthorityDecision (OPEN only; for MODIFY_PROTECTION step 2b
+re-derives it, 3.4). Then:
 
  1  RECONCILIATION GATE      acquire verified evidence -> aggregate status          [read-only, no write]
  2  RESOLUTION               owned position, identity, quantity, ProtectionChange   [read-only, no write]
@@ -131,7 +133,8 @@ Intent + AuthorityDecision are inputs (produced upstream; ADR-033/034). Then:
     MARKER
  7  TRANSMISSION             adapter.submit(request)                                [only step that can reach a broker]
  8  RESULT PERSISTENCE       record_result; release only if clean zero-fill REJECTED
- 9  POST-EXECUTION           classify_reconciliation on fresh evidence; apply result
+ 9  POST-EXECUTION           apply the PERSISTED result to local state through the result-driven
+                             lifecycle helper (3.11), then classify_reconciliation on fresh evidence;
     RECONCILIATION           to local position state; gate for the next intent
 ```
 
@@ -156,6 +159,13 @@ justified in 3.2: **resolution (d) moves before the guard (b) and before the cla
    `BrokerExecutionAdapter`"). Resolution is
    read-only, so running it before the guard cannot burn a key or touch a broker. It requires a
    `SYNCHRONIZED` reconciliation for the position (3.3).
+2b. **Authority re-evaluation right after resolution (MODIFY_PROTECTION only).** The
+   `ProtectionChange` can only be derived once the position is resolved (step 2), and
+   `ExistingPositionAuthority` consumes it (under degradation), so authority for MODIFY_PROTECTION must
+   be computed after step 2 from the `SystemHealthSnapshot` and the derived value, never accepted from
+   upstream (3.4). It precedes the guard because the guard consumes the resulting `AuthorityDecision`
+   and must see exactly one. It is pure, so it cannot burn a key. Step numbering stays 1-9 with this
+   sub-step 2b; the order is "1, 2, 2b, 3-9".
 3. **Guard before any durable write.** The guard is pure, so a denial leaves no trace. Authority
    `NOT_TRANSMITTABLE` (broker unhealthy, ADR-033 s11), mode, assisted confirmation, kill switch,
    and reconciliation-by-kind are all decided here. The guard remains **pure and free of
@@ -330,8 +340,10 @@ Frozen rules:
   the key stays claimed and the operator issues a **new intent** with a new `proposal_id`; every
   statement below that a caller may resubmit "as generation g+1" after an abort then does not apply.
 - **W5.** The dedup store must additionally support: the new events; a state accessor returning
-  the W3 state; `abort` and `attempt` with `expected_count`; and an explicit-generation late-result
-  append (3.9). Two current behaviors must change: (1) `_events` whitelists only
+  the W3 state; `abort` and `attempt` with `expected_count`; an explicit-generation late-result
+  append (3.9); and an **enumeration accessor** listing the keys currently `ATTEMPTED_NO_RESULT` or
+  whose latest result is `UNKNOWN` (the store has no list API today; required by the OPEN-16 interim
+  rule and INV-12). Two current behaviors must change: (1) `_events` whitelists only
   `claim`/`result`/`release` and would raise `dedup_event_malformed` on `attempt`/`abort`/`reconciled`/
   `quarantine_resolved`, so the new names must be recognized; (2) `_state` raises
   `dedup_released_generation_not_safe` for any released generation whose latest result is not a clean
@@ -467,13 +479,29 @@ store before step 8/9**. Quantity and state changes are consequences of a **pers
 Which local state represents "outcome UNKNOWN/ACCEPTED/PARTIAL while the close is unresolved" is
 **OPEN-7**.
 
-**Step 9 for a determinate `FILLED` CLOSE** (filled == resolved quantity): from the persisted result
-the pipeline applies the supervisor's pure lifecycle functions, `apply_exit_decision(CLOSE)` (local
-quantity 0, `EXIT_PENDING`) and then `mark_closed` (`CLOSED`, which requires quantity 0), and only
-then runs `classify_reconciliation`. A local `CLOSED` record against a flat broker is a `MATCH`;
-without this application a local `EXIT_PENDING` (quantity 0) record would be reported
-`LOCAL_OPEN_BROKER_MISSING`/`UNSYNCHRONIZED` forever. A `FILLED` REDUCE applies the `PARTIAL_CLOSE`
-mechanics. `PARTIALLY_FILLED`, `ACCEPTED` and `UNKNOWN` apply nothing until OPEN-7 is decided.
+**Result-driven lifecycle application (step 9; new contract).** `apply_exit_decision` requires an
+`ExitDecision` with non-empty evidence (and `reduce_quantity` for a partial close). A manual CLOSE,
+CLOSE ALL or REDUCE carries only a `ManualOrigin`, so no `ExitDecision` exists, and the pipeline must
+**never fabricate one** (same anti-pattern as a synthetic `ResearchSignal`; AGENTS.md s9, ADR-033
+s10/s15). The pipeline therefore does **not** route through `ExitDecision` at all. Frozen instead is
+a new pure helper (proposed name `apply_execution_result(position, request, result) -> PositionRecord`,
+new module under `packages/nexora/position/`) that derives the lifecycle change from the **persisted
+`ExecutionResult` alone**, reusing the supervisor's `_require_transition` and `mark_closed`
+invariants and `PositionRecord`'s quantity/state invariants:
+
+| Persisted result | Applied to the position (must be `OPEN`/`MANAGING`) |
+|---|---|
+| CLOSE, `FILLED` (filled == resolved quantity) | quantity 0 and `EXIT_PENDING`, then `CLOSED` (`mark_closed` requires quantity 0). Without this a local `EXIT_PENDING` (quantity 0) record would be reported `LOCAL_OPEN_BROKER_MISSING`/`UNSYNCHRONIZED` forever against a flat broker; a local `CLOSED` record against a flat broker is a `MATCH`. |
+| REDUCE, `FILLED` | quantity reduced by the filled quantity, state stays `MANAGING` (the ADR-033 s15 partial-close rule; a reduction leaving zero is refused, as `apply_exit_decision` refuses it) |
+| any action with `PARTIALLY_FILLED`, `ACCEPTED` or `UNKNOWN`; MODIFY_PROTECTION of any status | **nothing applied until OPEN-7 is decided** (OPEN-7 now also covers when/how local protection is updated for MODIFY_PROTECTION; until then a protection change that the broker applied reads as `PROTECTION_MISMATCH` and blocks) |
+
+**Single path for algorithmic closes.** A close that **does** have an `ExitDecision` (a
+`PositionOrigin` intent) uses the **same** result-driven application: `ExitDecision` stays the
+evidence/origin of the intent (`exit_decision_ref`), and its pure `apply_exit_decision` output is
+**not** applied to the durable store. Where both can be computed, the helper's output for a `FILLED`
+CLOSE/REDUCE must equal what `apply_exit_decision` (+ `mark_closed`) would produce (equivalence test,
+INV-29). INV-23 is preserved: local state is mutated only after a persisted result. Whether Rin
+accepts this resolution is Decisions-for-Rin #7.
 
 ## 4. Frozen contract changes (on approval)
 
@@ -594,8 +622,11 @@ additive extension, **shape proposed and marked OPEN-6 (not guessed)**:
 - `EXECUTION_RESULT_UNKNOWN` records use `ExecutionResult.nexora_position_ref` for `position_ref`
   when present.
 
-If the adapter cannot attest `close_pending` or `complete`, the EXIT_PENDING and CLOSED recovery
-targets of section 6 are simply **unavailable** (only MANAGING, from a plain `MATCH`, remains).
+Section 6 rule 1 requires a **complete** observation, so until OPEN-6 is decided and an adapter can
+attest `complete`, **EMERGENCY recovery is unavailable for every target, including `MATCH` ->
+`MANAGING`** (fail closed). If the adapter additionally cannot attest `close_pending`, the
+EXIT_PENDING target stays unavailable. Whether a `MATCH` target may skip `complete` is a decision
+requested of Rin (section 12 #8), not decided here.
 
 ### 4.7 Consumers affected (for planning the contract PR)
 
@@ -604,12 +635,12 @@ targets of section 6 are simply **unavailable** (only MANAGING, from a plain `MA
 | `execution/models.py` | 4.1, 4.3 | new/optional fields, per-action invariants |
 | `execution/idempotency.py` (`build_execution_request`) | 4.1, OPEN-15 | pass `new_position_ref`; key derivation **unchanged** (ADR-034 s6) unless Rin decides otherwise under OPEN-15 |
 | `execution/guard.py` | 3.3, 3.4, 4.1 | `protection_change`, `new_position_ref` inputs; rules G4-G7; supersede the F2 docstring/test |
-| `execution/dedup_store.py` | 3.6, 3.9, 4.3 | `attempt`/`abort`/`reconciled`/`quarantine_resolved` recognized in `_events`; `_state` changes of W5 (released-after-abort only if OPEN-14; `quarantine_resolved` accepted; late-result-after-release detection kept); W3 state accessor; integrity-vs-I/O error split; late-result append; `deserialize_result` accepts `requested_quantity=None` and the new fields |
+| `execution/dedup_store.py` | 3.6, 3.9, 4.3 | `attempt`/`abort`/`reconciled`/`quarantine_resolved` recognized in `_events`; `_state` changes of W5 (released-after-abort only if OPEN-14; `quarantine_resolved` accepted; late-result-after-release detection kept); W3 state accessor; integrity-vs-I/O error split; late-result append; unresolved-key enumeration accessor; `deserialize_result` accepts `requested_quantity=None` and the new fields |
 | `execution/broker_adapter.py` | 4.3, 4.5, 3.7, 3.8, INV-25 | action-aware `submit` (no refusal of MODIFY_PROTECTION/CLOSE once resolved), shared `validate_volume`, "UNKNOWN unless non-transmission proven", attribution ref handling, **idempotency identity for same-key retries (OPEN-15: generation-qualified adapter idempotency vs a new request_id/key per retry; today `_results[idempotency_key]` caches)**, and a read-only `adapter_mode` accessor on the Protocol (INV-25) |
 | `execution/reconciler.py` | 4.6, 5.1, 5.3 | explicit instrument resolver (no `symbol == instrument_id` assumption), new findings/attestations, result attribution |
 | `execution/reconciliation.py` | 4.6 | new findings in `_FINDING_STATUS` |
 | `execution/close_all.py`, `close_all_plan.py` | 5.1, 6 | symbol filter on execution-domain symbol; EMERGENCY stays excluded; plan entries unchanged in shape |
-| `position/models.py`, `position/supervisor.py` | 3.11, 6 | no shape change to `PositionRecord`; supervisor output applied only after persisted result; guarded EMERGENCY recovery function |
+| `position/models.py`, `position/supervisor.py` | 3.11, 6 | no shape change to `PositionRecord`; `apply_exit_decision` output is never applied to the durable store (3.11); **new** result-driven helper `apply_execution_result` (PR-8; no `ExitDecision` fabricated); guarded EMERGENCY recovery function |
 | `autonomous/broker_capabilities.py` | 4.5 | `volume_step_anchor`, `validate_volume` |
 | `tests/test_execution_contracts_v1.py`, `test_execution_guard.py`, `test_execution_dedup_store.py`, `test_execution_broker_adapter.py`, `test_execution_reconciler.py`, `test_execution_close_all_plan.py` | all | migrate constructors; supersede F2 test; add the tests named in section 7 |
 
@@ -714,7 +745,7 @@ EmergencyRecoveryEvidence {
 
 | Verified evidence | Target | Notes |
 |---|---|---|
-| `MATCH` for the position with `local_quantity == broker_quantity > 0` and protection matching | `MANAGING` | quantity = the matched quantity; uses only today's vocabulary |
+| `MATCH` for the position with `local_quantity == broker_quantity > 0` and protection matching | `MANAGING` | quantity = the matched quantity; still requires a complete observation (rule 1, OPEN-6, section 12 #8) |
 | `CLOSE_PENDING_CONFIRMED` (4.6, OPEN-6) | `EXIT_PENDING` | local quantity 0 per the `PositionRecord` invariant |
 | `BROKER_FLAT_CONFIRMED` (4.6, OPEN-6) with a complete snapshot | `CLOSED` | local quantity 0 |
 | anything else (mismatch, unknown, ambiguous, missing, conflicting records) | **no recovery**; stays `EMERGENCY` | |
@@ -740,13 +771,13 @@ update.
 | INV-03 | Manual UI remains locked; ADR-035 and PR-1..PR-7 change no file under `apps/web` | per-PR diff check (no new test); `EXECUTION_LOCKED` in `apps/web/app/manual-execution.tsx` untouched (ADR-034 s9) |
 | INV-04 | AI cannot bypass: no pipeline/preflight/recovery function takes an `AIAnalysis` | `test_pipeline_and_preflight_have_no_ai_analysis_parameter` |
 | INV-05 | No synthetic `ResearchSignal`/`signal_id`/`signal_decision_ref`/`entry_readiness_ref`; `ResolvedExecution` and `EmergencyRecoveryEvidence` have no such field | `test_resolved_execution_has_no_signal_fields` |
-| INV-06 | Pipeline order is exactly steps 1-9; a pure denial at steps 1-4 never calls `claim` | `test_pipeline_pure_denial_never_claims_key`, `test_pipeline_step_order_is_frozen` |
+| INV-06 | Pipeline order is exactly 1, 2, 2b, 3-9 (2b only for MODIFY_PROTECTION); a pure denial at steps 1-4 never calls `claim` | `test_pipeline_pure_denial_never_claims_key`, `test_pipeline_step_order_is_frozen` |
 | INV-07 | Nothing is transmitted before `claim` and `attempt#g` are durable; marker failure => no `submit` | `test_submit_requires_durable_claim_and_attempt_marker`, `test_marker_write_failure_prevents_transmission` |
 | INV-08 | Claim without marker is `CLAIMED_NOT_ATTEMPTED`; attempt without result is `ATTEMPTED_NO_RESULT` (UNKNOWN-equivalent, never auto-released); `attempt`/`abort` are mutually exclusive | `test_dedup_states_follow_w3_table`, `test_attempt_and_abort_mutually_exclusive`, `test_attempted_no_result_never_released` |
 | INV-09 | `UNKNOWN` is never `REJECTED`, never blindly retried; adapter returns `UNKNOWN` unless non-transmission is proven | existing `test_unsafe_statuses_are_never_safe_to_retry`; new `test_adapter_returns_unknown_when_nontransmission_unproven` |
 | INV-10 | Retry = same key after clean `REJECTED` (and, **only if OPEN-14 is approved**, `ABORTED_NEVER_ATTEMPTED`), with quantity re-resolved, and only once OPEN-15 is decided; everything else needs a new `proposal_id`; same-key CLOSE after partial fill is a duplicate | `test_retry_set_is_clean_rejected` (+ `test_retry_set_includes_never_attempted` only if OPEN-14 approved; otherwise `test_never_attempted_requires_new_intent`), `test_close_remainder_after_partial_fill_requires_new_intent`, `test_duplicate_never_reresolves_quantity` |
 | INV-11 | Concurrent claim: exactly one `FIRST_CLAIM` | existing dedup concurrency test; extend for `attempt` race |
-| INV-12 | The `reconciliation` health axis is derived from the same evidence the gate uses; they cannot disagree | `test_health_reconciliation_axis_matches_gate_evidence` |
+| INV-12 | The `reconciliation` health axis is derived from the same evidence the gate uses (including the enumeration of unresolved dedup keys, W5/OPEN-16); they cannot disagree | `test_health_reconciliation_axis_matches_gate_evidence` |
 | INV-13 | REDUCE/CLOSE/MODIFY_PROTECTION require `SYNCHRONIZED`; CLOSE local != broker quantity blocks without capping | `test_close_quantity_mismatch_blocks_without_cap`, `test_risk_reducing_requires_synchronized` (replaces `test_risk_reducing_not_blocked_by_reconciliation_alone`) |
 | INV-14 | MODIFY_PROTECTION: TIGHTEN passes kill switch (but not other gates); WIDEN blocked while kill switch armed; unclassified/UNKNOWN denied; classification is derived, not caller-asserted | `test_guard_tighten_passes_kill_switch`, `test_guard_widen_blocked_by_kill_switch`, `test_guard_unclassified_protection_denied`, `test_pipeline_derives_protection_change` |
 | INV-15 | CLOSE quantity is never fabricated at intent creation; resolved at step 2 from an `OPEN`/`MANAGING` record; recorded in `ExecutionResult.requested_quantity` and `attempt#g` | `test_close_quantity_resolved_before_guard`, `test_execution_result_preserves_resolved_quantity` |
@@ -757,9 +788,10 @@ update.
 | INV-20 | `nexora_position_ref` survives restart or the position is broker-only and blocked | `test_adapter_attributes_positions_after_restart`, `test_unattributed_position_blocks_actions` |
 | INV-21 | `QUARANTINED` keys deny all intents; clearing is append-only, evidence-referenced, never timeout-based | `test_quarantined_key_denies`, `test_quarantine_clear_is_append_only` |
 | INV-22 | EMERGENCY exits only through `recover_from_emergency`; table unchanged; target derived from evidence; refuses on mismatch; no operator-selected target | `test_emergency_transition_table_unchanged`, `test_emergency_exit_only_via_recovery_function`, `test_recovery_target_derived_from_evidence`, `test_recovery_refused_without_verified_evidence` |
-| INV-23 | Position quantity/state is mutated only from a persisted `ExecutionResult` | `test_position_not_mutated_before_persisted_result` |
+| INV-23 | Position quantity/state is mutated only from a persisted `ExecutionResult`, only through the result-driven helper (3.11), never by fabricating an `ExitDecision` | `test_position_not_mutated_before_persisted_result`, `test_lifecycle_applied_without_exit_decision`, `test_no_fabricated_exit_decision` |
+| INV-29 | The result-driven helper equals `apply_exit_decision` + `mark_closed` for FILLED CLOSE/REDUCE where an `ExitDecision` exists | `test_result_driven_application_equals_exit_decision_application` |
 | INV-24 | Pipeline never loops or auto-resubmits | `test_pipeline_never_resubmits_after_release` |
-| INV-25 | Phase 1 simulator-only: the pipeline reads a read-only `adapter_mode` accessor added to the `BrokerExecutionAdapter` Protocol (the adapter's `mode` is private and `BrokerCapabilities.execution_mode` is an opaque token, so neither is usable) and refuses unless it equals `SIMULATION_MODE` (`"simulation"`) | `test_pipeline_refuses_non_simulation_adapter` |
+| INV-25 | Phase 1 simulator-only: the pipeline reads a read-only `adapter_mode` accessor added to the `BrokerExecutionAdapter` Protocol (the adapter's `mode` is private and `BrokerCapabilities.execution_mode` is an opaque token, so neither is usable) and refuses unless it equals `SIMULATION_MODE` (`"simulation"`). This is adapter **self-attestation**, not a safeguard against a malicious adapter; the real barrier is that no real adapter exists and demo/real stay locked. Because the Protocol is `@runtime_checkable`, `SimulatedBrokerAdapter` must implement the accessor | `test_pipeline_refuses_non_simulation_adapter` |
 | INV-26 | Outside pure unit tests the pipeline's dedup store is journal-backed (durable); `InMemoryExecutionDedupStore` is refused. Whether a simulated pipeline run may use in-memory is OPEN-18 | `test_pipeline_refuses_in_memory_dedup_store_outside_tests` |
 | INV-27 | Quantity and protection payload come only from the sources fixed by OPEN-17; the pipeline denies when absent and never defaults or fabricates | `test_pipeline_denies_missing_quantity_or_protection_payload` |
 | INV-28 | Authority for MODIFY_PROTECTION is re-evaluated after step 2 with the derived `ProtectionChange`; an upstream decision is never passed to the guard | `test_pipeline_reevaluates_authority_with_derived_protection_change` |
@@ -774,12 +806,13 @@ update.
 | | Instrument binding/resolver and reconciler without the symbol-equality assumption (F7) | PR-1 types + PR-7 behavior; INV-19/20 |
 | | Dedup write-ahead marker, `abort`, W3 state, late-result append (F6) | PR-5; INV-07/08/21 |
 | | Shared `validate_volume` + anchor (F10) | PR-1/PR-7; INV-18 |
-| | Position-mutation timing (3.11) | PR-4 design; INV-23 |
+| | Position-mutation timing (3.11) | PR-4 + PR-8; INV-23/29 |
 | | Reconciliation vocabulary decision (OPEN-6) and BrokerStateQuery port decision (OPEN-2) | Rin decision before PR-3/PR-4 depend on them |
+| | EMERGENCY recovery, all targets (blocked on OPEN-6 `complete`; section 12 #8) | PR-3 |
+| | Result-driven lifecycle helper (3.11, INV-23/29) | PR-8 |
 | **CAN-DO-DURING-INTEGRATION** | `ExecutionPreflight` structural checks | PR-6 |
 | | `ExecutionPipeline`, exports in `execution/__init__.py`, task-record cleanup | PR-4 |
 | | Denial audit logging (non-key-burning), operator tooling for quarantine/recovery | with PR-4/PR-3 |
-| | EMERGENCY recovery for the `MATCH -> MANAGING` target (today's vocabulary only) | PR-3 |
 | **BEFORE-PAPER-DEMO** (simulator through the pipeline; not a broker demo) | OPEN-1 freshness bounds decided | Quant/Architect |
 | | OPEN-11 risk-reducing preflight policy decided (else risk-reducing stays denied) | Quant |
 | | OPEN-5 position-level exclusivity decided (no enforcement exists until then) | Architect |
@@ -809,15 +842,20 @@ PR-1  contracts: ExecutionRequest.new_position_ref, ExecutionResult changes, Res
    PR-2 guard   PR-3 EMERGENCY  PR-5 dedup     PR-6 preflight  PR-7 consumers: reconciler.py
    ProtectionCh. recovery       write-ahead    (new file)      (resolver, attribution),
    (guard.py,    (position/,    marker, abort,                 broker_adapter.py (action-aware,
-   test_exec_    new module)    quarantine                     shared validate_volume)
-   guard)        needs OPEN-6   (dedup_store.py)
+   test_exec_    new module)    quarantine,                    shared validate_volume,
+   guard)        needs OPEN-6   unresolved-key                 adapter_mode, OPEN-15 retry
+                                enumeration                    identity)
+                                (dedup_store.py)
         └────────────┴─────────────┴──────┬───────┴──────────────┘
                                           ▼
               PR-4  ExecutionPipeline + exports + task-record cleanup
-                    (depends on PR-1, 2, 5, 6, 7; PR-3 optional for first wiring)
+                    (depends on PR-1, 2, 5, 6, 7, 8; PR-3 optional for first wiring)
                                           ▼
                     integration review (independent) ── paper-demo gate (section 8)
 ```
+
+PR-8 (result-driven lifecycle helper, new module under `position/`, 3.11) depends on PR-1 only, is
+file-disjoint from PR-2/3/5/6/7 and may run in parallel with them; PR-4 needs it.
 
 PR-2's ProtectionChange logic is independent of PR-1; its `new_position_ref` passthrough needs
 PR-1, so merge order is PR-1 then PR-2. PR-2/3/5/6/7 touch disjoint files and may run in parallel
@@ -851,10 +889,10 @@ already forced by the rest of this ADR, not a policy.
 | OPEN-1 | Maximum age of reconciliation evidence, preflight verdict and health/authority inputs at step 6 and in EMERGENCY recovery | Quant + Architect | step 6 cannot be implemented with a bound; no paper-demo |
 | OPEN-2 | The read-only **BrokerStateQuery** port: position snapshot with completeness, and order/deal lookup by request or idempotency reference; and whether manual operator attestation may resolve `ATTEMPTED_NO_RESULT`/`UNKNOWN` | Architect (+ Security) | no release path out of UNKNOWN; key stays blocked |
 | OPEN-3 | Quarantine clearing: who may append `quarantine_resolved`, record format, authorization | Architect + Security | quarantined keys stay quarantined |
-| OPEN-4 | Reconciliation scope for position actions: per-position subset vs aggregate; treatment of foreign broker-only positions and unattributed `UNKNOWN` records. **Stated cost of the interim aggregate rule:** a mismatch on another position, or a foreign broker-only position, blocks **every** CLOSE and TIGHTEN, including in an emergency | Architect | aggregate only (3.3) |
+| OPEN-4 | Reconciliation scope for position actions: per-position subset vs aggregate; treatment of foreign broker-only positions and unattributed `UNKNOWN` records. **Stated cost of the interim aggregate rule:** a mismatch on another position, or a foreign broker-only position, blocks **every** CLOSE and TIGHTEN, including in an emergency, **and makes EMERGENCY recovery impossible** (section 6 requires the aggregate, ignoring the confirming record, to be SYNCHRONIZED) while any foreign broker-only or other-position mismatch exists | Architect | aggregate only (3.3) |
 | OPEN-5 | Position-level in-flight exclusivity between **different** intents on one position (F11): mechanism, and deny vs queue | Architect | **no enforcement exists**: the pipeline offers no protection against two different intents on one position, so any integration must be driven by one serialized caller by external discipline (not enforced by this ADR); real transmission blocked |
 | OPEN-6 | Exact shape of the vocabulary extension in 4.6 (`complete`, `close_pending`, `CLOSE_PENDING_CONFIRMED`, `BROKER_FLAT_CONFIRMED`, derived statuses) and whether adapters can attest them | Architect | EXIT_PENDING/CLOSED recovery targets unavailable |
-| OPEN-7 | Local position state while a transmitted close/reduce is `UNKNOWN`/`ACCEPTED`/`PARTIALLY_FILLED`; what triggers EMERGENCY; the consequence of a late unsafe result | Architect + Quant | local state not mutated before a persisted result (3.11) |
+| OPEN-7 | Local position state while a transmitted close/reduce is `UNKNOWN`/`ACCEPTED`/`PARTIALLY_FILLED` (and how a `PARTIALLY_FILLED` result updates local quantity); when/how local protection is updated for MODIFY_PROTECTION; what triggers EMERGENCY; the consequence of a late unsafe result | Architect + Quant | local state not mutated before a persisted result (3.11) |
 | OPEN-8 | Whether `volume_min`/step apply to a full-position CLOSE of a non-conforming residual | Architect + Quant | no exemption: such a CLOSE is blocked |
 | OPEN-9 | Legacy mode: source/format of the operator-declared execution binding, and whether legacy mode may ever reach transmission | Architect (Rin) | legacy execution denied (`execution_binding_missing`) |
 | OPEN-10 | `ProtectionChange` beyond stop-only tightening (target changes, stop removal), and whether a WIDEN should be permitted at all when the kill switch is off | Quant | only stop-only strict tightening is `TIGHTEN`; all else fails closed |
@@ -863,7 +901,7 @@ already forced by the rest of this ADR, not a policy.
 | OPEN-13 | Adopting broker quantity into a diverged local record (state repair), incl. EMERGENCY recovery with `QUANTITY_MISMATCH` | Architect | recovery refused; no repair |
 | OPEN-14 | Confirm W4(ii): `ABORTED_NEVER_ATTEMPTED` as a retry-eligible state (widens the store's release set; needs the `_state`/`_events` changes of W5) | Rin | if declined, abort stays claimed; operator uses a new intent; every "resubmit as g+1 after abort" statement in 3.6/3.7/3.10 and INV-10's never-attempted clause is void |
 | OPEN-15 | Retry identity at the adapter: the adapter contract is idempotent per `request.idempotency_key` and the simulator caches by it, so a same-key retry (generation g+1) would return the cached result. Options: generation-qualified adapter idempotency, or a new `request_id`/key per retry. ADR-034 s6 key derivation stays unchanged unless Rin decides otherwise | Rin + Architect | same-key retry not implementable; a new intent is required |
-| OPEN-16 | How `ATTEMPTED_NO_RESULT` is represented to `classify_reconciliation` (explicit marker input vs a 4.6 vocabulary addition) | Architect | pipeline treats any `ATTEMPTED_NO_RESULT` key as blocking `UNKNOWN` at step 1 |
+| OPEN-16 | How `ATTEMPTED_NO_RESULT` is represented to `classify_reconciliation` (explicit marker input vs a 4.6 vocabulary addition) | Architect | pipeline treats any `ATTEMPTED_NO_RESULT` key as blocking `UNKNOWN` at step 1, which requires the store's unresolved-key enumeration accessor (W5); a single unresolved key therefore blocks every action globally, including an emergency CLOSE |
 | OPEN-17 | Origin of the OPEN/REDUCE quantity and the MODIFY_PROTECTION payload: `TradeIntent` carries neither; candidates are Risk sizing, `RiskReductionDecision.resulting_quantity`/`resulting_protection`, `ExitDecision.reduce_quantity`/`new_stop_price`, or caller-supplied (today's guard). OPEN sizing is a Risk decision; this ADR does not touch Track E or manual-OPEN provenance | Architect + Quant (Risk) | pipeline **denies when the payload is absent**; never defaults or fabricates |
 | OPEN-18 | Whether a non-durable `InMemoryExecutionDedupStore` is allowed for any simulated pipeline run | Rin | in-memory refused outside pure unit tests (INV-26) |
 
@@ -875,9 +913,13 @@ Each has a fail-closed default that applies until Rin decides.
 |---|---|---|
 | 1 | Approve the deviation from the (a)-(h) sequence: resolution before guard and claim, plus the new last-look + attempt-marker step (3.1/3.2) | without approval the order cannot be frozen; no integration |
 | 2 | Retry identity at the adapter (OPEN-15) and the W4(ii) retry widening (OPEN-14) | no same-key retry; new intent required |
-| 3 | Whether REDUCE joins CLOSE/MODIFY_PROTECTION in requiring `SYNCHRONIZED` (decision 5 covers CLOSE only; REDUCE is extended here by analogy) and acceptance of the aggregate-scope cost (OPEN-4: a position-wide or foreign broker-only mismatch blocks every CLOSE/TIGHTEN, including in an emergency) | REDUCE requires `SYNCHRONIZED`; aggregate scope |
+| 3 | Whether REDUCE joins CLOSE/MODIFY_PROTECTION in requiring `SYNCHRONIZED` (decision 5 covers CLOSE only; REDUCE is extended here by analogy) and acceptance of the aggregate-scope cost (OPEN-4: a position-wide or foreign broker-only mismatch blocks every CLOSE/TIGHTEN, including in an emergency, and also blocks EMERGENCY recovery) | REDUCE requires `SYNCHRONIZED`; aggregate scope |
 | 4 | Payload origin (OPEN-17) and that the pipeline, not upstream, re-evaluates authority after step 2 with the derived `ProtectionChange` (3.4) | pipeline denies when payload absent; authority re-evaluated by the pipeline |
 | 5 | Whether `preflight_policy_undecided` (deny) blocking **all** risk-reducing transmission, even in the paper simulator, is intended until OPEN-11 is decided | blocked |
 | 6 | Whether a non-durable in-memory dedup store is allowed for any simulated pipeline run (OPEN-18) | refused outside pure unit tests |
+
+| 7 | How the local lifecycle is advanced from a persisted `ExecutionResult` when no `ExitDecision` exists (manual CLOSE, CLOSE ALL, REDUCE): the result-driven helper of 3.11, with a single path also for algorithmic closes | no local state mutation; nothing applied beyond FILLED CLOSE/REDUCE per 3.11 until approved |
+| 8 | Whether EMERGENCY -> MANAGING (plain `MATCH`) requires a **complete** broker observation (4.6, OPEN-6), and the accepted cost that recovery is blocked while any unrelated or foreign mismatch exists (OPEN-4) | complete observation required; recovery unavailable for every target until OPEN-6 |
+| 9 | Whether the OPEN-16 interim (any single unresolved key blocks every action globally) is acceptable given the emergency-CLOSE cost, and the enumeration mechanism it needs | blocks globally; enumeration accessor required in the store |
 
 EXECUTION INTEGRATION SAFETY AMENDMENT PROPOSED — NOTHING FROZEN UNTIL RIN APPROVES
