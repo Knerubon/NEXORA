@@ -87,7 +87,7 @@ meaning made precise or extended additively; **unchanged** = deliberately retain
 | s11 (`ExistingPositionAuthority` allows REDUCE/CLOSE/TIGHTEN under non-broker degradation; "reconciliation after reconnect is explicit") | **clarified** | Authority-level allow is unchanged. Allowing is not transmitting: every position-bound action additionally passes the reconciliation gate (section 3.3), which is where the s11 requirement that reconciliation precede any new action is enforced (exact s11 text: "before `ExistingPositionAuthority` allows any new action on that position"). Broker `UNHEALTHY` fail-closed is unchanged. |
 | s13 "checks in this order: SystemHealthGate, duplicate-order detection, spread, slippage, margin" and "Only after all pass does it emit an `ExecutionIntent`" | **superseded** | Replaced by the nine-step order in section 3. The `ExecutionIntent` wording was already superseded by ADR-034 s4 (`ExecutionRequest`); reaffirmed. "`ExecutionResult` (filled/rejected/error)" is superseded by ADR-034 s5 (there is no `error`; unresolved is `UNKNOWN`). "keyed on `TradeIntent.provenance.proposal_id`" is superseded by the ADR-034 s6 key. |
 | s14 `BrokerCapabilities` | **clarified** + one additive field | Shape otherwise unchanged. Adds an optional volume-step anchor and places shared volume validation with `BrokerCapabilities` (section 4.5). "BLOCKED until a real provider" is unchanged. |
-| s15 partial-close lifecycle clarification | **clarified** | Adds the position-mutation timing rule (section 3.11): no local quantity/state mutation is applied before a persisted `ExecutionResult`. |
+| s15 partial-close lifecycle clarification | **clarified** | Adds the position-mutation timing rule (section 3.11): no local quantity/state mutation is applied before a persisted `ExecutionResult`, and lifecycle application is driven by a new result-driven helper (`apply_execution_result`), not by an `ExitDecision`. |
 | s17 "consumes `ExecutionIntent`, returns `ExecutionResult`" | **clarified** | Wording follows ADR-034. The adapter owns `instrument_id` <-> broker symbol (section 5). Interface-only/simulator-only scope unchanged. |
 | s18 `SystemHealthGate` (`reconciliation` axis) | **clarified** | The `reconciliation` health axis must be derived from the same evidence set the reconciliation gate uses (INV-12). |
 | s25 row "TradeLifecycle / TradeState — FROZEN (table adopted verbatim)"; code comment in `autonomous_contracts.py` "terminal states have no outgoing transitions" | **clarified** | ADR-033's body contains no EMERGENCY-specific sentence; the "terminal" wording is the comment on `TRADE_STATE_TRANSITIONS` and TASK 1A instruction E. The **table is not changed**: `TRADE_STATE_TRANSITIONS[EMERGENCY]` stays `frozenset()`. ADR-035 adds one guarded exit that does **not** go through the table (section 6). |
@@ -383,7 +383,7 @@ the marker, the state is `ATTEMPTED_NO_RESULT` and the UNKNOWN rules apply.
   `proposal_id`), resolved only after step 9 reconciliation reports `SYNCHRONIZED` against the
   post-fill quantity. Nothing infers the remainder from the old request. This depends on OPEN-7:
   how the local quantity is updated from a `PARTIALLY_FILLED` result is not decided, so the
-  "post-fill quantity" cannot be reconciled until it is.
+  "post-fill quantity" cannot be reconciled until it is. **Stated consequence:** until OPEN-7 is decided a `PARTIALLY_FILLED` CLOSE leaves local quantity unchanged while the broker holds less, so reconciliation reports `QUANTITY_MISMATCH`/`UNSYNCHRONIZED`, which blocks the remainder CLOSE and every other action with the exposure left unmanaged.
 - **Resolved quantity and the key.** The key does not include quantity. The quantity that is
   authoritative for a generation is the one written into that generation's `attempt#g` and into
   `ExecutionResult.requested_quantity`. A duplicate never re-resolves or substitutes a quantity.
@@ -461,7 +461,7 @@ evidence per 3.8. "Recovery" is the startup store recovery of 3.6.
 | 12 | Clean zero-fill `REJECTED` | `result#g`, then `release#g` | explicit new submission (g+1) **once OPEN-15 is decided** (adapter idempotency would otherwise return the cached REJECTED); no automatic loop | caller |
 | 13 | `ACCEPTED` / `PARTIALLY_FILLED` / `FILLED` | `RESULT_UNSAFE` | no same-key resubmit; remainder = new intent after step 9 `SYNCHRONIZED` | caller creates new intent |
 | 14 | Concurrent claim | one `FIRST_CLAIM`, others `DUPLICATE` | duplicates return stored state | store |
-| 15 | Result durable, process dies before it is applied to local position state | `result#g`, local state not yet advanced | restart sets `RESTART_RECOVERY_PENDING` (status `UNKNOWN`) until step 9 reconciles; application is idempotent per `result_id` | step 9 on restart |
+| 15 | Result durable, process dies before it is applied to local position state | `result#g`, local state not yet advanced | restart sets `RESTART_RECOVERY_PENDING` (status `UNKNOWN`) until step 9 reconciles; **application must not be applied twice** (OPEN-19: `apply_execution_result` cannot itself guarantee idempotence) | step 9 on restart |
 | 16 | Step 9 finds mismatch (`UNSYNCHRONIZED`) | status blocks next intents | none until reconciled | reconciliation/operator; remediation not designed (OPEN-4/13) |
 | 17 | Broker unhealthy before transmission (authority `NOT_TRANSMITTABLE`) | none | block; restore connectivity, then step 1 | guard denial G2; no claim |
 | 18 | Broker becomes unreachable during `submit` | adapter returns `UNKNOWN` unless non-transmission is proven | as row 9 | evidence (3.8) |
@@ -471,8 +471,8 @@ evidence per 3.8. "Recovery" is the startup store recovery of 3.6.
 ### 3.11 Position-state mutation timing
 
 `PositionSupervisor.apply_exit_decision(CLOSE)` is a pure function that returns a record with
-quantity 0 and `EXIT_PENDING` (F5). Frozen: **its output is not applied to the durable position
-store before step 8/9**. Quantity and state changes are consequences of a **persisted
+quantity 0 and `EXIT_PENDING` (F5). Frozen: **its output is never applied to the durable position
+store** (not before step 9 and not after: lifecycle application is result-driven, below). Quantity and state changes are consequences of a **persisted
 `ExecutionResult`** (consistent with `mark_closed`'s "a future phase drives this from
 `ExecutionResult`"). Step 2 resolves CLOSE/REDUCE quantity from a record in `OPEN`/`MANAGING` only
 (`owned_open_positions` states); an `EXIT_PENDING` record has quantity 0 and cannot resolve a CLOSE.
@@ -493,7 +493,7 @@ invariants and `PositionRecord`'s quantity/state invariants:
 |---|---|
 | CLOSE, `FILLED` (filled == resolved quantity) | quantity 0 and `EXIT_PENDING`, then `CLOSED` (`mark_closed` requires quantity 0). Without this a local `EXIT_PENDING` (quantity 0) record would be reported `LOCAL_OPEN_BROKER_MISSING`/`UNSYNCHRONIZED` forever against a flat broker; a local `CLOSED` record against a flat broker is a `MATCH`. |
 | REDUCE, `FILLED` | quantity reduced by the filled quantity, state stays `MANAGING` (the ADR-033 s15 partial-close rule; a reduction leaving zero is refused, as `apply_exit_decision` refuses it) |
-| any action with `PARTIALLY_FILLED`, `ACCEPTED` or `UNKNOWN`; MODIFY_PROTECTION of any status | **nothing applied until OPEN-7 is decided** (OPEN-7 now also covers when/how local protection is updated for MODIFY_PROTECTION; until then a protection change that the broker applied reads as `PROTECTION_MISMATCH` and blocks) |
+| any action with `PARTIALLY_FILLED`, `ACCEPTED` or `UNKNOWN`; MODIFY_PROTECTION of any status | **nothing applied until OPEN-7 is decided** (OPEN-7 now also covers when/how local protection is updated for MODIFY_PROTECTION). **Consequence until OPEN-7 is decided:** a successful stop TIGHTEN leaves the broker stop new and the local stop old, which reads as `PROTECTION_MISMATCH` and blocks every action, with OPEN-12 giving no repair (a TIGHTEN is one-shot-and-lock); a partial close likewise leaves `QUANTITY_MISMATCH`. The system is globally blocked after either, so OPEN-7 belongs in the paper-demo gate (section 8) |
 
 **Single path for algorithmic closes.** A close that **does** have an `ExitDecision` (a
 `PositionOrigin` intent) uses the **same** result-driven application: `ExitDecision` stays the
@@ -768,7 +768,7 @@ update.
 |---|---|---|
 | INV-01 | AUTO unavailable (`TradingMode.AUTO` denied by authority and guard) | existing `test_auto_mode_never_authorized_in_phase_1`, `test_auto_mode_never_yields_request` |
 | INV-02 | Broker execution disabled: no real adapter, no `order_send` or equivalent, no network/broker import in `nexora.execution` | `tests/test_execution_pipeline.py::test_execution_package_has_no_broker_sdk_or_order_send` (static scan; extends `test_guard_module_has_no_forbidden_imports`) |
-| INV-03 | Manual UI remains locked; ADR-035 and PR-1..PR-7 change no file under `apps/web` | per-PR diff check (no new test); `EXECUTION_LOCKED` in `apps/web/app/manual-execution.tsx` untouched (ADR-034 s9) |
+| INV-03 | Manual UI remains locked; ADR-035 and PR-1..PR-8 change no file under `apps/web` | per-PR diff check (no new test); `EXECUTION_LOCKED` in `apps/web/app/manual-execution.tsx` untouched (ADR-034 s9) |
 | INV-04 | AI cannot bypass: no pipeline/preflight/recovery function takes an `AIAnalysis` | `test_pipeline_and_preflight_have_no_ai_analysis_parameter` |
 | INV-05 | No synthetic `ResearchSignal`/`signal_id`/`signal_decision_ref`/`entry_readiness_ref`; `ResolvedExecution` and `EmergencyRecoveryEvidence` have no such field | `test_resolved_execution_has_no_signal_fields` |
 | INV-06 | Pipeline order is exactly 1, 2, 2b, 3-9 (2b only for MODIFY_PROTECTION); a pure denial at steps 1-4 never calls `claim` | `test_pipeline_pure_denial_never_claims_key`, `test_pipeline_step_order_is_frozen` |
@@ -816,9 +816,10 @@ update.
 | **BEFORE-PAPER-DEMO** (simulator through the pipeline; not a broker demo) | OPEN-1 freshness bounds decided | Quant/Architect |
 | | OPEN-11 risk-reducing preflight policy decided (else risk-reducing stays denied) | Quant |
 | | OPEN-5 position-level exclusivity decided (no enforcement exists until then) | Architect |
-| | OPEN-7 local state while a close is unresolved | Architect/Quant |
+| | OPEN-7 local state while a close is unresolved, partial-fill quantity update and MODIFY_PROTECTION local update (without it a partial close or stop tighten leaves the system globally blocked) | Architect/Quant |
+| | OPEN-19 idempotent application of persisted results | Architect |
 | | OPEN-2 UNKNOWN resolution mechanism at least for the simulator | Architect |
-| | Independent review of PR-1..PR-7 recorded; Security review (AGENTS.md s12: persistence, paper boundary) | review evidence |
+| | Independent review of PR-1..PR-8 recorded; Security review (AGENTS.md s12: persistence, paper boundary) | review evidence |
 | | **Broker demo** (non-simulated) is not in this row: it requires a later dedicated governance ADR | not decided here |
 | **BEFORE-REAL-TRANSMISSION** | Dedicated governance ADR narrowly lifting AGENTS.md s0 (ADR-033 s21 a-c) and Security review | not drafted here |
 | | A real `CapabilityProvider` declaring `volume_step_anchor`, `session/spread/margin` refs (ADR-033 s14 BLOCKED) | provider PR |
@@ -848,19 +849,26 @@ PR-1  contracts: ExecutionRequest.new_position_ref, ExecutionResult changes, Res
                                 (dedup_store.py)
         └────────────┴─────────────┴──────┬───────┴──────────────┘
                                           ▼
+   PR-8 position/ result-driven helper (depends on PR-1; parallel with 2/5/6/7)
+        │
+        └───────────────────────────────┐
+                                          ▼
               PR-4  ExecutionPipeline + exports + task-record cleanup
                     (depends on PR-1, 2, 5, 6, 7, 8; PR-3 optional for first wiring)
                                           ▼
                     integration review (independent) ── paper-demo gate (section 8)
 ```
 
-PR-8 (result-driven lifecycle helper, new module under `position/`, 3.11) depends on PR-1 only, is
-file-disjoint from PR-2/3/5/6/7 and may run in parallel with them; PR-4 needs it.
+PR-8 (result-driven lifecycle helper, new module under `position/`, 3.11) depends on PR-1 only and
+may run in parallel with PR-2/5/6/7; PR-4 needs it. **PR-3 and PR-8 both add modules under
+`packages/nexora/position/`** and may both want `position/__init__.py` exports, so they are not
+file-disjoint on that file: serialize any `__init__.py` edit (the later-merging PR rebases and adds
+only its own export; per AGENTS.md section 7).
 
 PR-2's ProtectionChange logic is independent of PR-1; its `new_position_ref` passthrough needs
-PR-1, so merge order is PR-1 then PR-2. PR-2/3/5/6/7 touch disjoint files and may run in parallel
+PR-1, so merge order is PR-1 then PR-2. PR-2/5/6/7 touch disjoint files and may run in parallel
 after PR-1 (shared files, if any, per AGENTS.md section 7). PR-3 additionally needs the OPEN-6
-decision for its EXIT_PENDING/CLOSED targets. Every PR is a draft until independently reviewed;
+decision for **every** recovery target (including `MATCH` -> `MANAGING`, which needs `complete`); PR-3 must not be built with an early MATCH-only path. Every PR is a draft until independently reviewed;
 none may merge to `main` without explicit human instruction (AGENTS.md section 10).
 
 ## 10. What ADR-035 does NOT decide
@@ -891,9 +899,9 @@ already forced by the rest of this ADR, not a policy.
 | OPEN-3 | Quarantine clearing: who may append `quarantine_resolved`, record format, authorization | Architect + Security | quarantined keys stay quarantined |
 | OPEN-4 | Reconciliation scope for position actions: per-position subset vs aggregate; treatment of foreign broker-only positions and unattributed `UNKNOWN` records. **Stated cost of the interim aggregate rule:** a mismatch on another position, or a foreign broker-only position, blocks **every** CLOSE and TIGHTEN, including in an emergency, **and makes EMERGENCY recovery impossible** (section 6 requires the aggregate, ignoring the confirming record, to be SYNCHRONIZED) while any foreign broker-only or other-position mismatch exists | Architect | aggregate only (3.3) |
 | OPEN-5 | Position-level in-flight exclusivity between **different** intents on one position (F11): mechanism, and deny vs queue | Architect | **no enforcement exists**: the pipeline offers no protection against two different intents on one position, so any integration must be driven by one serialized caller by external discipline (not enforced by this ADR); real transmission blocked |
-| OPEN-6 | Exact shape of the vocabulary extension in 4.6 (`complete`, `close_pending`, `CLOSE_PENDING_CONFIRMED`, `BROKER_FLAT_CONFIRMED`, derived statuses) and whether adapters can attest them | Architect | EXIT_PENDING/CLOSED recovery targets unavailable |
-| OPEN-7 | Local position state while a transmitted close/reduce is `UNKNOWN`/`ACCEPTED`/`PARTIALLY_FILLED` (and how a `PARTIALLY_FILLED` result updates local quantity); when/how local protection is updated for MODIFY_PROTECTION; what triggers EMERGENCY; the consequence of a late unsafe result | Architect + Quant | local state not mutated before a persisted result (3.11) |
-| OPEN-8 | Whether `volume_min`/step apply to a full-position CLOSE of a non-conforming residual | Architect + Quant | no exemption: such a CLOSE is blocked |
+| OPEN-6 | Exact shape of the vocabulary extension in 4.6 (`complete`, `close_pending`, `CLOSE_PENDING_CONFIRMED`, `BROKER_FLAT_CONFIRMED`, derived statuses) and whether adapters can attest them | Architect | EMERGENCY recovery unavailable for **every** target, including `MATCH` -> `MANAGING` (section 6 rule 1 needs `complete`) |
+| OPEN-7 | Local position state while a transmitted close/reduce is `UNKNOWN`/`ACCEPTED`/`PARTIALLY_FILLED` (and how a `PARTIALLY_FILLED` result updates local quantity); when/how local protection is updated for MODIFY_PROTECTION; what triggers EMERGENCY; the consequence of a late unsafe result. **Until decided, a partial close or a stop tighten leaves the system globally blocked** (3.7, 3.11) | Architect + Quant | local state not mutated before a persisted result (3.11) |
+| OPEN-8 | Whether `volume_min`/step apply to a full-position CLOSE of a non-conforming residual, and to a REDUCE whose requested quantity or residual falls below `volume_min` or off the step grid | Architect + Quant | no exemption: such a CLOSE or REDUCE is blocked |
 | OPEN-9 | Legacy mode: source/format of the operator-declared execution binding, and whether legacy mode may ever reach transmission | Architect (Rin) | legacy execution denied (`execution_binding_missing`) |
 | OPEN-10 | `ProtectionChange` beyond stop-only tightening (target changes, stop removal), and whether a WIDEN should be permitted at all when the kill switch is off | Quant | only stop-only strict tightening is `TIGHTEN`; all else fails closed |
 | OPEN-11 | Whether preflight spread/slippage/session/margin policy checks apply to REDUCE/CLOSE/MODIFY_PROTECTION | Quant | risk-reducing policy checks return `preflight_policy_undecided` (deny) |
@@ -903,6 +911,7 @@ already forced by the rest of this ADR, not a policy.
 | OPEN-15 | Retry identity at the adapter: the adapter contract is idempotent per `request.idempotency_key` and the simulator caches by it, so a same-key retry (generation g+1) would return the cached result. Options: generation-qualified adapter idempotency, or a new `request_id`/key per retry. ADR-034 s6 key derivation stays unchanged unless Rin decides otherwise | Rin + Architect | same-key retry not implementable; a new intent is required |
 | OPEN-16 | How `ATTEMPTED_NO_RESULT` is represented to `classify_reconciliation` (explicit marker input vs a 4.6 vocabulary addition) | Architect | pipeline treats any `ATTEMPTED_NO_RESULT` key as blocking `UNKNOWN` at step 1, which requires the store's unresolved-key enumeration accessor (W5); a single unresolved key therefore blocks every action globally, including an emergency CLOSE |
 | OPEN-17 | Origin of the OPEN/REDUCE quantity and the MODIFY_PROTECTION payload: `TradeIntent` carries neither; candidates are Risk sizing, `RiskReductionDecision.resulting_quantity`/`resulting_protection`, `ExitDecision.reduce_quantity`/`new_stop_price`, or caller-supplied (today's guard). OPEN sizing is a Risk decision; this ADR does not touch Track E or manual-OPEN provenance | Architect + Quant (Risk) | pipeline **denies when the payload is absent**; never defaults or fabricates |
+| OPEN-19 | Idempotent application of a persisted result to local state: `apply_execution_result` requires `OPEN`/`MANAGING`, so re-applying a FILLED CLOSE raises and re-applying a FILLED REDUCE would double-reduce. Needs an applied-result marker or an atomic "persist position + applied `result_id`" rule; the mechanism is not chosen here | Architect | a result that may already have been applied is not applied again and the position stays blocked (`RESTART_RECOVERY_PENDING`, status `UNKNOWN`) until reconciliation shows the true state; no automatic re-application |
 | OPEN-18 | Whether a non-durable `InMemoryExecutionDedupStore` is allowed for any simulated pipeline run | Rin | in-memory refused outside pure unit tests (INV-26) |
 
 ## 12. Decisions requested of Rin personally
@@ -921,5 +930,8 @@ Each has a fail-closed default that applies until Rin decides.
 | 7 | How the local lifecycle is advanced from a persisted `ExecutionResult` when no `ExitDecision` exists (manual CLOSE, CLOSE ALL, REDUCE): the result-driven helper of 3.11, with a single path also for algorithmic closes | no local state mutation; nothing applied beyond FILLED CLOSE/REDUCE per 3.11 until approved |
 | 8 | Whether EMERGENCY -> MANAGING (plain `MATCH`) requires a **complete** broker observation (4.6, OPEN-6), and the accepted cost that recovery is blocked while any unrelated or foreign mismatch exists (OPEN-4) | complete observation required; recovery unavailable for every target until OPEN-6 |
 | 9 | Whether the OPEN-16 interim (any single unresolved key blocks every action globally) is acceptable given the emergency-CLOSE cost, and the enumeration mechanism it needs | blocks globally; enumeration accessor required in the store |
+
+| 10 | Whether the global block that follows a partial close or a stop tighten until OPEN-7 is decided is acceptable for the paper-demo gate, or whether OPEN-7 is decided earlier | globally blocked; OPEN-7 is a paper-demo gate item |
+| 11 | Idempotent application of a persisted result (OPEN-19): the mechanism (applied-result marker vs atomic position + result_id persist) | no re-application; position stays blocked until reconciled |
 
 EXECUTION INTEGRATION SAFETY AMENDMENT PROPOSED — NOTHING FROZEN UNTIL RIN APPROVES
