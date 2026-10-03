@@ -32,3 +32,9 @@ external refs fail closed; unknown health override fails closed; frozen plan; no
 - Note: the venv editable install resolves `nexora` to a different worktree; tests were run with
   `PYTHONPATH=<worktree>/packages:<worktree>/apps/api`.
 - Frozen-contract changes: none. Review: self-review; independent review pending.
+- Review fix (CHANGES_REQUESTED at 59be31f): buckets now keyed on typed `policy_status`/
+  `transmissibility` (authorized_not_transmittable = AUTHORIZED + NOT_TRANSMITTABLE; denied =
+  DENIED). Broker-UNHEALTHY entry now counts authorized_not_transmittable=1, denied=0. Test
+  asserts typed fields/counts; mutation check: the new tests fail against the old code. A
+  policy-DENIED CLOSE is not producible (CLOSE is denied only via the transmission-blocking
+  broker code). No-I/O check is now an AST import check.

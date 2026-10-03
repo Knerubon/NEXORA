@@ -7,7 +7,12 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
-from nexora.autonomous import ExecutionTransmissibility, Health, SystemHealthSnapshot
+from nexora.autonomous import (
+    AuthorityPolicyStatus,
+    ExecutionTransmissibility,
+    Health,
+    SystemHealthSnapshot,
+)
 from nexora.autonomous_contracts import TradeIntentKind, TradeState
 from nexora.execution.close_all_plan import (
     CloseAllPlan,
@@ -148,11 +153,20 @@ def test_broker_unhealthy_is_authorized_but_not_transmittable_and_kept() -> None
     plan = _plan([_pos("p1")], health=_health(broker=Health.UNHEALTHY))
     assert len(plan.entries) == 1
     entry = plan.entries[0]
-    assert not entry.authority.allowed
-    assert entry.authority.transmissibility is not ExecutionTransmissibility.TRANSMITTABLE
+    assert entry.authority.policy_status is AuthorityPolicyStatus.AUTHORIZED
+    assert entry.authority.transmissibility is ExecutionTransmissibility.NOT_TRANSMITTABLE
     assert not entry.transmittable
-    assert plan.transmittable_entries == ()
+    assert entry not in plan.transmittable_entries
+    assert plan.authorized_not_transmittable_entries == (entry,)
+    assert plan.denied_entries == ()
+    assert plan.counts["authorized_not_transmittable"] == 1
+    assert plan.counts["denied"] == 0
     assert plan.counts["transmittable"] == 0
+
+
+# A policy-DENIED CLOSE cannot be produced: ExistingPositionAuthority denies CLOSE only via
+# broker_unhealthy_fail_closed, which ADR-034 section 3 classifies as AUTHORIZED +
+# NOT_TRANSMITTABLE. Hence denied_entries stays empty for CLOSE plans (asserted above).
 
 
 def test_degraded_non_broker_still_authorizes_close() -> None:
@@ -165,7 +179,8 @@ def test_health_override_per_position() -> None:
         [_pos("p1"), _pos("p2")], health_by_position={"p2": _health(broker=Health.UNHEALTHY)}
     )
     assert [e.transmittable for e in plan.entries] == [True, False]
-    assert plan.counts["denied"] == 1
+    assert plan.counts["denied"] == 0
+    assert plan.counts["authorized_not_transmittable"] == 1
     with pytest.raises(ExecutionContractError, match="unknown_position"):
         _plan([_pos("p1")], health_by_position={"zzz": _health()})
 
@@ -178,8 +193,22 @@ def test_plan_is_frozen_and_makes_no_execution_request() -> None:
 
 
 def test_module_imports_no_broker_network_db() -> None:
+    import ast
+    from pathlib import Path
+
     import nexora.execution.close_all_plan as mod
 
-    src = open(mod.__file__, encoding="utf-8").read()
-    for banned in ("MetaTrader5", "psycopg", "requests", "httpx", "socket", "order_send", "open("):
-        assert banned not in src
+    tree = ast.parse(Path(mod.__file__).read_text(encoding="utf-8"))
+    imported: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.update(a.name.split(".")[0] for a in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module.split(".")[0])
+    assert imported <= {"__future__", "collections", "dataclasses", "datetime", "nexora"}
+    calls = {
+        n.func.id
+        for n in ast.walk(tree)
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+    }
+    assert "open" not in calls

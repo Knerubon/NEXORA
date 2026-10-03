@@ -19,6 +19,7 @@ from datetime import datetime
 
 from nexora.autonomous.authority import (
     AuthorityDecision,
+    AuthorityPolicyStatus,
     ExecutionTransmissibility,
     authorize_trade_intent,
 )
@@ -87,13 +88,14 @@ class CloseAllPlan:
         return tuple(
             entry
             for entry in self.entries
-            if entry.authority.allowed
+            if entry.authority.policy_status is AuthorityPolicyStatus.AUTHORIZED
             and entry.authority.transmissibility is ExecutionTransmissibility.NOT_TRANSMITTABLE
         )
 
     @property
     def denied_entries(self) -> tuple[CloseAllPlanEntry, ...]:
-        return tuple(entry for entry in self.entries if not entry.authority.allowed)
+        denied = AuthorityPolicyStatus.DENIED
+        return tuple(e for e in self.entries if e.authority.policy_status is denied)
 
     @property
     def counts(self) -> Mapping[str, int]:
