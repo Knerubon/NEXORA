@@ -4,6 +4,7 @@ import threading
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import pytest
 from nexora.execution.dedup_store import (
@@ -217,3 +218,73 @@ def test_serialization_deterministic() -> None:
         result(ExecutionStatus.UNKNOWN)
     )
     assert serialize_result(result(ExecutionStatus.FILLED, fill="1.0"))["filled_quantity"] == "1"
+
+
+def _two_instances(
+    tmp_path: Path,
+) -> tuple[JournalExecutionDedupStore, JournalExecutionDedupStore, list[SQLiteJournal]]:
+    a, ja = durable(tmp_path)
+    b, jb = durable(tmp_path)
+    return a, b, [ja, jb]
+
+
+def _never_first_claim(store: JournalExecutionDedupStore) -> None:
+    try:
+        outcome = store.claim(KEY)
+    except DedupStoreCorruptError:
+        return
+    assert outcome is ClaimOutcome.DUPLICATE
+
+
+def test_interleaving_result_lands_between_read_and_release(tmp_path: Path) -> None:
+    a, b, journals = _two_instances(tmp_path)
+    a.claim(KEY)
+    a.record_result(KEY, result(ExecutionStatus.REJECTED, "r1"))
+    original = a._append
+
+    def inject(*args: Any, **kwargs: Any) -> bool:
+        if args[1].startswith("release#"):
+            b.record_result(KEY, result(ExecutionStatus.UNKNOWN, "r2"))
+        return original(*args, **kwargs)
+
+    a._append = inject  # type: ignore[method-assign]
+    assert a.release_for_retry(KEY) is False  # optimistic release lost the race
+    a._append = original  # type: ignore[method-assign]
+    _never_first_claim(b)
+    _never_first_claim(a)
+    for j in journals:
+        j.close()
+
+
+def test_stale_writer_unknown_after_release_never_reclaimable(tmp_path: Path) -> None:
+    a, b, journals = _two_instances(tmp_path)
+    a.claim(KEY)
+    a.record_result(KEY, result(ExecutionStatus.REJECTED, "r1"))
+    assert a.release_for_retry(KEY) is True
+    # stale writer still believing generation 0 appends an UNKNOWN to it
+    journals[1].append(
+        f"execution-dedup:{KEY}",
+        "result#0|r9",
+        {
+            "event": "result",
+            "generation": 0,
+            "idempotency_key": KEY,
+            "result": serialize_result(result(ExecutionStatus.UNKNOWN, "r9")),
+        },
+    )
+    _never_first_claim(a)
+    _never_first_claim(b)
+    with pytest.raises(DedupStoreCorruptError):
+        a.lookup(KEY)
+    for j in journals:
+        j.close()
+
+
+def test_release_returns_false_when_not_written_by_this_call(tmp_path: Path) -> None:
+    a, b, journals = _two_instances(tmp_path)
+    a.claim(KEY)
+    a.record_result(KEY, result(ExecutionStatus.REJECTED))
+    assert a.release_for_retry(KEY) is True
+    assert b.release_for_retry(KEY) is False  # already released; new generation unclaimed
+    for j in journals:
+        j.close()

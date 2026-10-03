@@ -30,11 +30,22 @@ No migration or schema change: the journal table already exists.
   a release starts a new generation, whose own results govern further releases.
 - UNKNOWN/ACCEPTED/PARTIALLY_FILLED/FILLED never reclaimable; claim without result stays claimed.
 - Unreadable/inconsistent/unavailable storage raises `DedupStoreCorruptError` (fail closed).
+- Release is an optimistic append (journal `expected_count` = events read): any concurrent write
+  to the key stream makes it fail, and `release_for_retry` returns True only if this call wrote it.
+- Safety net: every state read re-checks ALL released generations; if a released generation's
+  latest result (journal order) is not a clean zero-fill REJECTED (e.g. a stale writer appended
+  UNKNOWN after the release), the key raises `DedupStoreCorruptError` and is never FIRST_CLAIM.
 
 ## Execution record
 
 - Not wired into any execution path (none exists; broker execution remains blocked).
-- Tests use tmp_path SQLite only. `tests/test_execution_dedup_store.py` + existing
-  `tests/test_execution_contracts_v1.py`: 95 passed. ruff check/format and mypy clean on owned files.
-- Full suite not run (exceeded 10 min in this environment); no other file changed.
-- self-review; independent review pending.
+- Review round 1 (CHANGES_REQUESTED, MAJOR fail-open): two interleavings with two store instances on
+  one SQLite file made an UNKNOWN-bearing key re-claimable (the earlier claim that the race was
+  "bounded by journal first-writer-wins" was wrong). Fixed by the optimistic release plus the
+  all-generations fail-closed check above; regression tests for both interleavings fail on the
+  previous code (mutation-checked) and pass now.
+- Tests use tmp_path SQLite only. dedup_store + execution_contracts + pattern_integration +
+  pattern_engine + environment: 287 passed, 1 skipped. ruff check/format and mypy clean on owned files.
+- Full suite not run (exceeds 10 min locally). PostgreSQL backend not exercised by these tests
+  (follow-up); Journal contract is shared.
+- self-review; independent review pending (delta review requested).

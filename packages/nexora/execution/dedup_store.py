@@ -50,6 +50,10 @@ class DedupStoreCorruptError(DedupStoreError):
     """Stored state is unreadable or inconsistent. Callers must deny, not retry."""
 
 
+class _ConcurrentWrite(Exception):
+    """Internal: optimistic append lost a race; the caller treats it as 'not done'."""
+
+
 class ClaimOutcome(StrEnum):
     FIRST_CLAIM = "first_claim"
     DUPLICATE = "duplicate"
@@ -155,40 +159,65 @@ class JournalExecutionDedupStore:
 
     def lookup(self, idempotency_key: str) -> DedupRecord | None:
         with self._lock:
-            generation, claimed = self._state(idempotency_key)
+            events = self._events(idempotency_key)
+            generation, claimed = self._state(idempotency_key, events)
             if not claimed:
                 return None
             return DedupRecord(
                 idempotency_key=idempotency_key,
                 generation=generation,
-                latest_result=self._latest_result(idempotency_key, generation),
+                latest_result=self._latest_result(events, generation),
             )
 
     def release_for_retry(self, idempotency_key: str) -> bool:
+        """True only if THIS call durably wrote the release.
+
+        The release append is optimistic: it carries the event count that was
+        read, so any concurrent write to the key's stream (another instance or
+        process recording a result, releasing, ...) makes it fail and the key
+        stays claimed. Independently, ``_state`` re-checks every released
+        generation, so a stale writer cannot make an unsafe outcome re-claimable.
+        """
+
         with self._lock:
-            generation, claimed = self._state(idempotency_key)
+            events = self._events(idempotency_key)
+            generation, claimed = self._state(idempotency_key, events)
             if not claimed:
                 return False
-            latest = self._latest_result(idempotency_key, generation)
+            latest = self._latest_result(events, generation)
             if latest is None or not is_safe_to_retry_without_reconciliation(latest):
                 return False
-            self._append(
-                _stream(idempotency_key),
-                f"release#{generation}",
-                {
-                    "event": "release",
-                    "generation": generation,
-                    "idempotency_key": idempotency_key,
-                    "released_result_id": latest.result_id,
-                },
-            )
-            return True
+            try:
+                return self._append(
+                    _stream(idempotency_key),
+                    f"release#{generation}",
+                    {
+                        "event": "release",
+                        "generation": generation,
+                        "idempotency_key": idempotency_key,
+                        "released_result_id": latest.result_id,
+                    },
+                    expected_count=len(events),
+                )
+            except _ConcurrentWrite:
+                return False
 
     # -- internals ----------------------------------------------------------
 
-    def _append(self, stream: str, key: str, payload: dict[str, Any]) -> bool:
+    def _append(
+        self,
+        stream: str,
+        key: str,
+        payload: dict[str, Any],
+        *,
+        expected_count: int | None = None,
+    ) -> bool:
         try:
-            return bool(self._journal.append(stream, key, payload))
+            return bool(self._journal.append(stream, key, payload, expected_count=expected_count))
+        except ValueError as exc:
+            if str(exc) == "journal_concurrent_write":
+                raise _ConcurrentWrite from exc
+            raise DedupStoreCorruptError("dedup_store_write_failed") from exc
         except Exception as exc:  # fail closed on any storage failure
             raise DedupStoreCorruptError("dedup_store_write_failed") from exc
 
@@ -207,10 +236,18 @@ class JournalExecutionDedupStore:
                 raise DedupStoreCorruptError("dedup_event_malformed")
         return events
 
-    def _state(self, idempotency_key: str) -> tuple[int, bool]:
-        """(current generation, whether that generation is claimed)."""
+    def _state(
+        self, idempotency_key: str, events: tuple[dict[str, Any], ...] | None = None
+    ) -> tuple[int, bool]:
+        """(current generation, whether that generation is claimed).
 
-        events = self._events(idempotency_key)
+        Fails closed (raises) if any *released* generation's latest result, by
+        journal order, is not a clean zero-fill REJECTED -- e.g. a result that
+        landed after the release. Such a key must never become re-claimable.
+        """
+
+        if events is None:
+            events = self._events(idempotency_key)
         releases = sorted(e["generation"] for e in events if e["event"] == "release")
         claims = {e["generation"] for e in events if e["event"] == "claim"}
         generation = len(releases)
@@ -226,11 +263,18 @@ class JournalExecutionDedupStore:
             if e["event"] == "result"
         ):
             raise DedupStoreCorruptError("dedup_result_without_claim")
+        for released in range(generation):
+            last = self._latest_result(events, released)
+            if last is None or not is_safe_to_retry_without_reconciliation(last):
+                raise DedupStoreCorruptError("dedup_released_generation_not_safe")
         return generation, generation in claims
 
-    def _latest_result(self, idempotency_key: str, generation: int) -> ExecutionResult | None:
+    @staticmethod
+    def _latest_result(
+        events: tuple[dict[str, Any], ...], generation: int
+    ) -> ExecutionResult | None:
         latest: ExecutionResult | None = None
-        for event in self._events(idempotency_key):
+        for event in events:
             if event["event"] == "result" and event["generation"] == generation:
                 latest = deserialize_result(event.get("result"))
         return latest
@@ -256,6 +300,8 @@ class _MemoryJournal:
                 if rows[key][0] != digest:
                     raise ValueError("journal_identity_conflict")
                 return False
+            if expected_count is not None and len(rows) != expected_count:
+                raise ValueError("journal_concurrent_write")
             rows[key] = (digest, encoded)
             return True
 
