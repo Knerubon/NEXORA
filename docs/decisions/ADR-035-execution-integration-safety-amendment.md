@@ -29,8 +29,10 @@ unresolved policy question stays unresolved.
 
 **Revision record (auditability).** Draft commits on PR #58, in order: `70695ff` (original
 draft), `0cd8051` (review round 1 fixes), `85fb3d3` (review round 2 fixes), `352229e` (review
-round 3 minors). The Rin decision delta of 2026-10-04 (D1-D8, relayed to the author in the Owner's
-instruction) is applied in the commit that follows `352229e` on the same branch. It: (D1) approves the pipeline order
+round 3 minors), `ad391b1` (the Rin decision delta of 2026-10-04, D1-D8, relayed to the author in the
+Owner's instruction). A **final minor docs delta**, the commit that follows `ad391b1` on the same
+branch, applies Rin decisions **M-1** and **M-2** and records Rin clarifications **R1** and **R2** as
+RESOLVED_BY_RIN (summarized at the end of this record). The D1-D8 delta: (D1) approves the pipeline order
 of section 3.1; (D2) makes PR-3 required before PR-4 and removes the section 8 / section 9
 contradiction; (D3) approves that REDUCE requires `SYNCHRONIZED`; (D4) approves authority
 re-evaluation after resolution for every action kind; (D5) adds OPEN-20 and states that
@@ -38,6 +40,20 @@ re-evaluation after resolution for every action kind; (D5) adds OPEN-20 and stat
 "default" terminology; (D7) restates that Track E stays blocked; (D8) restates that nothing is
 unlocked. OPEN-1 through OPEN-19 remain unresolved except where an approved decision narrows their
 existing text, and each such narrowing is marked **RESOLVED_BY_RIN** in section 12.
+
+The final minor delta (2026-10-04): (M-1) **OPEN-1 is not a pre-integration blocker and is not
+required to be resolved before PR-3 can merge**; PR-3 may implement the freshness-validation
+mechanism but must take the bound from approved policy/configuration, must not invent or hard-code a
+numeric or temporary bound, and must fail closed when operational use needs a bound and none is
+approved; OPEN-1 stays OPEN and stays a BEFORE-PAPER-DEMO gate (section 6, section 8, section 9, OPEN-1);
+(M-2) quarantine tooling is separated from EMERGENCY recovery tooling in the CAN-DO-DURING-INTEGRATION
+rows of section 8; (R1, **RESOLVED_BY_RIN**) PR-3 may be implemented and merged while OPEN-20 is
+unresolved provided `recover_from_emergency` stays fail-closed at its authorization boundary and
+cannot be operationally enabled; OPEN-20 blocks operational enablement, not code merge, and this does
+not authorize inventing an authorization mechanism; (R2, **RESOLVED_BY_RIN**) OPEN-20 is a prerequisite
+for both BEFORE-PAPER-DEMO and BEFORE-REAL-TRANSMISSION operational enablement; this adds a
+prerequisite and unlocks neither gate. OPEN-20 itself remains OPEN. No other OPEN item, no
+crash/retry semantics and none of D1-D8 changed.
 
 ## 0. Scope and discipline
 
@@ -759,8 +775,9 @@ EmergencyRecoveryEvidence {
 
 **"Verified reconciliation evidence"** (all required):
 
-1. one classification run (same `observed_at`), fresh per OPEN-1, from a **complete** broker
-   observation (4.6);
+1. one classification run (same `observed_at`), **fresh** (the freshness bound itself is supplied by
+   approved policy/configuration and remains **OPEN-1**, see "Freshness" below), from a **complete**
+   broker observation (4.6);
 2. attribution to the same position by `nexora_position_ref` (5.3) with identical `instrument_id`
    and `side` — never by symbol alone;
 3. for that `position_ref`, the **single confirming record** that selects the target
@@ -786,6 +803,20 @@ chosen by an operator; (d) the **authorization model requires Security review** 
 the authorization boundary (deny) and MUST NOT be enabled for operational use.** The mechanism that
 would satisfy the boundary is deliberately left undefined, so no implementation may substitute a
 default (for example "any non-blank `operator_ref`", "any caller", or "any local process").
+**R1 (RESOLVED_BY_RIN):** PR-3 **may be implemented and merged while OPEN-20 remains unresolved**,
+provided `recover_from_emergency` stays fail-closed at this authorization boundary and cannot be
+operationally enabled. OPEN-20 blocks **operational enablement**, not code merge. This is not
+permission to invent an authorization mechanism, and recovery code or tooling is not operationally
+usable merely because it exists.
+
+**Freshness (OPEN-1; Rin M-1).** Rule 1 requires the evidence to be fresh, and that requirement is
+preserved. The mechanism that validates freshness **may be implemented and merged in PR-3 without
+OPEN-1 being resolved**, but it MUST (a) accept and use a freshness bound **supplied by approved
+policy/configuration**; (b) **not invent a numeric value** and **not hard-code a temporary freshness
+policy**; and (c) **fail closed** (no recovery) whenever operational use requires a freshness bound
+and no approved bound is available. Implementation capability is not approved operational policy.
+**OPEN-1 remains unresolved** and remains a BEFORE-PAPER-DEMO gate (section 8); it is **not** a
+MUST-FIX-BEFORE-INTEGRATION blocker and not a condition for merging PR-3.
 
 **Target state is derived, not selected:**
 
@@ -860,13 +891,15 @@ update.
 | | Result-driven lifecycle helper (3.11, INV-23/29) | PR-8 |
 | **CAN-DO-DURING-INTEGRATION** | `ExecutionPreflight` structural checks | PR-6 |
 | | `ExecutionPipeline`, exports in `execution/__init__.py`, task-record cleanup | PR-4 |
-| | Denial audit logging (non-key-burning), operator tooling for quarantine/recovery | with PR-4/PR-3 |
-| **BEFORE-PAPER-DEMO** (simulator through the pipeline; not a broker demo) | OPEN-1 freshness bounds decided | Quant/Architect |
+| | Denial audit logging (non-key-burning) | with PR-4 |
+| | **Quarantine tooling**: may be developed as the dependency graph (section 9) allows; quarantine resolution and its authorization remain governed by **OPEN-3** | per section 9; OPEN-3 |
+| | **EMERGENCY recovery code/tooling** (`recover_from_emergency`): may be implemented and merged (PR-3, R1), but it **MUST remain fail-closed at the authorization boundary and MUST NOT be operationally enabled until OPEN-20 is resolved**; no authorization mechanism may be invented before OPEN-20; a non-empty `operator_ref` alone is not authorization; the existence of recovery tooling is not operational enablement | PR-3; OPEN-20 gates enablement |
+| **BEFORE-PAPER-DEMO** (simulator through the pipeline; not a broker demo) | OPEN-1 freshness bounds decided. This is the **policy value** only: the freshness-validation mechanism may be implemented and merged earlier (it takes the bound from approved policy/configuration, invents no number, hard-codes no temporary policy, and fails closed when none is approved). OPEN-1 is **not** a MUST-FIX-BEFORE-INTEGRATION blocker and not a condition for merging PR-3 (Rin M-1) | Quant/Architect |
 | | OPEN-11 risk-reducing preflight policy decided (else risk-reducing stays denied) | Quant |
 | | OPEN-5 position-level exclusivity decided (no enforcement exists until then) | Architect |
 | | OPEN-7 local state while a close is unresolved, partial-fill quantity update and MODIFY_PROTECTION local update (without it a partial close or stop tighten leaves the system globally blocked) | Architect/Quant |
 | | OPEN-19 idempotent application of persisted results | Architect |
-| | OPEN-20 `recover_from_emergency` authorization model resolved (Security review) before the recovery function is enabled for any operational use, including the simulator path | Architect + Security; Rin approves the final freeze |
+| | OPEN-20 `recover_from_emergency` authorization model resolved (Security review) before the recovery function is enabled for any operational use, including the simulator path. **(R2, RESOLVED_BY_RIN: this is a required prerequisite of the BEFORE-PAPER-DEMO operational enablement; it adds a prerequisite and does not unlock the gate.)** | Architect + Security; Rin approves the final freeze |
 | | OPEN-2 UNKNOWN resolution mechanism at least for the simulator | Architect |
 | | Independent review of PR-1..PR-8 recorded; Security review (AGENTS.md s12: persistence, paper boundary) | review evidence |
 | | **Broker demo** (non-simulated) is not in this row: it requires a later dedicated governance ADR | not decided here |
@@ -874,7 +907,7 @@ update.
 | | A real `CapabilityProvider` declaring `volume_step_anchor`, `session/spread/margin` refs (ADR-033 s14 BLOCKED) | provider PR |
 | | Real read-only BrokerStateQuery with completeness and order lookup; verified restart attribution (5.3) | OPEN-2/OPEN-6 |
 | | OPEN-9 legacy-mode eligibility; Track E resolved for manual OPEN | Architect; Track E |
-| | OPEN-20 authorization model for EMERGENCY recovery resolved and Security-reviewed | Architect + Security; Rin |
+| | OPEN-20 authorization model for EMERGENCY recovery resolved and Security-reviewed. **(R2, RESOLVED_BY_RIN: this is a required prerequisite of the BEFORE-REAL-TRANSMISSION operational enablement; it adds a prerequisite and does not unlock the gate.)** | Architect + Security; Rin |
 | | Duplicate/order-state/reconciliation safety (INV-06..13, 20, 21) all passing and independently reviewed | blocking |
 | | Human approval; PROD isolation per AGENTS.md section 8 | human |
 
@@ -920,11 +953,16 @@ PR-1, so merge order is PR-1 then PR-2. PR-2/5/6/7 touch disjoint files and may 
 after PR-1 (shared files, if any, per AGENTS.md section 7). **PR-3 (EMERGENCY recovery) MUST precede PR-4 (Rin D2)**: it is not optional for the first complete
 `ExecutionPipeline` integration (this resolves the earlier contradiction between this section and
 section 8). PR-3 additionally needs the OPEN-6
-decision for **every** recovery target (including `MATCH` -> `MANAGING`, which needs `complete`) and
-the OPEN-1 freshness bound that section 6 rule 1 references; PR-3 must not be built with an early
-MATCH-only path. PR-3's recovery function must **fail closed at the authorization boundary** until
-OPEN-20 is resolved (section 6, INV-30), so PR-3 may be merged for PR-4's dependency while the
-recovery capability stays **disabled for operational use**; OPEN-20 gates enabling it, not merging it. Every PR is a draft until independently reviewed;
+decision for **every** recovery target (including `MATCH` -> `MANAGING`, which needs `complete`);
+PR-3 must not be built with an early MATCH-only path. **PR-3 does not need OPEN-1 resolved (Rin M-1):**
+section 6 rule 1 requires fresh evidence, and PR-3 may implement the freshness-validation
+mechanism, but it must take the bound from approved policy/configuration, must not invent or
+hard-code any numeric or temporary bound, and must fail closed when operational use needs a bound and
+none is approved; OPEN-1 stays unresolved and stays a BEFORE-PAPER-DEMO gate. PR-3's recovery function
+must **fail closed at the authorization boundary** until OPEN-20 is resolved (section 6, INV-30), so
+**PR-3 may be implemented and merged (R1, RESOLVED_BY_RIN)** as PR-4's dependency while the recovery
+capability stays **disabled for operational use**; OPEN-20 gates operational enablement, not merging,
+and no authorization mechanism may be invented. Every PR is a draft until independently reviewed;
 none may merge to `main` without explicit human instruction (AGENTS.md section 10).
 
 ## 10. What ADR-035 does NOT decide
@@ -956,7 +994,7 @@ resolution of the item. Where an approved Rin decision narrows an item's text, t
 
 | ID | Question | Owner | Until decided |
 |---|---|---|---|
-| OPEN-1 | Maximum age of reconciliation evidence, preflight verdict and health/authority inputs at step 6 and in EMERGENCY recovery | Quant + Architect | step 6 cannot be implemented with a bound; no paper-demo |
+| OPEN-1 | Maximum age of reconciliation evidence, preflight verdict and health/authority inputs at step 6 and in EMERGENCY recovery | Quant + Architect | no approved bound exists, so any operational use that requires a bound fails closed: a mechanism that takes the bound from approved policy/configuration may be implemented and merged without a value (no numeric or temporary bound may be invented or hard-coded; **not** a pre-integration blocker and not a condition for merging PR-3, Rin M-1); no paper-demo (OPEN-1 remains a BEFORE-PAPER-DEMO gate) |
 | OPEN-2 | The read-only **BrokerStateQuery** port: position snapshot with completeness, and order/deal lookup by request or idempotency reference; and whether manual operator attestation may resolve `ATTEMPTED_NO_RESULT`/`UNKNOWN` | Architect (+ Security) | no release path out of UNKNOWN; key stays blocked |
 | OPEN-3 | Quarantine clearing: who may append `quarantine_resolved`, record format, authorization | Architect + Security | quarantined keys stay quarantined |
 | OPEN-4 | Reconciliation scope for position actions: per-position subset vs aggregate; treatment of foreign broker-only positions and unattributed `UNKNOWN` records. **Stated cost of the aggregate-scope constraint (forced by the fail-closed rule; not a selected policy):** a mismatch on another position, or a foreign broker-only position, blocks **every** CLOSE and TIGHTEN, including in an emergency, **and makes EMERGENCY recovery impossible** (section 6 requires the aggregate, ignoring the confirming record, to be SYNCHRONIZED) while any foreign broker-only or other-position mismatch exists | Architect | aggregate only (3.3) |
@@ -975,12 +1013,12 @@ resolution of the item. Where an approved Rin decision narrows an item's text, t
 | OPEN-17 | Origin of the OPEN/REDUCE quantity and the MODIFY_PROTECTION payload: `TradeIntent` carries neither; candidates are Risk sizing, `RiskReductionDecision.resulting_quantity`/`resulting_protection`, `ExitDecision.reduce_quantity`/`new_stop_price`, or caller-supplied (today's guard). OPEN sizing is a Risk decision; this ADR does not touch Track E or manual-OPEN provenance | Architect + Quant (Risk) | pipeline **denies when the payload is absent**; never defaults or fabricates |
 | OPEN-18 | Whether a non-durable `InMemoryExecutionDedupStore` is allowed for any simulated pipeline run | Rin | in-memory refused outside pure unit tests (INV-26) |
 | OPEN-19 | Idempotent application of a persisted result to local state: `apply_execution_result` requires `OPEN`/`MANAGING`, so re-applying a FILLED CLOSE raises and re-applying a FILLED REDUCE would double-reduce. Needs an applied-result marker or an atomic "persist position + applied `result_id`" rule; the mechanism is not chosen here | Architect | a result that may already have been applied is not applied again and the position stays blocked (`RESTART_RECOVERY_PENDING`, status `UNKNOWN`) until reconciliation shows the true state; no automatic re-application |
-| OPEN-20 | `recover_from_emergency` **authorization model** (Rin D5): who or what may authorize an EMERGENCY recovery once verified evidence exists (section 6). Frozen already: `operator_ref` is provenance/audit identity, **not** authorization; a non-empty `operator_ref` alone never authorizes recovery; no timeout or blind reset; the target stays derived from verified evidence. Not defined here: the authorization mechanism itself, which requires **Security review** | Architect + Security; Rin approves the final freeze | recovery implementation **fails closed at the authorization boundary (deny)** and is **not enabled for operational use** (section 6, INV-30); merging PR-3 does not enable it |
+| OPEN-20 | `recover_from_emergency` **authorization model** (Rin D5): who or what may authorize an EMERGENCY recovery once verified evidence exists (section 6). Frozen already: `operator_ref` is provenance/audit identity, **not** authorization; a non-empty `operator_ref` alone never authorizes recovery; no timeout or blind reset; the target stays derived from verified evidence. Not defined here: the authorization mechanism itself, which requires **Security review** | Architect + Security; Rin approves the final freeze | recovery implementation **fails closed at the authorization boundary (deny)** and is **not enabled for operational use** (section 6, INV-30); merging PR-3 does not enable it. **OPEN-20 itself remains OPEN.** Two sub-clauses are **RESOLVED_BY_RIN**: **R1** PR-3 may be implemented and merged while OPEN-20 is unresolved if recovery stays fail-closed at the authorization boundary and cannot be operationally enabled (OPEN-20 blocks operational enablement, not code merge; no mechanism may be invented); **R2** OPEN-20 is a prerequisite of both BEFORE-PAPER-DEMO and BEFORE-REAL-TRANSMISSION operational enablement (adds prerequisites; unlocks neither gate) |
 
 ## 12. Decisions requested of Rin personally
 
-Status key. **RESOLVED_BY_RIN**: approved by Rin in the decision delta of 2026-10-04 and applied in
-this ADR. **OPEN**: still requested and unresolved. The last column states behavior that is **forced
+Status key. **RESOLVED_BY_RIN**: approved by Rin in the decision delta or the clarifications of
+2026-10-04 (R1, R2) and applied in this ADR. **OPEN**: still requested and unresolved. The last column states behavior that is **forced
 by already-frozen invariants and fail-closed constraints** until the item is decided; it is **not** a
 selected policy and not a default chosen by this ADR (see the terminology note at the top of this
 document). Where one row combines an approved part and an unresolved part, each part is labelled
@@ -999,9 +1037,14 @@ separately.
 | 9 | Whether the OPEN-16 forced behavior (any single unresolved key blocks every action globally) is acceptable given the emergency-CLOSE cost, and the enumeration mechanism it needs | OPEN | blocks globally; the store's enumeration accessor is required |
 | 10 | Whether the global block that follows a partial close or a stop tighten until OPEN-7 is decided is acceptable for the paper-demo gate, or whether OPEN-7 is decided earlier | OPEN | globally blocked; OPEN-7 is a paper-demo gate item |
 | 11 | Idempotent application of a persisted result (OPEN-19): the mechanism (applied-result marker vs atomic position + result_id persist) | OPEN | no re-application; the position stays blocked until reconciled |
-| 12 | OPEN-20: the authorization model for `recover_from_emergency`. The Architect + Security review produces it; Rin approves the final freeze | OPEN | recovery fails closed at the authorization boundary and is not enabled for operational use (section 6, INV-30) |
+| 12 | OPEN-20: the authorization model for `recover_from_emergency`. The Architect + Security review produces it; Rin approves the final freeze. Sub-clauses: **(R1)** PR-3 may be implemented and merged while OPEN-20 is unresolved, provided `recover_from_emergency` stays fail-closed at its authorization boundary and cannot be operationally enabled (OPEN-20 blocks operational enablement, not code merge; no authorization mechanism may be invented). **(R2)** OPEN-20 is a prerequisite for both BEFORE-PAPER-DEMO and BEFORE-REAL-TRANSMISSION operational enablement (adds prerequisites; unlocks neither gate) | (OPEN-20 itself) OPEN; **(R1) RESOLVED_BY_RIN**; **(R2) RESOLVED_BY_RIN** | recovery fails closed at the authorization boundary and is not enabled for operational use (section 6, INV-30); R1 and R2 are decided |
 
-Other Rin decisions of 2026-10-04 applied in this ADR (not rows above): D2 (PR-3 required before
+`RESOLVED_BY_RIN` therefore appears only for rows 1 (D1), 3(a) (D3), 4(a) (D4) and the R1/R2
+sub-clauses of row 12; OPEN-1 (M-1) and OPEN-20 itself stay OPEN.
+
+Other Rin decisions of 2026-10-04 applied in this ADR (not rows above): M-1 (OPEN-1 is not a
+pre-integration blocker; the freshness mechanism may merge without a bound; sections 6, 8, 9, 11), M-2
+(quarantine tooling separated from recovery tooling; section 8), D2 (PR-3 required before
 PR-4; sections 8 and 9), D5 (`operator_ref` is not authorization; OPEN-20; sections 6, 10, 11, INV-30),
 D6 (section 8/9 contradiction repaired, this table repaired, "until decided"/"default" terminology
 corrected), D7 (Track E stays BLOCKED; section 10), D8 (nothing is unlocked: no paper/demo
