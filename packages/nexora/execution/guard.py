@@ -10,8 +10,13 @@ already-produced, typed inputs:
   never by parsing ``reason_codes`` (ADR-034 section 3).
 * ``TradeIntent`` -- the sole source of the request (via ``build_execution_request``,
   so ``idempotency_key``/``origin_ref`` cannot drift; ADR-034 sections 4/6).
-* ``ReconciliationStatus`` -- ``reconciliation_blocks_new_trade`` gates OPEN only
-  (ADR-034 section 7); risk-reducing intents are not blocked by reconciliation alone.
+* ``ReconciliationStatus`` -- OPEN is gated by ``reconciliation_blocks_new_trade``
+  (ADR-034 section 7). Per ADR-035 section 3.3/3.4 (rules G4/G5; Rin decision D3) REDUCE,
+  CLOSE and MODIFY_PROTECTION also require ``SYNCHRONIZED``: being risk-reducing does NOT
+  bypass reconciliation (this supersedes the earlier ADR-034 finding F2).
+* ``protection_change`` (MODIFY_PROTECTION only, ADR-035 rules G6/G7) -- must be exactly
+  ``"TIGHTEN"`` or ``"WIDEN"``; anything else denies. WIDEN is blocked while the kill
+  switch is armed. The guard never derives or classifies it; it is consumed as a pure input.
 * ``TradingConfig`` (mode) and a kill-switch flag.
 
 Documented limits:
@@ -19,9 +24,8 @@ Documented limits:
 * Duplicate-order checking is deliberately NOT done here. The durable idempotency
   store is a separate track (ADR-034 section 6); the guard only guarantees the request
   carries the deterministic key such a store would use.
-* The kill switch blocks OPEN (new exposure) only. Blocking risk-reducing intents
-  would be a new trading semantic not frozen by ADR-033/034, so it is not invented here;
-  risk-reducing intents remain gated by authority transmissibility and mode.
+* The kill switch blocks OPEN (new exposure) and MODIFY_PROTECTION WIDEN only. It does
+  not block REDUCE/CLOSE (ADR-035 G8: unchanged); TIGHTEN passes it.
 * Allowing a request is never an instruction to transmit; broker execution stays
   disabled (AGENTS.md section 0).
 """
@@ -36,6 +40,7 @@ from nexora.autonomous.authority import (
     AuthorityDecision,
     AuthorityPolicyStatus,
     ExecutionTransmissibility,
+    ProtectionChange,
     TradingConfig,
 )
 from nexora.autonomous_contracts import TradeIntent, TradeIntentKind, TradingMode, is_risk_reducing
@@ -48,6 +53,8 @@ from nexora.execution.models import (
 )
 from nexora.execution.reconciliation import ReconciliationStatus
 from nexora.execution.reconciliation import blocks_new_trade as reconciliation_blocks_new_trade
+
+_PROTECTION_CHANGES = ("TIGHTEN", "WIDEN")
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,6 +91,7 @@ def evaluate_execution_guard(
     price_constraint: PriceConstraint | None = None,
     protection: ProtectionRequest | None = None,
     position_ref: str | None = None,
+    protection_change: ProtectionChange | None = None,
 ) -> GuardDecision:
     """Return a ``GuardDecision``; an ``ExecutionRequest`` only when every rule passes.
 
@@ -132,10 +140,22 @@ def evaluate_execution_guard(
         reasons.append("authority_not_applicable")
 
     if not is_risk_reducing(intent.kind):
+        # G3 (OPEN), unchanged.
         if reconciliation_blocks_new_trade(reconciliation):
             reasons.append(f"reconciliation_blocks_new_trade:{reconciliation.value}")
         if kill_switch:
             reasons.append("kill_switch_armed")
+    else:
+        # G4 (REDUCE, CLOSE) / G5 (MODIFY_PROTECTION): position actions need SYNCHRONIZED.
+        if reconciliation is not ReconciliationStatus.SYNCHRONIZED:
+            reasons.append(f"reconciliation_blocks_position_action:{reconciliation.value}")
+        # G8: the kill switch does not block REDUCE/CLOSE (no rule).
+        if intent.kind is TradeIntentKind.MODIFY_PROTECTION:
+            # `protection_change` is consulted for MODIFY_PROTECTION only.
+            if type(protection_change) is not str or protection_change not in _PROTECTION_CHANGES:
+                reasons.append("protection_change_unclassified")  # G6
+            elif protection_change == "WIDEN" and kill_switch:
+                reasons.append("kill_switch_blocks_protection_widen")  # G7
 
     if reasons:
         return _deny(*reasons)

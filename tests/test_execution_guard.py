@@ -20,6 +20,7 @@ from nexora.autonomous_contracts import (
 )
 from nexora.execution.guard import GuardDecision, evaluate_execution_guard
 from nexora.execution.idempotency import build_execution_request
+from nexora.execution.models import ProtectionRequest
 from nexora.execution.reconciliation import ReconciliationStatus
 
 NOW = datetime(2026, 10, 3, 12, 0, tzinfo=UTC)
@@ -153,23 +154,157 @@ def test_open_blocked_unless_synchronized(status: ReconciliationStatus) -> None:
     assert decision.reason_codes == (f"reconciliation_blocks_new_trade:{status.value}",)
 
 
-@pytest.mark.parametrize(
-    "status", [ReconciliationStatus.UNSYNCHRONIZED, ReconciliationStatus.UNKNOWN]
-)
-def test_risk_reducing_not_blocked_by_reconciliation_alone(status: ReconciliationStatus) -> None:
-    decision = _run(intent=_close_intent(), reconciliation=status)
+NON_SYNC = [ReconciliationStatus.UNSYNCHRONIZED, ReconciliationStatus.UNKNOWN]
+
+
+def _reduce_intent() -> TradeIntent:
+    return TradeIntent(
+        kind=TradeIntentKind.REDUCE,
+        symbol="SYM",
+        side="long",
+        origin=PositionOrigin(position_id="pos-1", exit_decision_ref="exit-1"),
+        proposal_id="p-reduce",
+    )
+
+
+def _modify_intent() -> TradeIntent:
+    return TradeIntent(
+        kind=TradeIntentKind.MODIFY_PROTECTION,
+        symbol="SYM",
+        side="long",
+        origin=PositionOrigin(position_id="pos-1", exit_decision_ref="exit-1"),
+        proposal_id="p-modify",
+    )
+
+
+def _position_kwargs(intent: TradeIntent) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {"intent": intent, "position_ref": "pos-1"}
+    if intent.kind is TradeIntentKind.REDUCE:
+        kwargs["quantity"] = Decimal("1")
+    if intent.kind is TradeIntentKind.MODIFY_PROTECTION:
+        kwargs["protection"] = ProtectionRequest(stop_price=Decimal("9"))
+        kwargs["protection_change"] = "TIGHTEN"
+    return kwargs
+
+
+def _position_run(factory: Any, **overrides: Any) -> GuardDecision:
+    kwargs = _position_kwargs(factory())
+    kwargs.update(overrides)
+    return _run(**kwargs)
+
+
+@pytest.mark.parametrize("status", NON_SYNC)
+@pytest.mark.parametrize("factory", [_reduce_intent, _close_intent, _modify_intent])
+def test_risk_reducing_requires_synchronized(factory: Any, status: ReconciliationStatus) -> None:
+    decision = _position_run(factory, reconciliation=status)
+    assert decision.allowed is False
+    assert decision.request is None
+    assert decision.reason_codes == (f"reconciliation_blocks_position_action:{status.value}",)
+
+
+@pytest.mark.parametrize("factory", [_reduce_intent, _close_intent, _modify_intent])
+def test_risk_reducing_allowed_when_synchronized(factory: Any) -> None:
+    decision = _position_run(factory)
     assert decision.allowed is True
     assert decision.request is not None
 
 
-def test_risk_reducing_still_blocked_by_not_transmittable_under_bad_reconciliation() -> None:
-    decision = _run(
-        intent=_close_intent(),
-        authority=NOT_TRANSMITTABLE,
-        reconciliation=ReconciliationStatus.UNKNOWN,
+def test_open_reason_code_unchanged_not_position_action() -> None:
+    codes = _run(reconciliation=ReconciliationStatus.UNKNOWN).reason_codes
+    assert codes == ("reconciliation_blocks_new_trade:UNKNOWN",)
+
+
+@pytest.mark.parametrize("factory", [_reduce_intent, _close_intent, _modify_intent])
+def test_risk_reducing_blocked_by_not_transmittable_and_reconciliation(factory: Any) -> None:
+    decision = _position_run(
+        factory, authority=NOT_TRANSMITTABLE, reconciliation=ReconciliationStatus.UNKNOWN
     )
     assert decision.allowed is False
-    assert decision.reason_codes == ("authority_not_transmittable",)
+    assert decision.reason_codes == (
+        "authority_not_transmittable",
+        "reconciliation_blocks_position_action:UNKNOWN",
+    )
+
+
+def test_guard_tighten_passes_kill_switch() -> None:
+    decision = _position_run(_modify_intent, kill_switch=True, protection_change="TIGHTEN")
+    assert decision.allowed is True
+    assert decision.request is not None
+
+
+def test_guard_widen_blocked_by_kill_switch() -> None:
+    decision = _position_run(_modify_intent, kill_switch=True, protection_change="WIDEN")
+    assert decision.allowed is False
+    assert decision.request is None
+    assert decision.reason_codes == ("kill_switch_blocks_protection_widen",)
+
+
+def test_widen_without_kill_switch_not_blocked_by_g7() -> None:
+    # ADR-035 s3.4 note 4 / OPEN-10: guard rule G7 only; no policy asserted beyond it.
+    decision = _position_run(_modify_intent, kill_switch=False, protection_change="WIDEN")
+    assert "kill_switch_blocks_protection_widen" not in decision.reason_codes
+    assert decision.allowed is True
+
+
+@pytest.mark.parametrize("kill_switch", [True, False])
+@pytest.mark.parametrize("value", [None, "tighten", "widen", "UNKNOWN", "", 1, True, b"TIGHTEN"])
+def test_guard_unclassified_protection_denied(kill_switch: bool, value: Any) -> None:
+    decision = _position_run(_modify_intent, kill_switch=kill_switch, protection_change=value)
+    assert decision.allowed is False
+    assert decision.request is None
+    assert decision.reason_codes == ("protection_change_unclassified",)
+
+
+def test_modify_protection_requires_protection_change_by_default() -> None:
+    kwargs = _position_kwargs(_modify_intent())
+    del kwargs["protection_change"]
+    assert _run(**kwargs).reason_codes == ("protection_change_unclassified",)
+
+
+def test_kill_switch_does_not_block_reduce_or_close_g8() -> None:
+    for factory in (_reduce_intent, _close_intent):
+        assert _position_run(factory, kill_switch=True).allowed is True
+
+
+def test_protection_change_not_consulted_for_other_kinds() -> None:
+    # ADR-035 is silent on protection_change for non-MODIFY_PROTECTION kinds: no rule.
+    for value in (None, "WIDEN", "garbage"):
+        assert _run(protection_change=value).allowed is True
+        assert _position_run(_close_intent, protection_change=value, kill_switch=True).allowed
+
+
+def test_modify_protection_reasons_in_fixed_order() -> None:
+    decision = _position_run(
+        _modify_intent,
+        authority=DENY,
+        reconciliation=ReconciliationStatus.UNKNOWN,
+        kill_switch=True,
+        config=TradingConfig(mode=TradingMode.AUTO),
+        protection_change=None,
+    )
+    assert decision.reason_codes == (
+        "auto_mode_not_governed",
+        "authority_denied",
+        "reconciliation_blocks_position_action:UNKNOWN",
+        "protection_change_unclassified",
+    )
+    widen = _position_run(
+        _modify_intent,
+        authority=DENY,
+        reconciliation=ReconciliationStatus.UNSYNCHRONIZED,
+        kill_switch=True,
+        protection_change="WIDEN",
+    )
+    assert widen.reason_codes == (
+        "authority_denied",
+        "reconciliation_blocks_position_action:UNSYNCHRONIZED",
+        "kill_switch_blocks_protection_widen",
+    )
+
+
+def test_invalid_reconciliation_for_position_action_fails_closed() -> None:
+    decision = _position_run(_close_intent, reconciliation="SYNCHRONIZED")
+    assert decision.reason_codes == ("invalid_reconciliation",)
 
 
 def test_kill_switch_blocks_open_only() -> None:
