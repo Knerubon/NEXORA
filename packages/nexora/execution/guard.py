@@ -17,6 +17,15 @@ already-produced, typed inputs:
 * ``protection_change`` (MODIFY_PROTECTION only, ADR-035 rules G6/G7) -- must be exactly
   ``"TIGHTEN"`` or ``"WIDEN"``; anything else denies. WIDEN is blocked while the kill
   switch is armed. The guard never derives or classifies it; it is consumed as a pure input.
+* ``new_position_ref`` (OPEN only, ADR-035 section 4.1 / INV-17) -- the guard is the ONE
+  policy enforcement point for it: an OPEN with ``new_position_ref`` of ``None`` is denied
+  with ``new_position_ref_missing`` (it is required for transmission, although the
+  ``ExecutionRequest`` type keeps it optional during migration). The guard only receives
+  and passes the value through to ``build_execution_request``; it never derives it
+  (derivation belongs to the pipeline). A blank value, a non-string value, or any value supplied for
+  REDUCE/CLOSE/MODIFY_PROTECTION, is rejected by the type layer and denied here as
+  ``execution_request_invalid``; the guard adds no policy for those cases. Preflight and
+  the adapter must not duplicate this rule.
 * ``TradingConfig`` (mode) and a kill-switch flag.
 
 Documented limits:
@@ -92,11 +101,14 @@ def evaluate_execution_guard(
     protection: ProtectionRequest | None = None,
     position_ref: str | None = None,
     protection_change: ProtectionChange | None = None,
+    new_position_ref: str | None = None,
 ) -> GuardDecision:
     """Return a ``GuardDecision``; an ``ExecutionRequest`` only when every rule passes.
 
     Any missing or wrongly-typed input denies (fail closed). All applicable reason
-    codes are reported, in a fixed order, so the result is deterministic.
+    codes are reported, in a fixed order, so the result is deterministic. Order: mode
+    codes, authority codes, then for OPEN: reconciliation (G3), ``kill_switch_armed``,
+    ``new_position_ref_missing``; for position actions: G4/G5, G6/G7.
     """
 
     invalid: list[str] = []
@@ -145,6 +157,8 @@ def evaluate_execution_guard(
             reasons.append(f"reconciliation_blocks_new_trade:{reconciliation.value}")
         if kill_switch:
             reasons.append("kill_switch_armed")
+        if intent.kind is TradeIntentKind.OPEN and new_position_ref is None:
+            reasons.append("new_position_ref_missing")  # ADR-035 s4.1 / INV-17
     else:
         # G4 (REDUCE, CLOSE) / G5 (MODIFY_PROTECTION): position actions need SYNCHRONIZED.
         if reconciliation is not ReconciliationStatus.SYNCHRONIZED:
@@ -160,6 +174,10 @@ def evaluate_execution_guard(
     if reasons:
         return _deny(*reasons)
 
+    if new_position_ref is not None and type(new_position_ref) is not str:
+        # Fail closed on wrong types the type layer would not catch (e.g. bytes).
+        return _deny("execution_request_invalid")
+
     try:
         request = build_execution_request(
             intent,
@@ -170,6 +188,7 @@ def evaluate_execution_guard(
             price_constraint=price_constraint,
             protection=protection,
             position_ref=position_ref,
+            new_position_ref=new_position_ref,
         )
     except (ExecutionContractError, AttributeError, TypeError):
         return _deny("execution_request_invalid")

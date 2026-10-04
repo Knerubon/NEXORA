@@ -19,7 +19,7 @@ from nexora.autonomous_contracts import (
     TradingMode,
 )
 from nexora.execution.guard import GuardDecision, evaluate_execution_guard
-from nexora.execution.idempotency import build_execution_request
+from nexora.execution.idempotency import build_execution_request, derive_new_position_ref
 from nexora.execution.models import ProtectionRequest
 from nexora.execution.reconciliation import ReconciliationStatus
 
@@ -64,6 +64,7 @@ def _run(**overrides: Any) -> GuardDecision:
     }
     if intent is not None and intent.kind is TradeIntentKind.OPEN:
         params["quantity"] = Decimal("1")
+        params["new_position_ref"] = derive_new_position_ref(intent)
     elif intent is not None:
         params["position_ref"] = "pos-1"
     params.update(overrides)
@@ -80,6 +81,7 @@ def test_allowed_open_builds_request_via_factory() -> None:
         instrument_id="INSTR",
         created_at=NOW,
         quantity=Decimal("1"),
+        new_position_ref=derive_new_position_ref(_open_intent()),
     )
     assert decision.request == expected
 
@@ -406,3 +408,92 @@ def test_guard_module_has_no_forbidden_imports() -> None:
         or name in {"__future__", "decimal"}
         for name in imported
     )
+
+
+# --- ADR-035 s4.1 / INV-17: new_position_ref enforcement (guard is the single point) ---
+
+
+def test_guard_open_missing_new_position_ref_denied() -> None:
+    decision = _run(new_position_ref=None)
+    assert decision.allowed is False
+    assert decision.request is None
+    assert decision.reason_codes == ("new_position_ref_missing",)
+
+
+def test_guard_open_new_position_ref_omitted_denied() -> None:
+    kwargs: dict[str, Any] = {
+        "authority": ALLOW,
+        "intent": _open_intent(),
+        "reconciliation": ReconciliationStatus.SYNCHRONIZED,
+        "config": ASSISTED,
+        "kill_switch": False,
+        "request_id": "req-1",
+        "instrument_id": "INSTR",
+        "created_at": NOW,
+        "quantity": Decimal("1"),
+    }
+    assert evaluate_execution_guard(**kwargs).reason_codes == ("new_position_ref_missing",)
+
+
+def test_guard_open_new_position_ref_passthrough() -> None:
+    ref = derive_new_position_ref(_open_intent())
+    decision = _run(new_position_ref=ref)
+    assert decision.allowed is True
+    assert decision.request is not None
+    assert decision.request.new_position_ref == ref
+    custom = _run(new_position_ref="pos:custom")
+    assert custom.request is not None
+    assert custom.request.new_position_ref == "pos:custom"
+
+
+def test_guard_open_missing_ref_reason_order_with_other_failures() -> None:
+    decision = _run(
+        authority=DENY,
+        reconciliation=ReconciliationStatus.UNKNOWN,
+        kill_switch=True,
+        config=TradingConfig(mode=TradingMode.AUTO),
+        new_position_ref=None,
+    )
+    assert decision.reason_codes == (
+        "auto_mode_not_governed",
+        "authority_denied",
+        "reconciliation_blocks_new_trade:UNKNOWN",
+        "kill_switch_armed",
+        "new_position_ref_missing",
+    )
+    unconfirmed = TradingConfig(mode=TradingMode.ASSISTED, assisted_confirmation=False)
+    two = _run(config=unconfirmed, new_position_ref=None)
+    assert two.reason_codes == ("assisted_confirmation_missing", "new_position_ref_missing")
+
+
+@pytest.mark.parametrize("value", ["", "   ", "	"])
+def test_guard_open_blank_new_position_ref_denied_by_type_layer(value: str) -> None:
+    decision = _run(new_position_ref=value)
+    assert decision.allowed is False
+    assert decision.request is None
+    assert decision.reason_codes == ("execution_request_invalid",)
+
+
+@pytest.mark.parametrize("value", [1, True, b"pos:x", 1.5])
+def test_guard_open_wrongly_typed_new_position_ref_fails_closed(value: Any) -> None:
+    decision = _run(new_position_ref=value)
+    assert decision.allowed is False
+    assert decision.request is None
+    assert decision.reason_codes == ("execution_request_invalid",)
+
+
+@pytest.mark.parametrize("factory", [_reduce_intent, _close_intent, _modify_intent])
+def test_guard_position_actions_with_new_position_ref_denied_by_type_layer(factory: Any) -> None:
+    decision = _position_run(factory, new_position_ref="pos:x")
+    assert decision.allowed is False
+    assert decision.request is None
+    assert decision.reason_codes == ("execution_request_invalid",)
+
+
+@pytest.mark.parametrize("factory", [_reduce_intent, _close_intent, _modify_intent])
+def test_guard_position_actions_without_new_position_ref_unchanged(factory: Any) -> None:
+    decision = _position_run(factory)
+    assert decision.allowed is True
+    assert decision.request is not None
+    assert decision.request.new_position_ref is None
+    assert _position_run(factory, new_position_ref=None).allowed is True
