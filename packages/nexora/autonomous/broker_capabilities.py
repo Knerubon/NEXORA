@@ -14,6 +14,12 @@ from decimal import Decimal
 
 from nexora.market_data.instruments import FeedBinding, InstrumentDefinition
 
+# Normalized volume reason codes (ADR-035 s4.5). Kept equal to the strings already
+# used by execution/broker_adapter.py; a test pins the equality.
+REASON_VOLUME_BELOW_MIN = "volume_below_min"
+REASON_VOLUME_ABOVE_MAX = "volume_above_max"
+REASON_VOLUME_STEP_MISMATCH = "volume_not_multiple_of_step"
+
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class BrokerCapabilities:
@@ -34,8 +40,12 @@ class BrokerCapabilities:
     spread_policy_ref: str
     margin_policy_ref: str
     observed_at: datetime
+    # ADR-035 s4.5: None => the volume grid is anchored at volume_min.
+    volume_step_anchor: Decimal | None = None
 
     def __post_init__(self) -> None:
+        if self.volume_step_anchor is not None and not self.volume_step_anchor.is_finite():
+            raise ValueError("invalid_volume_step_anchor")
         if self.instrument.instrument_id != self.binding.instrument_id:
             raise ValueError("broker_capabilities_instrument_binding_mismatch")
         if self.observed_at.tzinfo is None or self.observed_at.utcoffset() is None:
@@ -69,3 +79,29 @@ class BrokerCapabilities:
     @property
     def contract_size(self) -> Decimal:
         return self.instrument.trade_contract_size
+
+
+def validate_volume(capabilities: BrokerCapabilities, quantity: Decimal) -> str | None:
+    """Shared pure volume validation (ADR-035 s4.5). Returns a reason code, or
+    ``None`` when valid.
+
+    Valid iff ``volume_min <= q <= volume_max`` and ``(q - anchor) % volume_step
+    == 0`` where ``anchor`` is ``volume_step_anchor`` if declared, else
+    ``volume_min``. A non-finite quantity is rejected fail-closed with the
+    step-mismatch code (comparisons on NaN would otherwise misbehave).
+    """
+
+    if not quantity.is_finite():
+        return REASON_VOLUME_STEP_MISMATCH
+    if quantity < capabilities.volume_min:
+        return REASON_VOLUME_BELOW_MIN
+    if quantity > capabilities.volume_max:
+        return REASON_VOLUME_ABOVE_MAX
+    anchor = (
+        capabilities.volume_step_anchor
+        if capabilities.volume_step_anchor is not None
+        else capabilities.volume_min
+    )
+    if (quantity - anchor) % capabilities.volume_step != 0:
+        return REASON_VOLUME_STEP_MISMATCH
+    return None

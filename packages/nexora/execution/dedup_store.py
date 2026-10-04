@@ -31,6 +31,7 @@ from threading import RLock
 from typing import Any, Protocol
 
 from nexora.artifacts import canonical_serialize
+from nexora.autonomous_contracts import TradeIntentKind
 from nexora.execution.models import (
     ExecutionContractError,
     ExecutionResult,
@@ -100,10 +101,11 @@ def deserialize_result(raw: object) -> ExecutionResult:
             item = raw.get(name)
             return None if item is None else Decimal(str(item))
 
-        requested = dec("requested_quantity")
+        requested = dec("requested_quantity")  # None only for MODIFY_PROTECTION (ADR-035)
         filled = dec("filled_quantity")
-        if requested is None or filled is None:
+        if filled is None:
             raise TypeError("missing_quantity")
+        raw_action = raw.get("action")
         return ExecutionResult(
             result_id=raw["result_id"],
             request_ref=raw["request_ref"],
@@ -116,6 +118,8 @@ def deserialize_result(raw: object) -> ExecutionResult:
             execution_price=dec("execution_price"),
             reason_code=raw.get("reason_code"),
             observed_at=datetime.fromisoformat(raw["observed_at"]),
+            action=None if raw_action is None else TradeIntentKind(raw_action),
+            nexora_position_ref=raw.get("nexora_position_ref"),
         )
     except (KeyError, TypeError, ValueError, InvalidOperation, ExecutionContractError) as exc:
         raise DedupStoreCorruptError("dedup_result_unreadable") from exc
