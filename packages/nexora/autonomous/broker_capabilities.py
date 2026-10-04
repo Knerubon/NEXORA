@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
+from fractions import Fraction
 
 from nexora.market_data.instruments import FeedBinding, InstrumentDefinition
 
@@ -81,27 +82,51 @@ class BrokerCapabilities:
         return self.instrument.trade_contract_size
 
 
+# Implementation-safety guard (not a trading policy and not a broker limit): exact
+# integer-ratio arithmetic on a Decimal with an absurd exponent would allocate an
+# enormous integer. Beyond this magnitude the step check fails closed instead.
+_MAX_EXACT_EXPONENT_MAGNITUDE = 10_000
+
+
+def _on_step_grid(quantity: Decimal, anchor: Decimal, step: Decimal) -> bool:
+    """Exact test that ``(quantity - anchor) / step`` is an integer."""
+
+    for value in (quantity, anchor, step):
+        if abs(value.adjusted()) > _MAX_EXACT_EXPONENT_MAGNITUDE:
+            return False
+    ratio = (Fraction(quantity) - Fraction(anchor)) / Fraction(step)
+    return ratio.denominator == 1
+
+
 def validate_volume(capabilities: BrokerCapabilities, quantity: Decimal) -> str | None:
-    """Shared pure volume validation (ADR-035 s4.5). Returns a reason code, or
-    ``None`` when valid.
+    """Shared pure, TOTAL volume validation (ADR-035 s4.5). Returns a reason code,
+    or ``None`` when valid. Never raises.
 
     Valid iff ``volume_min <= q <= volume_max`` and ``(q - anchor) % volume_step
     == 0`` where ``anchor`` is ``volume_step_anchor`` if declared, else
-    ``volume_min``. A non-finite quantity is rejected fail-closed with the
-    step-mismatch code (comparisons on NaN would otherwise misbehave).
+    ``volume_min``. The step test uses exact rational arithmetic, so the Decimal
+    context precision can neither raise nor mis-validate. A non-finite quantity,
+    a non-Decimal quantity (including ``bool``), a non-``BrokerCapabilities``
+    object, or any unexpected failure is rejected fail-closed with the
+    step-mismatch code.
     """
 
-    if not quantity.is_finite():
+    try:
+        if not isinstance(capabilities, BrokerCapabilities):
+            return REASON_VOLUME_STEP_MISMATCH
+        if not isinstance(quantity, Decimal) or not quantity.is_finite():
+            return REASON_VOLUME_STEP_MISMATCH
+        if quantity < capabilities.volume_min:
+            return REASON_VOLUME_BELOW_MIN
+        if quantity > capabilities.volume_max:
+            return REASON_VOLUME_ABOVE_MAX
+        anchor = (
+            capabilities.volume_step_anchor
+            if capabilities.volume_step_anchor is not None
+            else capabilities.volume_min
+        )
+        if not _on_step_grid(quantity, anchor, capabilities.volume_step):
+            return REASON_VOLUME_STEP_MISMATCH
+        return None
+    except Exception:
         return REASON_VOLUME_STEP_MISMATCH
-    if quantity < capabilities.volume_min:
-        return REASON_VOLUME_BELOW_MIN
-    if quantity > capabilities.volume_max:
-        return REASON_VOLUME_ABOVE_MAX
-    anchor = (
-        capabilities.volume_step_anchor
-        if capabilities.volume_step_anchor is not None
-        else capabilities.volume_min
-    )
-    if (quantity - anchor) % capabilities.volume_step != 0:
-        return REASON_VOLUME_STEP_MISMATCH
-    return None
