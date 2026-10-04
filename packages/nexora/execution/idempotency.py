@@ -13,7 +13,13 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 
-from nexora.autonomous_contracts import EntryOrigin, ManualOrigin, PositionOrigin, TradeIntent
+from nexora.autonomous_contracts import (
+    EntryOrigin,
+    ManualOrigin,
+    PositionOrigin,
+    TradeIntent,
+    TradeIntentKind,
+)
 from nexora.execution.models import (
     ExecutionContractError,
     ExecutionRequest,
@@ -47,6 +53,23 @@ def execution_request_idempotency_key(intent: TradeIntent) -> str:
     return f"exec:{intent.kind.value}:{trade_intent_identity(intent)}"
 
 
+def derive_new_position_ref(intent: TradeIntent) -> str:
+    """Deterministic pre-claim NEXORA position id for the position an OPEN creates
+    (ADR-035 s4.1).
+
+    A pure function of intent identity only: stable across retries and restarts,
+    never reused for another intent, independent of any broker ticket or symbol.
+    The idempotency key derivation is unaffected.
+
+    FORMAT PENDING ARCHITECT APPROVAL: ADR-035 s4.1 leaves the exact format a
+    "PR-1 detail" and gives ``pos:<proposal_id>`` only as an illustration.
+    """
+
+    if intent.kind is not TradeIntentKind.OPEN:
+        raise ExecutionContractError("new_position_ref_only_allowed_for_open")
+    return f"pos:{trade_intent_identity(intent)}"
+
+
 def _origin_ref(intent: TradeIntent) -> str:
     origin = intent.origin
     if isinstance(origin, EntryOrigin):
@@ -68,6 +91,7 @@ def build_execution_request(
     price_constraint: PriceConstraint | None = None,
     protection: ProtectionRequest | None = None,
     position_ref: str | None = None,
+    new_position_ref: str | None = None,
 ) -> ExecutionRequest:
     """Builds an ``ExecutionRequest`` whose ``idempotency_key``/``origin_ref``
     are always correctly derived from ``intent`` — never a free-form value a
@@ -88,5 +112,6 @@ def build_execution_request(
         price_constraint=price_constraint,
         protection=protection,
         position_ref=position_ref,
+        new_position_ref=new_position_ref,
         created_at=created_at,
     )
