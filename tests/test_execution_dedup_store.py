@@ -288,3 +288,29 @@ def test_release_returns_false_when_not_written_by_this_call(tmp_path: Path) -> 
     assert b.release_for_retry(KEY) is False  # already released; new generation unclaimed
     for j in journals:
         j.close()
+
+
+def test_state_accessor_follows_existing_claim_result_release_flow(
+    store: ExecutionDedupStore,
+) -> None:
+    from nexora.execution.dedup_store import DedupKeyState
+
+    assert store.state(KEY) is DedupKeyState.UNCLAIMED
+    store.claim(KEY)
+    assert store.state(KEY) is DedupKeyState.CLAIMED_NOT_ATTEMPTED
+    store.record_result(KEY, result(ExecutionStatus.UNKNOWN))
+    assert store.state(KEY) is DedupKeyState.RESULT_UNSAFE
+    assert store.unresolved_among([KEY, "exec:CLOSE:none"]) == (KEY,)
+
+
+def test_unknown_event_name_remains_integrity_violation(tmp_path: Path) -> None:
+    s, journal = durable(tmp_path)
+    s.claim(KEY)
+    journal.append(
+        f"execution-dedup:{KEY}",
+        "reconciled#0",
+        {"event": "reconciled", "generation": 0, "idempotency_key": KEY},
+    )
+    with pytest.raises(DedupStoreCorruptError):
+        s.lookup(KEY)
+    journal.close()
