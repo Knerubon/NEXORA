@@ -181,30 +181,11 @@ class _PreflightPort(Protocol):
     ) -> PreflightDecision: ...
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
-class NonProductionTransmissionSeam:
-    """The ONLY way an adapter can be attached. Mint it with
-    ``non_production_transmission_seam``; direct construction is refused by the pipeline.
-    Tests only: production modules must never reference it (AST-enforced)."""
-
-    adapter: BrokerExecutionAdapter
-    preflight: _PreflightPort
-    adapter_mode: str  # read ONCE at wiring; never re-read
-    capabilities: BrokerCapabilities  # captured ONCE from the wired adapter; never re-read
-    _token: object = field(repr=False, compare=False)
-
-
-def non_production_transmission_seam(
-    adapter: object, *, preflight: _PreflightPort | None = None
-) -> NonProductionTransmissionSeam:
-    """Permitted TEST-ONLY wiring gate (ADR-035 INV-25, PR-7 Option B).
-
-    Accepts only an exact allow-listed class: the exact shipped simulator class, or an
-    explicitly marked ``NEXORA_NON_PRODUCTION_TEST_ADAPTER = True`` class that lives outside
-    the ``nexora.`` package (a subclass of the simulator is neither). Reads the adapter's
-    ``adapter_mode`` and ``capabilities()`` exactly ONCE and captures them. Without an
-    explicit ``preflight`` the real, deny-only ``ExecutionPreflight`` is used, so a wired
-    simulator still can never transmit."""
+def _gate_adapter(adapter: object) -> tuple[str, BrokerCapabilities]:
+    """The ONE wiring gate (ADR-035 INV-25, PR-7 Option B): exact allow-listed class, closed
+    SIMULATION-only mode vocabulary, exact ``BrokerCapabilities``. Returns the mode and the
+    capabilities READ FROM THAT adapter. Re-run by the seam (``__post_init__``) and by the
+    pipeline constructor so a seam can never carry values belonging to another adapter."""
 
     if not isinstance(adapter, BrokerExecutionAdapter):
         raise PipelineWiringError("adapter_does_not_implement_broker_execution_adapter")
@@ -227,13 +208,54 @@ def non_production_transmission_seam(
         raise PipelineWiringError("adapter_capabilities_unavailable") from None
     if type(capabilities) is not BrokerCapabilities:
         raise PipelineWiringError("adapter_capabilities_invalid")
-    return NonProductionTransmissionSeam(
-        adapter=adapter,
+    return mode, capabilities
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class NonProductionTransmissionSeam:
+    """The ONLY way an adapter can be attached. Mint it with
+    ``non_production_transmission_seam``; direct construction is refused by the pipeline.
+    Tests only: production modules must never reference it (AST-enforced).
+
+    Hardening: ``__post_init__`` re-runs the full gate on ``adapter`` and requires the
+    captured ``adapter_mode`` / ``capabilities`` to be exactly what THAT adapter reports, so
+    ``dataclasses.replace`` with another adapter (or stale captured values) fails closed.
+    The factory token is NOT an init field: ``replace`` / direct construction produce a seam
+    without it (refused by the pipeline), and a pickle/deepcopy round trip yields a different
+    token object."""
+
+    adapter: BrokerExecutionAdapter
+    preflight: _PreflightPort
+    adapter_mode: str  # captured at wiring
+    capabilities: BrokerCapabilities  # captured at wiring from THIS adapter
+    _token: object = field(default=None, init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        mode, capabilities = _gate_adapter(self.adapter)
+        if self.adapter_mode != mode or type(self.adapter_mode) is not str:
+            raise PipelineWiringError("seam_adapter_mode_not_from_adapter")
+        if self.capabilities != capabilities:
+            raise PipelineWiringError("seam_capabilities_not_from_adapter")
+
+
+def non_production_transmission_seam(
+    adapter: object, *, preflight: _PreflightPort | None = None
+) -> NonProductionTransmissionSeam:
+    """Permitted TEST-ONLY wiring gate (see ``_gate_adapter``): accepts only the exact
+    shipped simulator class or an explicitly marked test double outside ``nexora.`` (a
+    subclass of the simulator is neither), SIMULATION mode only. Without an explicit
+    ``preflight`` the real, deny-only ``ExecutionPreflight`` is used, so a wired simulator
+    still can never transmit."""
+
+    mode, capabilities = _gate_adapter(adapter)
+    seam = NonProductionTransmissionSeam(
+        adapter=adapter,  # type: ignore[arg-type]
         preflight=preflight if preflight is not None else ExecutionPreflight(),
         adapter_mode=mode,
         capabilities=capabilities,
-        _token=_SEAM_TOKEN,
     )
+    object.__setattr__(seam, "_token", _SEAM_TOKEN)
+    return seam
 
 
 # --------------------------------------------------------------------------- inputs / outputs
@@ -359,12 +381,17 @@ class ExecutionPipeline:
             or transmission._token is not _SEAM_TOKEN
         ):
             raise PipelineWiringError("transmission_wiring_not_permitted")
-        if transmission is not None and (
-            type(transmission.adapter_mode) is not str
-            or transmission.adapter_mode not in PHASE1_EXECUTABLE_ADAPTER_MODES
-            or type(transmission.capabilities) is not BrokerCapabilities
-        ):
-            raise PipelineWiringError("adapter_mode_not_simulation")
+        if transmission is not None:
+            # Second layer: re-run the full gate on the adapter actually in the seam and
+            # require the captured values to belong to it.
+            mode, capabilities = _gate_adapter(transmission.adapter)
+            if (
+                type(transmission.adapter_mode) is not str
+                or transmission.adapter_mode != mode
+                or type(transmission.capabilities) is not BrokerCapabilities
+                or transmission.capabilities != capabilities
+            ):
+                raise PipelineWiringError("adapter_mode_not_simulation")
         if transmission is None and isinstance(dedup_store, InMemoryExecutionDedupStore):
             # INV-26 / OPEN-18: a non-durable store is refused outside the test seam.
             raise PipelineWiringError("in_memory_dedup_store_refused")

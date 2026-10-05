@@ -488,7 +488,6 @@ def test_pipeline_refuses_a_raw_adapter_and_a_forged_seam() -> None:
         preflight=AllowPreflightForTestsOnly(log),
         adapter_mode=SIMULATION_MODE,
         capabilities=_caps(),
-        _token=object(),
     )
     with pytest.raises(PipelineWiringError) as err:
         ExecutionPipeline(dedup_store=store, clock=lambda: NOW, transmission=forged)

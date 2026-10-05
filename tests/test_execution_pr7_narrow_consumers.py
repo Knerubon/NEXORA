@@ -22,6 +22,7 @@ from unittest import mock
 
 import nexora.execution.broker_adapter as broker_adapter_module
 import nexora.execution.instrument_resolution as resolution_module
+import nexora.execution.pipeline as pipeline_module
 import nexora.execution.reconciler as reconciler_module
 import pytest
 from nexora.autonomous.broker_capabilities import (
@@ -534,18 +535,26 @@ def test_exact_class_allow_list() -> None:
 
 def test_pipeline_constructor_rechecks_the_captured_mode() -> None:
     seam = non_production_transmission_seam(_ModeDouble())
-    forged = dataclasses.replace(seam, adapter_mode="real")
+    # replace() re-runs the seam gate: stale/forged captured values fail closed at once
+    with pytest.raises(PipelineWiringError):
+        dataclasses.replace(seam, adapter_mode="real")
+    with pytest.raises(PipelineWiringError):
+        dataclasses.replace(seam, capabilities="x")  # type: ignore[arg-type]
+    # second layer: a seam forged WITHOUT __post_init__ (even carrying the token) is refused
+    forged = object.__new__(type(seam))
+    for name, value in (
+        ("adapter", seam.adapter),
+        ("preflight", seam.preflight),
+        ("adapter_mode", "real"),
+        ("capabilities", seam.capabilities),
+        ("_token", pipeline_module._SEAM_TOKEN),
+    ):
+        object.__setattr__(forged, name, value)
     with pytest.raises(PipelineWiringError) as err:
         ExecutionPipeline(
             dedup_store=InMemoryExecutionDedupStore(), clock=lambda: NOW, transmission=forged
         )
-    assert err.value.code in ("transmission_wiring_not_permitted", "adapter_mode_not_simulation")
-    with pytest.raises(PipelineWiringError):
-        ExecutionPipeline(
-            dedup_store=InMemoryExecutionDedupStore(),
-            clock=lambda: NOW,
-            transmission=dataclasses.replace(seam, capabilities="x"),  # type: ignore[arg-type]
-        )
+    assert err.value.code == "adapter_mode_not_simulation"
 
 
 class _RecordingAllow(AllowPreflightForTestsOnly):
