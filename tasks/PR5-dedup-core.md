@@ -50,3 +50,8 @@ detected on the next read as a late unsafe result (QUARANTINED, fail closed).
   inspect()/violation_code.
 - PR-4 contract-test gate: caller-supplied evidence refs (request_digest, reconciliation_evidence_ref,
   preflight_decision_ref) are not validated by the store for secrets/PII.
+
+## Additional PR-4 gates (review MINOR follow-up, docs only)
+- PR-4 must consume `inspect()` / `state()` only, never `lookup().latest_result` (display value, latest-wins).
+- The OPEN-16 gate must block on RESULT_UNSAFE (and QUARANTINED) as well as on `unresolved_among`, which reports only
+  ATTEMPTED_NO_RESULT / ever-UNKNOWN and is caller-scoped (DEDUP-ENUM-1 not implemented).

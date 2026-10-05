@@ -41,6 +41,15 @@ result may only be recorded when the state is ATTEMPTED_NO_RESULT (acceptance
 gate of PR-4). Caller-supplied evidence refs are not validated here for
 secrets/PII (PR-4 contract-test gate).
 
+GLOBAL ENUMERATION (DEDUP-ENUM-1) is a storage-layer capability and is NOT implemented
+here: the Journal cannot list streams, so `unresolved_among` is caller-scoped only.
+
+EXCEPTION HIERARCHY follow-up gate (before PR-4 integration): sibling IO / integrity
+errors under DedupStoreError, with all catches and tests migrated and independently
+reviewed. Until then consumers test DedupStoreIOError FIRST or use
+`inspect()` / `violation_code`. `DedupRecord.latest_result` is display-only; PR-4 must
+consume `inspect()` / `state()`.
+
 Only the ``attempt`` and ``abort`` event names are added to the recognised set;
 every other name stays an integrity violation. Release after ``abort``
 (OPEN-14), quarantine clearing (OPEN-3) and reconciliation-based release
@@ -137,6 +146,9 @@ class DedupKeyState(StrEnum):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class DedupRecord:
+    """Display record. `latest_result` is a DISPLAY value (latest-wins) and MUST NOT be
+    used for any safety decision; PR-4 must consume `inspect()` / `state()` only."""
+
     idempotency_key: str
     generation: int
     latest_result: ExecutionResult | None
@@ -144,6 +156,9 @@ class DedupRecord:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class DedupKeyStatus:
+    """W3 status. `latest_result` is display-only (latest-wins); decide on `state`,
+    `unknown_observed` and `violation_code`, never on the latest result."""
+
     idempotency_key: str
     state: DedupKeyState
     generation: int | None  # None only when QUARANTINED
@@ -164,11 +179,14 @@ class ExecutionDedupStore(Protocol):
         ...
 
     def lookup(self, idempotency_key: str) -> DedupRecord | None:
-        """Current claim state, or None if the key was never claimed."""
+        """Display lookup; None if never claimed. `latest_result` is latest-wins DISPLAY data
+        and MUST NOT drive any safety decision; use `inspect()` / `state()` (PR-4)."""
         ...
 
     def release_for_retry(self, idempotency_key: str) -> bool:
-        """Release only if the latest result is a clean zero-fill REJECTED."""
+        """Release only if the generation has >=1 result, ALL clean zero-fill REJECTED, and
+        no unsafe evidence (UNKNOWN/ACCEPTED/PARTIALLY_FILLED/FILLED) was ever observed
+        (monotonic; a later REJECTED never clears it). Never releases ABORTED/ATTEMPTED."""
         ...
 
     def record_attempt(
@@ -203,7 +221,14 @@ class ExecutionDedupStore(Protocol):
         ...
 
     def unresolved_among(self, keys: Iterable[str]) -> tuple[str, ...]:
-        """Caller-supplied keys that are ATTEMPTED_NO_RESULT or whose latest result is UNKNOWN."""
+        """TEMPORARY CALLER-SCOPED accessor, NOT global safety proof (DEDUP-ENUM-1 is not
+        implemented; unnamed keys are invisible).
+
+        Returns caller-supplied keys that are ATTEMPTED_NO_RESULT or ever observed UNKNOWN
+        in the current generation. RESULT_UNSAFE keys (incl. ever ACCEPTED/PARTIALLY_FILLED/
+        FILLED) are NOT reported here per ADR s3.8 and QUARANTINED keys are not either: the
+        OPEN-16 gate MUST consume `inspect()`/`state()` (RESULT_UNSAFE, QUARANTINED), not
+        only this method."""
         ...
 
 
