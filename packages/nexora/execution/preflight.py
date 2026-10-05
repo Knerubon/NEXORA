@@ -22,8 +22,17 @@ Deliberately NOT decided here (ADR gaps; every one fails closed, see the task re
 * No freshness bound exists (OPEN-1). The bound is injected by the caller; none supplied
   or an invalid one denies with ``preflight_capabilities_freshness_bound_missing``.
 
-All ``preflight_*`` codes other than ``preflight_policy_undecided`` and
-``preflight_volume_validation_error`` are PENDING ARCHITECT APPROVAL.
+NON-OPERATIONAL / DENY-ONLY: in this V1 ``ExecutionPreflight.evaluate`` can NEVER
+return ``allowed=True`` (every path ends in at least one deny reason, see above). It
+must not be used as, or treated as, an authorization to execute. There is no allow path
+and no OPEN-1/OPEN-11 resolution here.
+
+Reason-code vocabulary: the ten ``preflight_*`` codes below are the APPROVED V1
+diagnostic vocabulary (Rin, 2026-10-05); this approval does NOT resolve any OPEN policy
+item (OPEN-1, OPEN-11 etc.). The deviations from ADR-035 s3.5 (raw ``evaluated_at`` and
+``capabilities_observed_at: datetime | None`` on a deny; caller-injected
+``max_capabilities_age``) are approved ONLY for this current deny-only / incomplete
+Preflight V1, not as a general contract change.
 """
 
 from __future__ import annotations
@@ -37,7 +46,7 @@ from nexora.execution.models import ExecutionRequest
 
 REASON_POLICY_UNDECIDED = "preflight_policy_undecided"
 REASON_VOLUME_VALIDATION_ERROR = "preflight_volume_validation_error"
-# Pending Architect approval (names not frozen by ADR-035):
+# APPROVED V1 diagnostic vocabulary (Rin, 2026-10-05); does NOT resolve any OPEN item:
 REASON_CLOCK_REQUIRES_TIMEZONE = "preflight_clock_requires_timezone"
 REASON_CAPABILITIES_MISSING = "preflight_capabilities_missing"
 REASON_INSTRUMENT_MISMATCH = "preflight_instrument_mismatch"
@@ -56,7 +65,11 @@ def _is_aware(moment: object) -> bool:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class PreflightDecision:
-    """ADR-035 s3.5. ``allowed`` iff no reason codes. ``evaluated_at`` is the caller's
+    """ADR-035 s3.5. NOTE: this is a plain frozen dataclass and can be constructed
+    directly, so a ``PreflightDecision(allowed=True, ...)`` is NOT proof that
+    ``ExecutionPreflight.evaluate`` authorized anything; no consumer may treat an
+    instance as authorization (``evaluate`` is deny-only in V1 and never produces one).
+    ``allowed`` iff no reason codes. ``evaluated_at`` is the caller's
     ``now`` as given and ``capabilities_observed_at`` is ``None`` when no capability
     object was usable; both must be aware when ``allowed`` (a deny may carry a naive or
     absent value, because the deny is the reason it is not aware/present).
@@ -94,7 +107,8 @@ def _freshness_reasons(
 
 
 class ExecutionPreflight:
-    """Stateless, side-effect-free preflight evaluator (no constructor inputs)."""
+    """Stateless, side-effect-free preflight evaluator (no constructor inputs).
+    NON-OPERATIONAL / DENY-ONLY in V1: ``evaluate`` never returns ``allowed=True``."""
 
     def evaluate(
         self,
@@ -105,9 +119,10 @@ class ExecutionPreflight:
         now: datetime,
         max_capabilities_age: timedelta | None = None,
     ) -> PreflightDecision:
-        """``market_refs`` is accepted for the ADR-035 s3.5 signature but unused: its
-        shape is undefined (ADR gap). ``max_capabilities_age`` is the APPROVED
-        freshness bound supplied by the caller; ``None`` fails closed.
+        """DENY-ONLY in V1 (never returns an allowed decision). ``market_refs`` is
+        accepted for the ADR-035 s3.5 signature but unused: its shape is undefined (ADR gap).
+        ``max_capabilities_age`` is the APPROVED freshness bound supplied by the caller;
+        ``None`` fails closed.
         """
 
         del market_refs

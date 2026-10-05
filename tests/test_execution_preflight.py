@@ -151,9 +151,11 @@ def test_validate_volume_anchor_above_and_below_quantity() -> None:
     assert validate_volume(below, Decimal("0.15")) == REASON_VOLUME_STEP_MISMATCH
 
 
-def test_validate_volume_absurd_exponent_fails_closed() -> None:
+def test_validate_volume_absurd_exponent_is_exact() -> None:
+    # Formerly asserted a 10_000-exponent fail-closed safeguard (removed by Rin):
+    # (1E+50000 - 0.10) / 0.05 = 2E+50000 - 2 is an integer, so it is valid.
     caps = _caps(volume_max=Decimal("1E+99999"))
-    assert validate_volume(caps, Decimal("1E+50000")) == REASON_VOLUME_STEP_MISMATCH
+    assert validate_volume(caps, Decimal("1E+50000")) is None
 
 
 def test_volume_codes_equal_adapter_constants() -> None:
@@ -348,3 +350,41 @@ def test_preflight_never_constructs_or_calls_an_adapter() -> None:
     assert "submit" not in source
     assert "order_send" not in source
     assert "adapter" not in ExecutionPreflight.evaluate.__code__.co_varnames
+
+
+def test_preflight_is_non_operational_deny_only() -> None:
+    ok_caps = _caps()
+    for kind in K:
+        request = _request(kind)
+        for bound in (BOUND, timedelta(days=3650)):
+            d = _eval(request, ok_caps, bound=bound)
+            assert d.allowed is False
+            assert d.reason_codes
+
+
+def test_manual_allowed_decision_is_not_evaluate_output() -> None:
+    manual = _decision()
+    assert manual.allowed is True
+    assert "NOT proof" in (PreflightDecision.__doc__ or "")
+    assert "constructed" in (PreflightDecision.__doc__ or "")
+    assert _eval(_request(K.OPEN)) != manual
+
+
+def test_preflight_reason_code_vocabulary_is_exactly_ten() -> None:
+    codes = {
+        v
+        for k, v in vars(preflight).items()
+        if k.startswith("REASON_") and isinstance(v, str) and v.startswith("preflight_")
+    }
+    assert codes == {
+        "preflight_policy_undecided",
+        "preflight_volume_validation_error",
+        "preflight_clock_requires_timezone",
+        "preflight_capabilities_missing",
+        "preflight_instrument_mismatch",
+        "preflight_quantity_missing",
+        "preflight_capabilities_freshness_bound_missing",
+        "preflight_capabilities_stale",
+        "preflight_stops_freeze_check_unavailable",
+        "preflight_policy_evaluation_unavailable",
+    }
