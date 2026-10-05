@@ -120,8 +120,14 @@ def _strip_prime(value: int, prime: int) -> tuple[int, int]:
     ``2**(k-1)`` and ``2**k`` does not divide, then ``0 <= v < 2**k`` and testing the
     powers from large to small recovers the bits of ``v`` exactly. About ``2k`` big
     divisions with ``k = O(log v)``, instead of ``v`` divisions.
+
+    Zero is total by convention: every power of ``prime`` divides 0 (no finite
+    valuation), so the doubling search would never terminate; ``(0, 0)`` is returned
+    (nothing stripped). ``validate_volume`` never passes zero (``cs != 0``).
     """
 
+    if value == 0:
+        return 0, 0
     powers: list[tuple[int, int]] = [(prime, 1)]
     while value % powers[-1][0] == 0:
         power, exponent = powers[-1]
@@ -136,7 +142,10 @@ def _strip_prime(value: int, prime: int) -> tuple[int, int]:
 
 
 def _divisible_by_prime_power(value: int, prime: int, need: int) -> bool:
-    """``prime**need`` divides the non-zero integer ``value`` (``need`` may be any int).
+    """``prime**need`` divides the integer ``value`` (``need`` may be any int).
+
+    Zero is divisible by every power (``True``); the non-zero reasoning below applies
+    otherwise. ``validate_volume`` never passes zero.
 
     Only the comparison is computed, never the full valuation. ``need <= 0`` is
     trivially true. If ``2 * need >= bit_length(value)`` then ``5**need >= 4**need
@@ -145,7 +154,7 @@ def _divisible_by_prime_power(value: int, prime: int, need: int) -> bool:
     big modulo.
     """
 
-    if need <= 0:
+    if need <= 0 or value == 0:
         return True
     value = abs(value)
     if prime == 2:
