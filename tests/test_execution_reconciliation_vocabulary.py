@@ -100,7 +100,7 @@ def test_defaults_fail_closed() -> None:
     bare = BrokerPositionSnapshot(
         broker_position_ref="b",
         instrument_id="i",
-        side="long",  # type: ignore[arg-type]
+        side="long",
         quantity=Decimal(1),
     )
     assert bare.close_pending is False
@@ -188,7 +188,7 @@ def test_close_pending_without_identity() -> None:
 
 def test_close_pending_identity_mismatch() -> None:
     for kwargs in ({"instrument": "instrument:other"}, {"side": "short"}):
-        records = _run([_local()], [_broker(close_pending=True, **kwargs)])  # type: ignore[arg-type]
+        records = _run([_local()], [_broker(close_pending=True, **kwargs)])
         assert F.CLOSE_PENDING_CONFIRMED not in _f(records)
         assert F.BROKER_FLAT_CONFIRMED not in _f(records)
 
