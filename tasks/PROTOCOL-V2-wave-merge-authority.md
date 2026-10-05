@@ -26,9 +26,11 @@ This PR changes the authority model itself. It may be merged only on an explicit
 `RIN_MERGE_AUTHORIZED PR #<n> <full 40-char SHA>` naming the exact reviewed full SHA;
 `RIN_WAVE_MERGE_AUTHORIZED — <Wave>` never covers it. Wave authority is scoped to the named
 Wave, ends on Rin's acceptance of the Final Wave Report or revocation/supersession, and never
-implies AUTO/broker/paper-demo/PROD/release unlock or Security boundary changes (AGENTS.md 20.2, 20.7).
+implies AUTO/broker/paper-demo/PROD/release/tag/go-live unlock or Security boundary changes (AGENTS.md 20.2, 20.7).
 
 ## Validation / handoff
 - Application tests: not_run (docs-only).
 - git diff --check: PASS.
 - Self-review; independent review pending.
+
+Base staleness checked against origin/main 41c03866807c006643007357d804d0060398f67a (docs-only; three-dot diff is exactly the 2 files).

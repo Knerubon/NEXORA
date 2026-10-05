@@ -459,7 +459,7 @@ GitHub may record the authenticated `Knerubon` account as the mechanical merger;
 
 ### 20.7 Hard boundaries and governance changes
 
-Wave authority never implicitly authorizes, and each of the following requires separate explicit authorization: AUTO unlock; real broker order transmission; MT5 `order_send`; paper/demo unlock unless separately authorized; PROD/deployment; release/tag creation or movement; Security authorization-boundary changes. Section 0 (Phase 1) is unchanged and broker integration stays broker-agnostic. Everything in section 10 other than the MASTER's authorized mechanical merge stays absolute.
+Wave authority never implicitly authorizes, and each of the following requires separate explicit authorization: AUTO unlock; real broker order transmission; MT5 `order_send`; paper/demo unlock unless separately authorized; PROD/deployment; release/tag creation or movement/go-live; Security authorization-boundary changes. Section 0 (Phase 1) is unchanged and broker integration stays broker-agnostic. Everything in section 10 other than the MASTER's authorized mechanical merge stays absolute.
 
 A worktree that holds preserved uncommitted work must not be reset, cleaned, stashed, pulled over or overwritten (section 5); use dedicated worktrees.
 
