@@ -244,3 +244,80 @@ def test_bounds_order_unchanged() -> None:
     assert validate_volume(caps, D("0.05")) == REASON_VOLUME_BELOW_MIN
     assert validate_volume(caps, D("10.05")) == REASON_VOLUME_ABOVE_MAX
     assert validate_volume(caps, D("-0")) == REASON_VOLUME_BELOW_MIN
+
+
+def _exact_5_pow(k: int, times: int = 1) -> Decimal:
+    """Exact ``times * 5**k`` (``Decimal(int)`` on huge ints is very slow)."""
+
+    with localcontext() as ctx:
+        ctx.prec = 1_000_000
+        ctx.Emax = 10**15
+        ctx.Emin = -(10**15)
+        return D(5) ** k * times
+
+
+def _wide_caps(**overrides: object) -> BrokerCapabilities:
+    return _caps(volume_min=D(1), volume_max=D("1E+2000000"), **overrides)
+
+
+def test_large_coefficient_shapes_complete_fast() -> None:
+    """Shapes that were quadratic with the repeated-division 5-valuation."""
+
+    t0 = time.monotonic()
+    zero = D(0)
+    ten_60k = D("1" + "0" * 60000)
+    caps = _wide_caps(volume_step=D(1), volume_step_anchor=zero)
+    assert validate_volume(caps, ten_60k) is None
+    caps = _wide_caps(volume_step=D("1" + "0" * 30000), volume_step_anchor=zero)
+    assert validate_volume(caps, ten_60k) is None
+    assert validate_volume(caps, D("1" + "0" * 29999)) == REASON_VOLUME_STEP_MISMATCH
+    five_60k = _exact_5_pow(85000)  # about 59,400 digits
+    assert len(five_60k.as_tuple().digits) > 59000
+    caps = _wide_caps(volume_step=D(5), volume_step_anchor=zero)
+    assert validate_volume(caps, five_60k) is None
+    assert (
+        validate_volume(caps, D((0, _exact_5_pow(85000).as_tuple().digits[:-1] + (6,), 0)))
+        == REASON_VOLUME_STEP_MISMATCH
+    )
+    caps = _wide_caps(volume_step=five_60k, volume_step_anchor=zero)
+    assert validate_volume(caps, _exact_5_pow(85000, 7)) is None
+    assert (
+        validate_volume(caps, D((0, _exact_5_pow(85000, 7).as_tuple().digits[:-1] + (0,), 0)))
+        == REASON_VOLUME_STEP_MISMATCH
+    )
+    assert time.monotonic() - t0 < 60  # generous smoke guard only
+
+
+def test_300k_digit_shapes_complete() -> None:
+    t0 = time.monotonic()
+    zero = D(0)
+    ten_300k = D("1" + "0" * 300000)
+    caps = _wide_caps(volume_step=D(1), volume_step_anchor=zero)
+    assert validate_volume(caps, ten_300k) is None
+    caps = _wide_caps(volume_step=D("1" + "0" * 150000), volume_step_anchor=zero)
+    assert validate_volume(caps, ten_300k) is None
+    # 5^k with k so that the coefficient has ~300,000 digits
+    step5 = _exact_5_pow(430000)
+    assert len(step5.as_tuple().digits) > 300000
+    _, digits, _ = step5.as_tuple()
+    ten_times = D((0, digits, 1))  # exactly 10 * step: a multiple
+    tenth = D((0, digits, -1))  # exactly step / 10: not a multiple
+    caps = _wide_caps(volume_step=step5, volume_step_anchor=zero)
+    assert validate_volume(caps, ten_times) is None
+    assert validate_volume(caps, tenth) == REASON_VOLUME_STEP_MISMATCH
+    assert time.monotonic() - t0 < 120  # generous smoke guard only
+
+
+def test_prime_power_helpers_match_naive() -> None:
+    from nexora.autonomous import broker_capabilities as bc
+
+    rng = random.Random(7)
+    for _ in range(3000):
+        v5 = rng.randint(0, 40)
+        v2 = rng.randint(0, 40)
+        rest = rng.choice([1, 3, 7, 11, 13, 101, 99991])
+        n = 5**v5 * 2**v2 * rest
+        assert bc._strip_prime(n, 5) == (v5, n // 5**v5)
+        for need in range(-2, 45):
+            assert bc._divisible_by_prime_power(n, 5, need) == (v5 >= need)
+            assert bc._divisible_by_prime_power(-n, 2, need) == (v2 >= need)

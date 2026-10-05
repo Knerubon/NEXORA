@@ -13,7 +13,7 @@ Contracts: [ADR-035](../docs/decisions/ADR-035-execution-integration-safety-amen
 
 ## Delivered
 - `execution/preflight.py`: `PreflightDecision`, `ExecutionPreflight.evaluate(request, capabilities, market_refs, *, now, max_capabilities_age=None)`. Pure; no I/O, clock, adapter.
-- `validate_volume` is total (exact Fraction step test; non-Decimal/non-capabilities/any failure => `volume_not_multiple_of_step`).
+- `validate_volume` is total (exact integer step test (see Corrective delta 2); non-Decimal/non-capabilities/any failure => `volume_not_multiple_of_step`).
 - Freshness bound is caller-injected (`max_capabilities_age`); none/invalid => deny.
 
 ## Reason codes - APPROVED V1 diagnostic vocabulary (Rin, 2026-10-05); this approval does NOT resolve any OPEN policy item (OPEN-1, OPEN-11 etc.)
@@ -47,3 +47,17 @@ Exactly ten `preflight_*` codes: `preflight_volume_validation_error`, `preflight
   `max_capabilities_age`) is approved ONLY for the current deny-only / incomplete Preflight V1, not as a general contract change.
 - No new reason codes in this delta (set pinned by `test_preflight_reason_code_vocabulary_is_exactly_ten`).
 - Status: self-review; independent delta review + Codex adversarial delta review pending.
+
+## Corrective delta 2 (performance follow-up after independent delta review APPROVE at 9baba278)
+- The repeated-division 5-adic valuation (`while v % 5 == 0`) was quadratic on huge coefficients. Replaced: only the comparisons
+  `v2(T) >= need2` and `v5(T) >= need5` are evaluated (`_divisible_by_prime_power`: true if need <= 0; false if `2*need >= bit_length`
+  because 5**need > |T| - a mathematical bound, not a cap; otherwise one modulo by 5**need). The step's own `a5` and `m` use
+  `_strip_prime` (doubling search by repeated squaring + greedy descent, O(log a5) big divisions). No arbitrary cap/threshold/limit.
+- Honest cost bound: O(log) big-integer multiplications/divisions of operand size plus O(log gap) modular multiplications; CPython big-int
+  division is still not linear, so this is quasi-quadratic in the worst case on huge operands, but no per-factor division loop remains.
+- Timings (same machine, partly contended): 60k-digit 10^N 5.28 s -> 0.03 s; step 10^30000 with q=10^60000 9.33 s -> 0.08 s;
+  59k-digit 5^k 7.95 s -> 0.04 s; 300k trailing zeros (step 1) 197.7 s -> 0.23 s; step 10^150000 -> 1.24 s; 300k-digit 5^k step -> ~2.6 s.
+- Regression tests added: `test_large_coefficient_shapes_complete_fast`, `test_300k_digit_shapes_complete`,
+  `test_prime_power_helpers_match_naive`; all prior oracle/context/equivalence/totality tests kept; seeded oracle: 0 disagreements.
+- Status: self-review; independent delta review done at 9baba278 (APPROVE); algorithmic follow-up pending re-confirmation;
+  Codex adversarial delta review pending.

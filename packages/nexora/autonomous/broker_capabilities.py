@@ -103,17 +103,56 @@ def _signed_coefficient(value: Decimal) -> tuple[int, int]:
     return (-coefficient if sign else coefficient), exponent
 
 
-def _valuation(value: int, prime: int) -> int:
-    """Exponent of ``prime`` (2 or 5) in a non-zero integer."""
+def _two_adic_valuation(value: int) -> int:
+    """Exponent of 2 in a non-zero integer (O(size) bit trick)."""
 
     value = abs(value)
-    if prime == 2:
-        return (value & -value).bit_length() - 1
+    return (value & -value).bit_length() - 1
+
+
+def _strip_prime(value: int, prime: int) -> tuple[int, int]:
+    """Return ``(v, value / prime**v)`` for a positive integer, ``v`` the exponent of
+    ``prime`` in ``value``.
+
+    Doubling search then greedy descent over the binary digits of ``v`` (instead of
+    dividing by ``prime`` ``v`` times): ``prime**(2**j)`` is built by repeated
+    squaring while it still divides ``value``; if the largest dividing power is
+    ``2**(k-1)`` and ``2**k`` does not divide, then ``0 <= v < 2**k`` and testing the
+    powers from large to small recovers the bits of ``v`` exactly. About ``2k`` big
+    divisions with ``k = O(log v)``, instead of ``v`` divisions.
+    """
+
+    powers: list[tuple[int, int]] = [(prime, 1)]
+    while value % powers[-1][0] == 0:
+        power, exponent = powers[-1]
+        powers.append((power * power, exponent * 2))
     count = 0
-    while value % prime == 0:
-        value //= prime
-        count += 1
-    return count
+    for power, exponent in reversed(powers[:-1]):
+        quotient, remainder = divmod(value, power)
+        if remainder == 0:
+            value = quotient
+            count += exponent
+    return count, value
+
+
+def _divisible_by_prime_power(value: int, prime: int, need: int) -> bool:
+    """``prime**need`` divides the non-zero integer ``value`` (``need`` may be any int).
+
+    Only the comparison is computed, never the full valuation. ``need <= 0`` is
+    trivially true. If ``2 * need >= bit_length(value)`` then ``5**need >= 4**need
+    >= 2**bit_length(value) > |value|``, so it cannot divide a non-zero value. Else
+    ``prime**need`` has at most about ``log2(prime) * bit_length / 2`` bits, one
+    big modulo.
+    """
+
+    if need <= 0:
+        return True
+    value = abs(value)
+    if prime == 2:
+        return bool(_two_adic_valuation(value) >= need)
+    if 2 * need >= value.bit_length():
+        return False
+    return bool(value % prime**need == 0)
 
 
 def _on_step_grid(quantity: Decimal, anchor: Decimal, step: Decimal) -> bool:
@@ -138,9 +177,20 @@ def _on_step_grid(quantity: Decimal, anchor: Decimal, step: Decimal) -> bool:
     ``g <= bit_length(|y|)`` and T is computed exactly; ``10**g`` is then no larger
     than the operand representation itself.
 
-    Cost: polynomial in the digit counts and ``O(log g)`` modular multiplications;
-    the exponents themselves are only added, compared and passed to ``pow`` as
-    Python ints, so exponents of any magnitude are fine. No arbitrary cap is used.
+    Only the COMPARISONS ``v2(T) >= need2`` / ``v5(T) >= need5`` are evaluated
+    (``_divisible_by_prime_power``): trivially true when the need is <= 0, false when
+    ``prime**need`` would exceed ``|T|`` (a mathematical bound, not a cap), else one
+    modulo by a power no larger than about the operand. The step's own ``a5`` and ``m``
+    come from ``_strip_prime`` (doubling + descent, ``O(log a5)`` big divisions).
+
+    Cost (honest statement): the exponents are only added, compared and passed to
+    ``pow`` as Python ints (``O(log g)`` modular multiplications), so exponents of any
+    magnitude are fine; the remaining work is a bounded number (``O(log)`` of the
+    operand size) of CPython big-integer multiplications/divisions on integers of the
+    operands' own size. Those are not linear: CPython division is quadratic in the
+    worst case on very large operands (subquadratic only on recent versions), but there
+    is no per-factor repeated-division loop and no arbitrary cap, timeout or
+    iteration limit.
     """
 
     cq, eq = _signed_coefficient(quantity)
@@ -159,10 +209,8 @@ def _on_step_grid(quantity: Decimal, anchor: Decimal, step: Decimal) -> bool:
     else:
         x, y, e0, gap = ca, cq, eq, ea - eq
 
-    cs = abs(cs)
-    a2 = _valuation(cs, 2)
-    a5 = _valuation(cs, 5)
-    m = cs // (2**a2 * 5**a5)
+    a2 = _two_adic_valuation(cs)
+    a5, m = _strip_prime(abs(cs) >> a2, 5)
     need2 = a2 + es - e0
     need5 = a5 + es - e0
 
@@ -170,15 +218,17 @@ def _on_step_grid(quantity: Decimal, anchor: Decimal, step: Decimal) -> bool:
         # y != 0 here: a zero operand was given the other's exponent (gap == 0).
         if (x % m * pow(10, gap, m) - y) % m != 0:
             return False
-        v2, v5 = _valuation(y, 2), _valuation(y, 5)
+        valuation_operand = y
     else:
         t = x * 10**gap - y
         if t == 0:
             return True
         if t % m != 0:
             return False
-        v2, v5 = _valuation(t, 2), _valuation(t, 5)
-    return v2 >= need2 and v5 >= need5
+        valuation_operand = t
+    return _divisible_by_prime_power(valuation_operand, 2, need2) and _divisible_by_prime_power(
+        valuation_operand, 5, need5
+    )
 
 
 def validate_volume(capabilities: BrokerCapabilities, quantity: Decimal) -> str | None:
