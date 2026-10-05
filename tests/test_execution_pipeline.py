@@ -1403,3 +1403,57 @@ def test_post_submit_failure_in_retry_safety_check_is_unknown_pending(
     assert outcome.status is PipelineStatus.RESULT_PERSIST_FAILED
     assert outcome.unknown_pending and outcome.post_execution_reconciliation_required
     assert len(rig.adapter.calls) == 1
+
+
+class _StatefulTuple(tuple[Any, ...]):
+    """Tuple subclass whose iteration changes between reads (check/use divergence)."""
+
+    reads = 0
+
+    def __iter__(self) -> Any:
+        type(self).reads += 1
+        return tuple.__iter__(self) if type(self).reads == 1 else iter(())
+
+
+class _LyingDatetime(datetime):
+    """Reports a zero age on subtraction although it is really 5 hours stale."""
+
+    def __rsub__(self, other: Any) -> timedelta:
+        return timedelta(0)
+
+
+def test_records_tuple_subclass_with_stateful_iter_is_denied_before_any_write() -> None:
+    rig = Rig()
+    records = _StatefulTuple((_match(),))
+    outcome = rig.run(_inputs(reconciliation=_evidence_raw(records)))
+    assert outcome.reason_codes == ("reconciliation_evidence_records_invalid",)
+    assert rig.durable_writes() == [] and rig.adapter.calls == []
+    assert rig.preflight.calls == 0
+
+
+def test_datetime_subclass_with_lying_sub_cannot_make_stale_evidence_fresh() -> None:
+    stale = _LyingDatetime(2026, 10, 5, 7, 0, tzinfo=UTC)  # real age vs NOW: 5 hours
+    assert NOW - stale == timedelta(0)  # the lie works on a naive subtraction
+    rig = Rig()
+    record = ReconciliationRecord(
+        position_ref="pos-1",
+        finding=ReconciliationFinding.MATCH,
+        local_quantity=Decimal("1.00"),
+        broker_quantity=Decimal("1.00"),
+        observed_at=stale,
+    )
+    evidence = ReconciliationEvidence(
+        records=(record,), evidence_ref=EVIDENCE_REF, observed_at=stale
+    )
+    outcome = rig.run(_inputs(reconciliation=evidence))
+    assert outcome.reason_codes == ("reconciliation_evidence_observed_at_invalid",)
+    assert rig.durable_writes() == [] and rig.adapter.calls == [] and rig.preflight.calls == 0
+
+
+def test_plain_exact_tuple_and_datetime_are_still_accepted() -> None:
+    assert type(_evidence().records) is tuple and type(_evidence().observed_at) is datetime
+    assert Rig().run(_inputs()).status is PipelineStatus.COMPLETED
+
+
+def _evidence_raw(records: Any) -> ReconciliationEvidence:
+    return ReconciliationEvidence(records=records, evidence_ref=EVIDENCE_REF, observed_at=NOW)

@@ -551,13 +551,13 @@ class ExecutionPipeline:
         if not is_valid_evidence_ref(ref):
             raise _Stop("reconciliation_evidence_ref_invalid")
         if (
-            not isinstance(observed, datetime)
+            type(observed) is not datetime
             or observed.tzinfo is None
             or observed.utcoffset() is None
         ):
             raise _Stop("reconciliation_evidence_observed_at_invalid")
         if (
-            not isinstance(records, tuple)
+            type(records) is not tuple
             or not records
             or not all(type(r) is ReconciliationRecord for r in records)
         ):
