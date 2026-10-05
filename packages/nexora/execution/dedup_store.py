@@ -29,6 +29,18 @@ Two failure classes are kept apart (ADR-035 W3 rows 19/20):
   closed; always test ``DedupStoreIOError`` FIRST. It is a plain deny, never a
   state, and is never recorded as quarantine.
 
+UNSAFE EVIDENCE IS MONOTONIC within a generation: once any result of a generation
+was UNKNOWN, ACCEPTED, PARTIALLY_FILLED or FILLED, no later result (e.g. a clean
+REJECTED) makes it clean, releasable or re-claimable; only a generation whose
+results are ALL clean zero-fill REJECTED is releasable. This does not resolve
+OPEN-2 and adds no clearing mechanism.
+
+RESULT-WITHOUT-ATTEMPT: for legacy compatibility the store still accepts
+``record_result`` in CLAIMED_NOT_ATTEMPTED. PR-4 is the ENFORCEMENT OWNER: a
+result may only be recorded when the state is ATTEMPTED_NO_RESULT (acceptance
+gate of PR-4). Caller-supplied evidence refs are not validated here for
+secrets/PII (PR-4 contract-test gate).
+
 Only the ``attempt`` and ``abort`` event names are added to the recognised set;
 every other name stays an integrity violation. Release after ``abort``
 (OPEN-14), quarantine clearing (OPEN-3) and reconciliation-based release
@@ -137,6 +149,9 @@ class DedupKeyStatus:
     generation: int | None  # None only when QUARANTINED
     latest_result: ExecutionResult | None
     violation_code: str | None  # set only when QUARANTINED
+    # True if the current generation EVER observed an UNKNOWN result (monotonic; a later
+    # REJECTED never clears it).
+    unknown_observed: bool = False
 
 
 class ExecutionDedupStore(Protocol):
@@ -463,6 +478,7 @@ class JournalExecutionDedupStore:
                     generation=None,
                     latest_result=None,
                     violation_code=str(exc),
+                    unknown_observed=False,
                 )
         return DedupKeyStatus(
             idempotency_key=idempotency_key,
@@ -470,17 +486,25 @@ class JournalExecutionDedupStore:
             generation=generation,
             latest_result=latest,
             violation_code=None,
+            unknown_observed=any(
+                r.status is ExecutionStatus.UNKNOWN for r in self._results(events, generation)
+            ),
         )
 
     def state(self, idempotency_key: str) -> DedupKeyState:
         return self.inspect(idempotency_key).state
 
     def unresolved_among(self, keys: Iterable[str]) -> tuple[str, ...]:
-        """Keys (from the CALLER-SUPPLIED set) that are ATTEMPTED_NO_RESULT or whose
-        latest result is UNKNOWN (ADR-035 s3.8), sorted and de-duplicated.
+        """TEMPORARY CALLER-SCOPED accessor (not global safety proof).
+
+        Keys (from the CALLER-SUPPLIED set) that are ATTEMPTED_NO_RESULT or whose
+        current generation EVER observed an UNKNOWN result (ADR-035 s3.8; unsafe
+        history is monotonic, a later REJECTED does not clear it), sorted and
+        de-duplicated.
 
         This is NOT the global enumeration: the journal cannot list streams, so keys
-        the caller does not name are invisible here. QUARANTINED keys are not part
+        the caller does not name are invisible here (global enumeration is
+        DEDUP-ENUM-1, a storage-layer capability owned elsewhere). QUARANTINED keys are not part
         of the ADR definition and are NOT returned; callers needing them must read
         ``inspect`` per key. I/O failure propagates (never silently dropped).
         """
@@ -488,10 +512,7 @@ class JournalExecutionDedupStore:
         unresolved: list[str] = []
         for key in sorted(set(keys)):
             status = self.inspect(key)
-            if status.state is DedupKeyState.ATTEMPTED_NO_RESULT or (
-                status.latest_result is not None
-                and status.latest_result.status is ExecutionStatus.UNKNOWN
-            ):
+            if status.state is DedupKeyState.ATTEMPTED_NO_RESULT or status.unknown_observed:
                 unresolved.append(key)
         return tuple(unresolved)
 
@@ -511,9 +532,10 @@ class JournalExecutionDedupStore:
             generation, claimed = self._state(idempotency_key, events)
             if not claimed or self._has(events, "abort", generation):
                 return False
-            latest = self._latest_result(events, generation)
-            if latest is None or not is_safe_to_retry_without_reconciliation(latest):
-                return False
+            results = self._results(events, generation)
+            if not results or not all(is_safe_to_retry_without_reconciliation(r) for r in results):
+                return False  # no results, or unsafe evidence EVER seen (monotonic)
+            latest = results[-1]
             try:
                 return self._append(
                     _stream(idempotency_key),
@@ -636,19 +658,13 @@ class JournalExecutionDedupStore:
                 seen_result.add(e["generation"])
             elif e["event"] == "attempt" and e["generation"] in seen_result:
                 raise DedupStoreCorruptError("dedup_attempt_after_result")
+        # Monotonic unsafe evidence (Rin): a released generation must have at least one
+        # result and EVERY result (earlier or later than a clean one, before or after the
+        # release) must be a clean zero-fill REJECTED.
         for released in range(generation):
-            last = self._latest_result(events, released)
-            if last is None or not is_safe_to_retry_without_reconciliation(last):
+            results = self._results(events, released)
+            if not results or not all(is_safe_to_retry_without_reconciliation(r) for r in results):
                 raise DedupStoreCorruptError("dedup_released_generation_not_safe")
-        # A non-clean result that landed after its generation's release is never
-        # cleared by a later clean one (no auto-clearing of a quarantine).
-        released_at: dict[int, int] = {}
-        for index, e in enumerate(events):
-            if e["event"] == "release":
-                released_at[e["generation"]] = index
-            elif e["event"] == "result" and e["generation"] in released_at:
-                if not is_safe_to_retry_without_reconciliation(deserialize_result(e.get("result"))):
-                    raise DedupStoreCorruptError("dedup_released_generation_not_safe")
         return generation, generation in claims
 
     def _w3(
@@ -660,14 +676,22 @@ class JournalExecutionDedupStore:
             return DedupKeyState.UNCLAIMED, None
         if self._has(events, "abort", generation):
             return DedupKeyState.ABORTED_NEVER_ATTEMPTED, None
-        latest = self._latest_result(events, generation)
-        if latest is not None:
-            if is_safe_to_retry_without_reconciliation(latest):
-                return DedupKeyState.RESULT_CLEAN_REJECTED, latest
-            return DedupKeyState.RESULT_UNSAFE, latest
+        results = self._results(events, generation)
+        if results:
+            if all(is_safe_to_retry_without_reconciliation(r) for r in results):
+                return DedupKeyState.RESULT_CLEAN_REJECTED, results[-1]
+            return DedupKeyState.RESULT_UNSAFE, results[-1]
         if self._has(events, "attempt", generation):
             return DedupKeyState.ATTEMPTED_NO_RESULT, None
         return DedupKeyState.CLAIMED_NOT_ATTEMPTED, None
+
+    @staticmethod
+    def _results(events: tuple[dict[str, Any], ...], generation: int) -> list[ExecutionResult]:
+        return [
+            deserialize_result(e.get("result"))
+            for e in events
+            if e["event"] == "result" and e["generation"] == generation
+        ]
 
     @staticmethod
     def _latest_result(

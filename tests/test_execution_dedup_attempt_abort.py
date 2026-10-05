@@ -675,3 +675,206 @@ def test_new_generation_attempt_after_clean_release(tmp_path: Path) -> None:
     assert [a["generation"] for a in attempts] == [0, 1]
     assert attempts[1]["resolved_quantity"] == "2"
     j.close()
+
+
+# -- monotonic unsafe evidence (Rin frozen invariant) ------------------------
+
+UNSAFE = [
+    (ExecutionStatus.UNKNOWN, "0"),
+    (ExecutionStatus.ACCEPTED, "0"),
+    (ExecutionStatus.PARTIALLY_FILLED, "0.5"),
+    (ExecutionStatus.FILLED, "1.0"),
+]
+
+
+def _assert_unreachable(s: JournalExecutionDedupStore) -> None:
+    assert s.state(KEY) is DedupKeyState.RESULT_UNSAFE
+    assert s.release_for_retry(KEY) is False
+    assert s.claim(KEY) is ClaimOutcome.DUPLICATE
+    with pytest.raises(DedupMarkerRefusedError):
+        s.record_attempt(KEY, **ATTEMPT)
+    with pytest.raises(DedupMarkerRefusedError):
+        s.record_abort(KEY)
+    assert s.state(KEY) is DedupKeyState.RESULT_UNSAFE
+
+
+@pytest.mark.parametrize(("status", "fill"), UNSAFE)
+def test_unsafe_then_rejected_stays_unsafe(
+    status: ExecutionStatus, fill: str, tmp_path: Path
+) -> None:
+    s, j = durable(tmp_path)
+    s.claim(KEY)
+    s.record_attempt(KEY, **ATTEMPT)
+    s.record_result(KEY, result(status, "r1", fill=fill))
+    s.record_result(KEY, result(ExecutionStatus.REJECTED, "r2"))
+    _assert_unreachable(s)
+    j.close()
+    s2, j2 = durable(tmp_path)  # restart: same monotonic state
+    _assert_unreachable(s2)
+    j2.close()
+
+
+@pytest.mark.parametrize("kind", ["memory", "sqlite"])
+@pytest.mark.parametrize(
+    "sequence",
+    [
+        ["REJECTED", "UNKNOWN"],
+        ["UNKNOWN", "REJECTED", "UNKNOWN", "REJECTED"],
+        ["REJECTED", "REJECTED", "UNKNOWN"],
+        ["REJECTED", "REJECTED", "UNKNOWN", "REJECTED", "REJECTED"],
+        ["UNKNOWN", "REJECTED", "REJECTED"],
+    ],
+)
+def test_mixed_result_sequences_never_clean(kind: str, sequence: list[str], tmp_path: Path) -> None:
+    s: JournalExecutionDedupStore = (
+        InMemoryExecutionDedupStore() if kind == "memory" else durable(tmp_path)[0]
+    )
+    s.claim(KEY)
+    for i, name in enumerate(sequence):
+        s.record_result(KEY, result(ExecutionStatus[name], f"r{i}"))
+    _assert_unreachable(s)
+    if "UNKNOWN" in sequence:
+        assert s.unresolved_among([KEY]) == (KEY,)
+
+
+def test_clean_only_sequences_still_releasable(tmp_path: Path) -> None:
+    s, j = durable(tmp_path)
+    s.claim(KEY)
+    s.record_attempt(KEY, **ATTEMPT)
+    s.record_result(KEY, result(ExecutionStatus.REJECTED, "r1"))
+    s.record_result(KEY, result(ExecutionStatus.REJECTED, "r2"))
+    assert s.state(KEY) is DedupKeyState.RESULT_CLEAN_REJECTED
+    assert s.unresolved_among([KEY]) == ()
+    assert s.release_for_retry(KEY) is True
+    assert s.claim(KEY) is ClaimOutcome.FIRST_CLAIM
+    j.close()
+
+
+def test_unknown_then_rejected_in_prior_generation_unresolved_only_for_current(
+    tmp_path: Path,
+) -> None:
+    s, j = _released(tmp_path)
+    s.claim(KEY)
+    s.record_result(KEY, result(ExecutionStatus.UNKNOWN, "g1u"))
+    s.record_result(KEY, result(ExecutionStatus.REJECTED, "g1r"))
+    status = s.inspect(KEY)
+    assert status.generation == 1 and status.unknown_observed is True
+    assert s.unresolved_among([KEY]) == (KEY,)
+    j.close()
+
+
+def test_cross_instance_unknown_during_release_never_releases(tmp_path: Path) -> None:
+    a, ja = durable(tmp_path)
+    b, jb = durable(tmp_path)
+    a.claim(KEY)
+    a.record_result(KEY, result(ExecutionStatus.REJECTED, "r1"))
+    original = a._append
+
+    def unknown_lands(*args: Any, **kwargs: Any) -> bool:
+        if args[1].startswith("release#"):
+            b.record_result(KEY, result(ExecutionStatus.UNKNOWN, "r2"))
+        return original(*args, **kwargs)
+
+    a._append = unknown_lands  # type: ignore[method-assign]
+    assert a.release_for_retry(KEY) is False  # expected_count lost the race
+    a._append = original  # type: ignore[method-assign]
+    b.record_result(KEY, result(ExecutionStatus.REJECTED, "r3"))  # latest is clean again
+    for s in (a, b):
+        _assert_unreachable(s)
+    ja.close()
+    jb.close()
+
+
+def test_cross_instance_threads_release_vs_unknown_never_reclaim(tmp_path: Path) -> None:
+    for round_ in range(10):
+        d = tmp_path / f"t{round_}"
+        d.mkdir()
+        a, ja = durable(d)
+        b, jb = durable(d)
+        a.claim(KEY)
+        a.record_result(KEY, result(ExecutionStatus.REJECTED, "r1"))
+        barrier = threading.Barrier(2)
+
+        def release(
+            a: JournalExecutionDedupStore = a, barrier: threading.Barrier = barrier
+        ) -> None:
+            barrier.wait()
+            a.release_for_retry(KEY)
+
+        def unknown(
+            b: JournalExecutionDedupStore = b, barrier: threading.Barrier = barrier
+        ) -> None:
+            barrier.wait()
+            try:
+                b.record_result(KEY, result(ExecutionStatus.UNKNOWN, "r2"))
+            except DedupStoreError:
+                pass
+
+        threads = [threading.Thread(target=release), threading.Thread(target=unknown)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        # Release won and the stale UNKNOWN was refused (UNCLAIMED), release won and the
+        # stale UNKNOWN landed after it (late unsafe result => QUARANTINED), or release
+        # lost (RESULT_UNSAFE). In no case is the old generation claimable.
+        final = a.state(KEY)
+        assert final in (
+            DedupKeyState.UNCLAIMED,
+            DedupKeyState.QUARANTINED,
+            DedupKeyState.RESULT_UNSAFE,
+        )
+        if final is DedupKeyState.RESULT_UNSAFE:
+            _assert_unreachable(a)
+        if final is DedupKeyState.QUARANTINED:
+            with pytest.raises(DedupStoreCorruptError):
+                a.claim(KEY)
+        ja.close()
+        jb.close()
+
+
+@pytest.mark.parametrize(
+    "order",
+    [
+        ["u", "r", "release"],
+        ["r", "u", "release"],
+        ["u", "r", "release", "u2"],
+        ["r", "release", "u"],
+    ],
+)
+def test_released_generation_with_any_unsafe_result_is_quarantined(
+    order: list[str], tmp_path: Path
+) -> None:
+    s, j = durable(tmp_path)
+    s.claim(KEY)
+    rows: dict[str, tuple[str, dict[str, Any]]] = {
+        "u": ("result#0|u", {"result": serialize_result(result(ExecutionStatus.UNKNOWN, "u"))}),
+        "u2": (
+            "result#0|u2",
+            {"result": serialize_result(result(ExecutionStatus.FILLED, "u2", fill="1.0"))},
+        ),
+        "r": ("result#0|r", {"result": serialize_result(result(ExecutionStatus.REJECTED, "r"))}),
+    }
+    for step in order:
+        if step == "release":
+            raw_append(
+                j,
+                "release#0",
+                {
+                    "event": "release",
+                    "generation": 0,
+                    "idempotency_key": KEY,
+                    "released_result_id": "r",
+                },
+            )
+        else:
+            key, extra = rows[step]
+            raw_append(
+                j, key, {"event": "result", "generation": 0, "idempotency_key": KEY, **extra}
+            )
+    status = s.inspect(KEY)
+    assert status.state is DedupKeyState.QUARANTINED
+    assert status.violation_code == "dedup_released_generation_not_safe"
+    with pytest.raises(DedupStoreCorruptError):
+        s.claim(KEY)
+    j.close()
