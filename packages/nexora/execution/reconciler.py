@@ -19,6 +19,16 @@ Conventions (documented decisions, not new contract):
   as ``LOCAL_OPEN_BROKER_MISSING`` plus ``BROKER_POSITION_LOCAL_MISSING``.
 * A missing broker snapshot yields no comparison records; with nothing
   classified, ``aggregate_reconciliation_status`` fails closed to UNKNOWN.
+* ADR-035 section 4.6 (OPEN-6 shape): ``BrokerSnapshot.complete`` defaults to
+  ``False`` and ``BrokerPositionSnapshot.close_pending`` defaults to ``False``
+  (fail closed). ``CLOSE_PENDING_CONFIRMED`` needs a complete snapshot, a
+  position attributed by ``nexora_position_ref`` with identical instrument and
+  side, exactly one broker claimant for that ref, and ``close_pending`` true.
+  ``BROKER_FLAT_CONFIRMED`` needs a complete snapshot in which NO broker
+  position claims the local ref (any instrument/side) and no unattributed
+  broker position exists on the same instrument and side (symbol alone never
+  proves absence; it only blocks the confirmation). Otherwise the previous
+  non-confirming behavior applies. Freshness is not evaluated here (OPEN-1).
 * Duplicate local ids or duplicate broker refs are corrupt input and raise
   ``ReconcilerInputError`` rather than being silently de-duplicated.
 """
@@ -66,6 +76,8 @@ class BrokerPositionSnapshot:
     nexora_position_ref: str | None = None
     stop_price: Decimal | None = None
     target_prices: tuple[Decimal, ...] = ()
+    # Adapter attestation that a close order is working (ADR-035 4.6, OPEN-6).
+    close_pending: bool = False
 
     def __post_init__(self) -> None:
         if not self.broker_position_ref.strip() or not self.instrument_id.strip():
@@ -85,9 +97,15 @@ class BrokerPositionSnapshot:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class BrokerSnapshot:
-    """Immutable set of broker-side positions at one observation."""
+    """Immutable set of broker-side positions at one observation.
+
+    ``complete`` is the adapter's attestation that ``positions`` is the whole
+    broker position set. It defaults to ``False``: an unattested snapshot can
+    never confirm flat or close-pending (ADR-035 4.6).
+    """
 
     positions: tuple[BrokerPositionSnapshot, ...]
+    complete: bool = False
 
 
 def _record(
@@ -131,6 +149,11 @@ def _compare_snapshot(
             raise ReconcilerInputError("duplicate_broker_position_ref")
         broker_refs.add(broker.broker_position_ref)
 
+    claims: dict[str, int] = {}
+    for broker in snapshot.positions:
+        if broker.nexora_position_ref is not None:
+            claims[broker.nexora_position_ref] = claims.get(broker.nexora_position_ref, 0) + 1
+
     records: list[ReconciliationRecord] = []
     paired_local: set[str] = set()
 
@@ -161,6 +184,17 @@ def _compare_snapshot(
             continue
         local = candidate
         paired_local.add(local.position_id)
+        if snapshot.complete and broker.close_pending and claims[local.position_id] == 1:
+            records.append(
+                _record(
+                    ReconciliationFinding.CLOSE_PENDING_CONFIRMED,
+                    observed_at,
+                    position_ref=local.position_id,
+                    local_quantity=local.quantity,
+                    broker_quantity=broker.quantity,
+                )
+            )
+            continue
         mismatch = False
         if local.quantity != broker.quantity:
             mismatch = True
@@ -197,6 +231,25 @@ def _compare_snapshot(
 
     for local in local_by_id.values():
         if local.state is not TradeState.CLOSED and local.position_id not in paired_local:
+            if (
+                snapshot.complete
+                and local.position_id not in claims
+                and not any(
+                    b.nexora_position_ref is None
+                    and b.instrument_id == local.symbol
+                    and b.side == local.side
+                    for b in snapshot.positions
+                )
+            ):
+                records.append(
+                    _record(
+                        ReconciliationFinding.BROKER_FLAT_CONFIRMED,
+                        observed_at,
+                        position_ref=local.position_id,
+                        local_quantity=local.quantity,
+                    )
+                )
+                continue
             records.append(
                 _record(
                     ReconciliationFinding.LOCAL_OPEN_BROKER_MISSING,
@@ -281,3 +334,64 @@ def aggregate_reconciliation_status(
     if ReconciliationStatus.UNSYNCHRONIZED in seen:
         return ReconciliationStatus.UNSYNCHRONIZED
     return ReconciliationStatus.SYNCHRONIZED
+
+
+_CONFIRMING_FINDINGS = frozenset(
+    {
+        ReconciliationFinding.MATCH,
+        ReconciliationFinding.CLOSE_PENDING_CONFIRMED,
+        ReconciliationFinding.BROKER_FLAT_CONFIRMED,
+    }
+)
+
+
+def derive_recovery_target(
+    records: Iterable[ReconciliationRecord],
+    position_ref: str,
+    *,
+    snapshot_complete: bool,
+) -> TradeState | None:
+    """Evidence -> frozen recovery TARGET (ADR-035 section 6 table). Pure.
+
+    Returns ``MANAGING`` / ``EXIT_PENDING`` / ``CLOSED`` for verified open /
+    close-pending / broker-flat evidence, else ``None`` (remain EMERGENCY).
+    This is NOT authorization and performs no transition: OPEN-20 is
+    unresolved and ``operator_ref`` has no role here. The caller must pass
+    records of ONE classification run and attest ``snapshot_complete`` from
+    that run's snapshot; ``False`` always yields ``None`` (MATCH included,
+    pending Rin decision section 12 #8). Freshness (OPEN-1) is not evaluated.
+    Fails closed on: mixed ``observed_at``, any non-confirming or conflicting
+    record for the position, more than one distinct confirming finding, any
+    unattributed UNKNOWN record, and (OPEN-4 stricter reading) any other
+    record in the run that is not SYNCHRONIZED.
+    """
+
+    if snapshot_complete is not True:
+        return None
+    run: list[ReconciliationRecord] = []
+    for record in records:
+        if not isinstance(record, ReconciliationRecord):
+            return None
+        run.append(record)
+    if not run or len({r.observed_at for r in run}) != 1:
+        return None
+    mine = [r for r in run if r.position_ref == position_ref]
+    confirming = {r.finding for r in mine if r.finding in _CONFIRMING_FINDINGS}
+    if len(confirming) != 1 or any(r.finding not in _CONFIRMING_FINDINGS for r in mine):
+        return None
+    finding = next(iter(confirming))
+    confirm = next(r for r in mine if r.finding is finding)
+    if any(
+        r.status is not ReconciliationStatus.SYNCHRONIZED
+        for r in run
+        if r.position_ref != position_ref
+    ):
+        return None
+    if finding is ReconciliationFinding.MATCH:
+        quantity = confirm.local_quantity
+        if quantity is None or confirm.broker_quantity != quantity or quantity <= 0:
+            return None
+        return TradeState.MANAGING
+    if finding is ReconciliationFinding.CLOSE_PENDING_CONFIRMED:
+        return TradeState.EXIT_PENDING
+    return TradeState.CLOSED
