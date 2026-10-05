@@ -150,7 +150,7 @@ Workstream
    └── worktree
 ```
 
-- Only the owner edits files, commits, runs benchmarks or starts processes in that worktree. Ownership changes only by explicit human/Rin decision.
+- Only the owner edits files, commits, runs benchmarks or starts processes in that worktree. Ownership changes only by explicit Rin decision (human/operator execution of an action is not authorization).
 - Other sessions may read committed history from Git, but must not modify the worktree, commit to its branch, stop its processes, touch its scratchpad or build a competing implementation of the same workstream.
 - Signs of another active owner include: the branch/worktree already exists, reflog entries you did not create, running processes whose command line points into the worktree, or another session's scratch files referencing it.
 - If you find any of these and ownership was not assigned to you: **STOP — WORKTREE ALREADY IN USE.** Report the branch, worktree, evidence (process/scratchpad/reflog) and wait. Do not take over, clean up, or create a parallel copy.
@@ -216,7 +216,7 @@ Obtain these from the actual process/configuration, not from directory names or 
 
 ## 9. Trading logic safety
 
-Trading semantics are architecture-sensitive. Stop and escalate (Architect + Quant, then human) when requirements are ambiguous around BUY, SELL, WAIT, BLOCKED, READY, Entry Readiness, pattern confirmation, breakout/breakdown, stop loss, risk logic, position sizing or any deterministic trading decision.
+Trading semantics are architecture-sensitive. Stop and escalate (Architect + Quant, then Rin; human/operator execution of an action is not authorization) when requirements are ambiguous around BUY, SELL, WAIT, BLOCKED, READY, Entry Readiness, pattern confirmation, breakout/breakdown, stop loss, risk logic, position sizing or any deterministic trading decision.
 
 - Do not invent trading semantics to finish an implementation; speculative defaults must not become specification.
 - Pattern detection is evidence. Pattern detection alone is never permission to trade.
@@ -435,7 +435,7 @@ Merge with full-SHA locking (`gh pr merge <n> --match-head-commit <full 40-char 
 
 ### 20.4 Escalate to Rin
 
-Escalate only when a track requires: a new architecture decision; modification of or contradiction with an ADR freeze; a new safety policy decision; unresolved Security authorization semantics; a choice between materially different contract designs; scope expansion outside the authorized Wave; an unresolved CRITICAL/MAJOR finding requiring policy judgment; unlocking AUTO; real broker transmission; PROD/deployment; release/tag/go-live. For architecture/safety blockers stop only the affected track when possible and continue independent authorized tracks. Section 11 still applies.
+Escalate only when a track requires: a new architecture decision; modification of or contradiction with an ADR freeze; a new safety policy decision; unresolved Security authorization semantics; a choice between materially different contract designs; scope expansion outside the authorized Wave; an unresolved CRITICAL/MAJOR finding requiring policy judgment; unlocking AUTO; real broker transmission; PROD/deployment; release/tag/go-live. For architecture/safety blockers stop only the affected track when possible and continue independent authorized tracks. Section 11 still applies. Where this section requires Rin, explicit Rin authorization is required; human/operator execution of an action is not authorization.
 
 ### 20.5 Review model
 
@@ -485,7 +485,7 @@ BLOCKED TRACKS:
 SECURITY FINDINGS:
 CODEX ADVERSARIAL FINDINGS (where applicable):
 NEXT RECOMMENDED WAVE:
-CONFIRMATIONS: NO AUTO UNLOCK / NO REAL BROKER ORDER / NO PROD / NO RELEASE/TAG
+CONFIRMATIONS: NO AUTO UNLOCK / NO REAL BROKER ORDER / NO PAPER-DEMO UNLOCK / NO PROD / NO RELEASE-TAG-GO-LIVE
 ```
 
 For an escalation (20.4) the MASTER returns the following and does not choose the architecture decision:
