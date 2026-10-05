@@ -124,8 +124,13 @@ class ExecutionRequest:
             raise ExecutionContractError("invalid_quantity")
         if self.position_ref is not None and not self.position_ref.strip():
             raise ExecutionContractError("blank_position_ref")
-        if self.new_position_ref is not None and not self.new_position_ref.strip():
-            raise ExecutionContractError("blank_new_position_ref")
+        if self.new_position_ref is not None:
+            # ADR-035 s4.1 declares `new_position_ref: str | None`; bytes (which also
+            # has .strip()) and every other non-str type is a contract violation.
+            if type(self.new_position_ref) is not str:
+                raise ExecutionContractError("invalid_new_position_ref_type")
+            if not self.new_position_ref.strip():
+                raise ExecutionContractError("blank_new_position_ref")
         # ADR-035 s4.1: new_position_ref is meaningful for OPEN only. For OPEN it is
         # required for transmission but type-level optional during migration.
         if self.action is not TradeIntentKind.OPEN and self.new_position_ref is not None:
