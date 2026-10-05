@@ -42,8 +42,20 @@ result may only be recorded when the state is ATTEMPTED_NO_RESULT (acceptance
 gate of PR-4). Caller-supplied evidence refs are not validated here for
 secrets/PII (PR-4 contract-test gate).
 
-GLOBAL ENUMERATION (DEDUP-ENUM-1) is a storage-layer capability and is NOT implemented
-here: the Journal cannot list streams, so `unresolved_among` is caller-scoped only.
+GLOBAL ENUMERATION (DEDUP-ENUM-1, Option A): the Journal cannot list streams, so a
+durable INDEX stream (``INDEX_STREAM``) holds one registration row per key plus one
+``index_genesis`` marker. The index is DISCOVERY METADATA ONLY, never execution truth:
+``enumerate_unresolved`` reads it to get candidate keys, then re-derives each key's
+state through the authoritative ``inspect``. Nothing is ever allowed because of an
+index row. ``claim`` registers the key BEFORE the first claim row (index first, claim
+second, never reverse), so a claimed key cannot be missing from the index; a crash
+between the two writes leaves a harmless entry whose key is UNCLAIMED. Enumeration
+fails closed (never a partial list): index I/O failure -> ``DedupStoreIOError``;
+malformed/contradictory index -> ``DedupStoreCorruptError``; genesis marker absent
+(legacy keys claimed before this index existed may be undiscoverable) ->
+``DedupEnumerationIncompleteError``. ``establish_index_genesis`` is the explicit
+one-time operator action that registers known legacy keys and asserts completeness.
+`unresolved_among` stays CALLER-SCOPED and is not global proof.
 
 EXCEPTION HIERARCHY: IO and integrity errors are siblings under DedupStoreError (done;
 independent review pending). `DedupRecord.latest_result` is display-only; PR-4 must
@@ -86,6 +98,20 @@ from nexora.execution.models import (
 from nexora.storage import Journal
 
 STREAM_PREFIX = "execution-dedup:"
+# Index stream name has no ':' so it can never equal ``STREAM_PREFIX + key``.
+INDEX_STREAM = "execution-dedup-index"
+_INDEX_GENESIS_KEY = "genesis"
+_INDEX_GENESIS = {"event": "index_genesis", "version": 1}
+_INDEX_REGISTER_FIELDS = frozenset({"event", "idempotency_key"})
+_UNRESOLVED_STATES = frozenset(
+    {
+        "RESULT_UNSAFE",
+        "QUARANTINED",
+        "ATTEMPTED_NO_RESULT",
+        "CLAIMED_NOT_ATTEMPTED",
+        "ABORTED_NEVER_ATTEMPTED",  # OPEN-14: an aborted key stays claimed
+    }
+)
 
 _EVENT_NAMES = ("claim", "result", "release", "attempt", "abort")
 _ATTEMPT_FIELDS = frozenset(
@@ -117,6 +143,14 @@ class DedupStoreIOError(DedupStoreError):
     A plain deny for this attempt: nothing is recorded as quarantined and the
     read may be retried later. Never read as "unseen". A SIBLING of
     ``DedupStoreCorruptError``; it is NOT an integrity violation.
+    """
+
+
+class DedupEnumerationIncompleteError(DedupStoreError):
+    """Global enumeration completeness is not established (genesis marker absent).
+
+    A sibling of the I/O and integrity errors: callers must deny (fail closed), never
+    treat it as "nothing unresolved".
     """
 
 
@@ -225,9 +259,18 @@ class ExecutionDedupStore(Protocol):
         """Convenience wrapper over ``inspect``."""
         ...
 
+    def enumerate_unresolved(self) -> tuple[DedupKeyStatus, ...]:
+        """GLOBAL enumeration (DEDUP-ENUM-1 Option A; name/type to be frozen by Rin).
+
+        Candidate keys come from the durable index (discovery only); each is re-derived
+        via ``inspect``. Fails closed: ``DedupStoreIOError`` / ``DedupStoreCorruptError``
+        / ``DedupEnumerationIncompleteError``; never a partial list. Callers deny on any
+        ``DedupStoreError``."""
+        ...
+
     def unresolved_among(self, keys: Iterable[str]) -> tuple[str, ...]:
-        """TEMPORARY CALLER-SCOPED accessor, NOT global safety proof (DEDUP-ENUM-1 is not
-        implemented; unnamed keys are invisible).
+        """TEMPORARY CALLER-SCOPED accessor, NOT global safety proof (use
+        ``enumerate_unresolved`` for global discovery; unnamed keys are invisible here).
 
         Returns caller-supplied keys that are ATTEMPTED_NO_RESULT or ever observed UNKNOWN
         in the current generation. RESULT_UNSAFE keys (incl. ever ACCEPTED/PARTIALLY_FILLED/
@@ -410,6 +453,8 @@ class JournalExecutionDedupStore:
     def claim(self, idempotency_key: str) -> ClaimOutcome:
         stream = _stream(idempotency_key)
         with self._lock:
+            # Index FIRST, claim second (never reverse). Idempotent (first-writer-wins).
+            self._register_index(idempotency_key)
             generation, _ = self._state(idempotency_key)
             first = self._append(
                 stream,
@@ -584,6 +629,60 @@ class JournalExecutionDedupStore:
                 unresolved.append(key)
         return tuple(unresolved)
 
+    def register_known_keys(self, keys: Iterable[str]) -> int:
+        """Idempotently register keys in the discovery index (e.g. legacy keys claimed
+        before the index existed). Returns the number of NEW registrations. Registering
+        a key never claims it and never makes it allowed."""
+
+        added = 0
+        with self._lock:
+            for key in sorted(set(keys)):
+                if self._register_index(key):
+                    added += 1
+        return added
+
+    def establish_index_genesis(self, legacy_keys: Iterable[str] = ()) -> None:
+        """One-time OPERATOR action: register every known legacy key, THEN write the
+        genesis marker, which asserts "every key claimed before this index existed has
+        been registered". Enumeration is refused until it exists. The store cannot
+        verify that assertion (the Journal cannot list streams); using it while a
+        pre-index key is unlisted, or while pre-index code still claims keys, voids
+        the completeness guarantee. Idempotent."""
+
+        with self._lock:
+            self.register_known_keys(legacy_keys)
+            self._append(INDEX_STREAM, _INDEX_GENESIS_KEY, dict(_INDEX_GENESIS))
+
+    def unindexed_claims_among(self, keys: Iterable[str]) -> tuple[str, ...]:
+        """Caller-scoped audit: keys that have a claim in their stream but NO index row.
+        Non-empty means the index is incomplete (legacy/out-of-order writer). Cannot find
+        keys the caller does not name."""
+
+        indexed = {e.idempotency_key for e in self._index_entries()[1]}
+        out: list[str] = []
+        for key in sorted(set(keys)):
+            if key not in indexed and self.lookup(key) is not None:
+                out.append(key)
+        return tuple(out)
+
+    def enumerate_unresolved(self) -> tuple[DedupKeyStatus, ...]:
+        """Statuses (sorted by key) of every indexed key that is RESULT_UNSAFE,
+        QUARANTINED, ATTEMPTED_NO_RESULT, CLAIMED_NOT_ATTEMPTED, ABORTED_NEVER_ATTEMPTED
+        (still claimed, OPEN-14) or ever-UNKNOWN in the current generation. UNCLAIMED and
+        cleanly released keys are excluded. Index = discovery only: every key is
+        re-derived through ``inspect``. Never returns a partial list."""
+
+        with self._lock:
+            genesis, entries = self._index_entries()
+            if not genesis:
+                raise DedupEnumerationIncompleteError("dedup_index_genesis_missing")
+            out: list[DedupKeyStatus] = []
+            for entry in entries:
+                status = self.inspect(entry.idempotency_key)  # I/O failure propagates
+                if status.state.value in _UNRESOLVED_STATES or status.unknown_observed:
+                    out.append(status)
+            return tuple(out)
+
     def release_for_retry(self, idempotency_key: str) -> bool:
         """True only if THIS call durably wrote the release.
 
@@ -620,6 +719,45 @@ class JournalExecutionDedupStore:
                 return False
 
     # -- internals ----------------------------------------------------------
+
+    def _register_index(self, idempotency_key: str) -> bool:
+        _stream(idempotency_key)  # blank-key check
+        return self._append(
+            INDEX_STREAM,
+            f"key#{idempotency_key}",
+            {"event": "index_register", "idempotency_key": idempotency_key},
+        )
+
+    def _index_entries(self) -> tuple[bool, tuple[_IndexEntry, ...]]:
+        """(genesis present, registrations sorted by key). Fails closed on any anomaly."""
+
+        try:
+            rows = self._journal.read(INDEX_STREAM)
+        except Exception as exc:  # fail closed on any storage failure
+            if _is_row_integrity_failure(exc):
+                raise DedupStoreCorruptError("dedup_index_row_corrupt") from exc
+            raise DedupStoreIOError("dedup_index_unreadable") from exc
+        genesis = False
+        keys: set[str] = set()
+        for row in rows:
+            if not isinstance(row, dict):
+                raise DedupStoreCorruptError("dedup_index_malformed")
+            if row.get("event") == "index_genesis":
+                if row != _INDEX_GENESIS or genesis:
+                    raise DedupStoreCorruptError("dedup_index_malformed")
+                genesis = True
+                continue
+            key = row.get("idempotency_key")
+            if (
+                row.get("event") != "index_register"
+                or set(row) != _INDEX_REGISTER_FIELDS
+                or not isinstance(key, str)
+                or not key.strip()
+                or key in keys
+            ):
+                raise DedupStoreCorruptError("dedup_index_malformed")
+            keys.add(key)
+        return genesis, tuple(_IndexEntry(idempotency_key=k) for k in sorted(keys))
 
     def _require_not_attempted(
         self, events: tuple[dict[str, Any], ...], generation: int, claimed: bool
@@ -770,6 +908,11 @@ class JournalExecutionDedupStore:
             if event["event"] == "result" and event["generation"] == generation:
                 latest = deserialize_result(event.get("result"))
         return latest
+
+
+@dataclass(frozen=True, slots=True)
+class _IndexEntry:
+    idempotency_key: str
 
 
 class _MemoryJournal:
