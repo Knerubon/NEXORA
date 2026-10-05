@@ -81,3 +81,9 @@ inputs not mutated; no ambient clock.
 
 ## Handoff (AGENTS.md s16)
 See the PR description and the worker report. MERGE: NOT PERFORMED.
+
+## Security-review corrective delta (after 1abac4b; Security NOT APPROVE at 1abac4b)
+1. HIGH (confirmed, seam composition only): step-1 generation gate vs `claim()` taking the CURRENT generation let a racing caller win a RELEASED generation and submit again. Repro BEFORE (4 processes x 12 trials, shared SQLite file, clean zero-fill REJECTED adapter): submits per key `[4, 1, 2, 4, 4, 4, ...]` (max 4). AFTER: `[1]*12` for REJECTED and `[1]*12` for FILLED. Fix is pipeline-only: after `FIRST_CLAIM` and before any marker/submit the pipeline `inspect()`s the key and requires `CLAIMED_NOT_ATTEMPTED` AND first generation (ONE shared predicate `_is_first_generation`, also used by the step-1 gate and the pre-submit re-inspect); otherwise best-effort `record_abort` and DENIED (`released_generation_not_retried`, `dedup_post_claim_*`), no transmission; inspect errors fail closed. No store/ADR change: store claim semantics unchanged (an expected-generation claim would be a contract change and was NOT made).
+2. LOW: evidence is read ONCE from an exact-type `ReconciliationEvidence` (subclasses rejected), records must be exact `ReconciliationRecord`, and an immutable snapshot is used by all later steps.
+3. LOW: any exception after `adapter.submit` returned maps to `RESULT_PERSIST_FAILED` with `unknown_pending` and `post_execution_reconciliation_required` (never a plain DENIED).
+Tests: deterministic A-release/B-claim interleaving, post-claim inspect failure, pre-submit generation check, TOCTOU hostile evidence, record subclass, hostile result, retry-safety failure, and `tests/test_execution_pipeline_concurrency.py` (multi-process, ~4 s). `_require_tightening_only` private import left as is (note only).

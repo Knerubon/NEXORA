@@ -1228,3 +1228,178 @@ def test_naive_clock_denies() -> None:
     rig = Rig(clock=lambda: datetime(2026, 1, 1))
     assert rig.run(_inputs()).reason_codes == ("clock_requires_timezone",)
     assert rig.durable_writes() == []
+
+
+# --------------------------------------------------------------------------- security delta
+
+
+def _status(key: str, state: DedupKeyState, generation: int | None) -> DedupKeyStatus:
+    return DedupKeyStatus(
+        idempotency_key=key,
+        state=state,
+        generation=generation,
+        latest_result=None,
+        violation_code=None,
+    )
+
+
+def test_released_generation_claim_race_never_transmits_deterministic() -> None:
+    """A runs claim->attempt->submit->clean REJECTED->release between B's step-1 gate and
+    B's claim; B's claim then wins generation 1 and must NOT transmit (OPEN-14/15)."""
+
+    rig_b = Rig()
+    a_adapter = FakeAdapterForTestsOnly([], lambda r: _result(r, ExecutionStatus.REJECTED))
+    a_pipeline = ExecutionPipeline(
+        dedup_store=rig_b.inner,
+        clock=lambda: NOW,
+        instrument_resolver={"SYM": "inst-1"}.get,
+        max_reconciliation_evidence_age=BOUND,
+        max_preflight_age=BOUND,
+        transmission=non_production_transmission_seam(
+            a_adapter, preflight=AllowPreflightForTestsOnly([])
+        ),
+    )
+    key = execution_request_idempotency_key(_intent(TradeIntentKind.CLOSE))
+    ran: list[PipelineOutcome] = []
+
+    def a_runs_first_then_b_claims(k: str) -> ClaimOutcome:
+        ran.append(a_pipeline.run(_inputs()))
+        return rig_b.inner.claim(k)
+
+    rig_b.store.hooks["claim"] = a_runs_first_then_b_claims
+    outcome = rig_b.run(_inputs())
+    assert ran[0].released and len(a_adapter.calls) == 1
+    assert outcome.status is PipelineStatus.DENIED
+    assert outcome.reason_codes == ("released_generation_not_retried",)
+    assert rig_b.adapter.calls == [] and "record_attempt" not in rig_b.log
+    assert "record_abort" in rig_b.log
+    assert rig_b.inner.state(key) is DedupKeyState.ABORTED_NEVER_ATTEMPTED
+
+
+def test_post_claim_inspect_failure_aborts_and_never_transmits() -> None:
+    rig = Rig()
+    calls = {"n": 0}
+    real = rig.inner.inspect
+
+    def flaky(key: str) -> DedupKeyStatus:
+        calls["n"] += 1
+        if calls["n"] == 2:  # 1 = own-key gate, 2 = post-claim check
+            raise DedupStoreIOError("io")
+        status: DedupKeyStatus = real(key)
+        return status
+
+    rig.store.hooks["inspect"] = flaky
+    outcome = rig.run(_inputs())
+    assert outcome.status is PipelineStatus.DENIED
+    assert outcome.reason_codes == ("dedup_post_claim_inspect_failed",)
+    assert rig.adapter.calls == [] and "record_attempt" not in rig.log
+    assert "record_abort" in rig.log
+
+
+def test_pre_submit_reinspect_also_requires_the_first_generation() -> None:
+    rig = Rig()
+    calls = {"n": 0}
+    real = rig.inner.inspect
+
+    def third_inspect_reports_generation_one(key: str) -> DedupKeyStatus:
+        calls["n"] += 1
+        status: DedupKeyStatus = real(key)
+        if calls["n"] == 3:  # 3 = re-inspect after the attempt marker
+            return _status(key, DedupKeyState.ATTEMPTED_NO_RESULT, 1)
+        return status
+
+    rig.store.hooks["inspect"] = third_inspect_reports_generation_one
+    outcome = rig.run(_inputs())
+    assert outcome.status is PipelineStatus.MARKER_FAILED and rig.adapter.calls == []
+
+
+class _HostileEvidence(ReconciliationEvidence):
+    """Returns a valid ref on the first read and a hostile value afterwards (TOCTOU)."""
+
+    reads = 0
+
+    @property
+    def evidence_ref(self) -> str:
+        type(self).reads += 1
+        return EVIDENCE_REF if type(self).reads == 1 else "HOSTILE api_key=secret"
+
+
+def test_evidence_toctou_hostile_subclass_never_reaches_the_store() -> None:
+    hostile = object.__new__(_HostileEvidence)
+    object.__setattr__(hostile, "records", (_match(),))
+    object.__setattr__(hostile, "observed_at", NOW)
+    rig = Rig()
+    outcome = rig.run(_inputs(reconciliation=hostile))
+    assert outcome.reason_codes == ("reconciliation_evidence_missing",)
+    assert rig.durable_writes() == [] and rig.store.attempt_kwargs == []
+    assert "HOSTILE" not in repr(outcome)
+
+
+def test_evidence_is_snapshotted_so_later_steps_use_the_validated_values() -> None:
+    rig = Rig()
+    rig.run(_inputs())
+    (kwargs,) = rig.store.attempt_kwargs
+    assert kwargs["reconciliation_evidence_ref"] == EVIDENCE_REF
+
+
+def test_record_subclass_in_evidence_is_rejected() -> None:
+    class SneakyRecord(ReconciliationRecord):
+        pass
+
+    sneaky = SneakyRecord(
+        position_ref="pos-1",
+        finding=ReconciliationFinding.MATCH,
+        local_quantity=Decimal("1.00"),
+        broker_quantity=Decimal("1.00"),
+        observed_at=NOW,
+    )
+    rig = Rig()
+    outcome = rig.run(_inputs(reconciliation=_evidence(sneaky)))
+    assert outcome.reason_codes == ("reconciliation_evidence_records_invalid",)
+    assert rig.durable_writes() == []
+
+
+class _HostileResult(ExecutionResult):
+    @property
+    def action(self) -> Any:
+        raise RuntimeError("hostile attribute access with broker payload")
+
+
+def test_post_submit_hostile_result_is_unknown_pending_not_a_plain_denial() -> None:
+    def hostile(request: ExecutionRequest) -> Any:
+        good = _filled(request)
+        obj = object.__new__(_HostileResult)
+        for name in (
+            "result_id",
+            "request_ref",
+            "status",
+            "requested_quantity",
+            "filled_quantity",
+            "remaining_quantity",
+            "observed_at",
+        ):
+            object.__setattr__(obj, name, getattr(good, name))
+        return obj
+
+    rig = Rig(behavior=hostile)
+    outcome = rig.run(_inputs())
+    assert outcome.status is PipelineStatus.RESULT_PERSIST_FAILED
+    assert outcome.reason_codes == ("post_submit_processing_failed",)
+    assert outcome.unknown_pending and outcome.post_execution_reconciliation_required
+    assert "payload" not in repr(outcome)
+    assert rig.key_state() is DedupKeyState.ATTEMPTED_NO_RESULT
+    assert rig.run(_inputs()).status is PipelineStatus.DENIED and len(rig.adapter.calls) == 1
+
+
+def test_post_submit_failure_in_retry_safety_check_is_unknown_pending(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def boom(result: ExecutionResult) -> bool:
+        raise RuntimeError("x")
+
+    monkeypatch.setattr(pipeline_module, "is_safe_to_retry_without_reconciliation", boom)
+    rig = Rig(behavior=lambda r: _result(r, ExecutionStatus.REJECTED))
+    outcome = rig.run(_inputs())
+    assert outcome.status is PipelineStatus.RESULT_PERSIST_FAILED
+    assert outcome.unknown_pending and outcome.post_execution_reconciliation_required
+    assert len(rig.adapter.calls) == 1

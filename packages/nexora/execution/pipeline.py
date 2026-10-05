@@ -276,6 +276,12 @@ _POSITION_KINDS = (
 _OPEN_STATES = (TradeState.OPEN, TradeState.MANAGING)
 
 
+def _is_first_generation(status: DedupKeyStatus) -> bool:
+    """ONE shared predicate: a key may only ever be transmitted in generation 0."""
+
+    return status.generation in (None, 0)
+
+
 class _Stop(Exception):
     """Internal: a step denied. Carries reason codes only."""
 
@@ -397,6 +403,21 @@ class ExecutionPipeline:
             )
 
         trace.append("6")
+        refused = self._post_claim_key_check(key)
+        if refused:
+            # Claim won a RELEASED generation (A released between our step-1 gate and our
+            # claim): never transmit; best-effort abort; fail closed.
+            codes = list(refused)
+            try:
+                self._store.record_abort(key)
+            except Exception:
+                codes.append("abort_marker_failed")
+            return PipelineOutcome(
+                status=PipelineStatus.DENIED,
+                reason_codes=tuple(codes),
+                trace=tuple(trace),
+                request=request,
+            )
         failed = self._step6_last_look(
             inputs, res, authority, status, now, request, evidence, decision
         )
@@ -423,7 +444,10 @@ class ExecutionPipeline:
             )
             # W1 defense in depth: re-read the authoritative state; "returned normally"
             # is not trusted on its own.
-            if self._store.inspect(key).state is not DedupKeyState.ATTEMPTED_NO_RESULT:
+            marker = self._store.inspect(key)
+            if marker.state is not DedupKeyState.ATTEMPTED_NO_RESULT or not _is_first_generation(
+                marker
+            ):
                 raise _Stop("attempt_marker_not_verified")
         except Exception:
             # W1: no durable marker, no submit. State stays CLAIMED_NOT_ATTEMPTED.
@@ -449,6 +473,28 @@ class ExecutionPipeline:
                 post_execution_reconciliation_required=True,
             )
 
+        try:
+            return self._post_submit(key, request, res, raw, trace)
+        except Exception:
+            # ANY failure after submit returned: the key may be ATTEMPTED_NO_RESULT or a
+            # result may or may not be durable. Never a plain denial: UNKNOWN-pending.
+            return PipelineOutcome(
+                status=PipelineStatus.RESULT_PERSIST_FAILED,
+                reason_codes=("post_submit_processing_failed",),
+                trace=tuple(trace),
+                request=request,
+                unknown_pending=True,
+                post_execution_reconciliation_required=True,
+            )
+
+    def _post_submit(
+        self,
+        key: str,
+        request: ExecutionRequest,
+        res: _Resolution,
+        raw: object,
+        trace: list[str],
+    ) -> PipelineOutcome:
         trace.append("8")
         result = self._normalize_result(request, raw)
         persisted, codes_8, released = self._step8_persist(key, result)
@@ -494,23 +540,26 @@ class ExecutionPipeline:
         self._open16_global_gate()
         self._own_key_gate(key)
 
-        evidence = inputs.reconciliation
-        if not isinstance(evidence, ReconciliationEvidence):
+        # Read every field ONCE, from an exact-type object (no subclass/property can change
+        # its answer between check and use); only the immutable snapshot is used afterwards.
+        raw_evidence = inputs.reconciliation
+        if type(raw_evidence) is not ReconciliationEvidence:
             raise _Stop("reconciliation_evidence_missing")
-        if not is_valid_evidence_ref(evidence.evidence_ref):
+        ref = raw_evidence.evidence_ref
+        observed = raw_evidence.observed_at
+        records = raw_evidence.records
+        if not is_valid_evidence_ref(ref):
             raise _Stop("reconciliation_evidence_ref_invalid")
-        observed = evidence.observed_at
         if (
             not isinstance(observed, datetime)
             or observed.tzinfo is None
             or observed.utcoffset() is None
         ):
             raise _Stop("reconciliation_evidence_observed_at_invalid")
-        records = evidence.records
         if (
             not isinstance(records, tuple)
             or not records
-            or not all(isinstance(r, ReconciliationRecord) for r in records)
+            or not all(type(r) is ReconciliationRecord for r in records)
         ):
             raise _Stop("reconciliation_evidence_records_invalid")
         # Same-snapshot rule: every record is from ONE classification run.
@@ -520,7 +569,10 @@ class ExecutionPipeline:
         status = aggregate_reconciliation_status(records)
         if status is not ReconStatus.SYNCHRONIZED:
             raise _Stop(f"reconciliation_not_synchronized:{status.value}")
-        return status, evidence
+        snapshot = ReconciliationEvidence(
+            records=tuple(records), evidence_ref=ref, observed_at=observed
+        )
+        return status, snapshot
 
     def _open16_global_gate(self) -> None:
         try:
@@ -555,9 +607,25 @@ class ExecutionPipeline:
             raise _Stop("dedup_quarantined")
         if status.state is not DedupKeyState.UNCLAIMED:
             raise _Stop(f"dedup_key_not_unclaimed:{status.state.value}")
-        if status.generation not in (None, 0):
+        if not _is_first_generation(status):
             # OPEN-14/OPEN-15: a released generation means a same-key retry. Not decided.
             raise _Stop("dedup_same_key_retry_not_supported")
+
+    def _post_claim_key_check(self, key: str) -> tuple[str, ...]:
+        """After FIRST_CLAIM and before any marker/submit: the claimed generation must be the
+        FIRST one and still only claimed. Same generation predicate as the step-1 gate.
+        ``claim`` takes the CURRENT generation, so without this a racing caller could win a
+        released generation (a same-key retry, OPEN-14/15). Fails closed on inspect errors."""
+
+        try:
+            status = self._store.inspect(key)
+        except Exception:
+            return ("dedup_post_claim_inspect_failed",)
+        if status.state is not DedupKeyState.CLAIMED_NOT_ATTEMPTED:
+            return (f"dedup_post_claim_state_unexpected:{status.state.value}",)
+        if not _is_first_generation(status):
+            return ("released_generation_not_retried",)
+        return ()
 
     def _require_fresh(
         self,
