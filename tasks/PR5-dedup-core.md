@@ -43,11 +43,8 @@ detected on the next read as a late unsafe result (QUARANTINED, fail closed).
   ATTEMPTED_NO_RESULT (never in CLAIMED_NOT_ATTEMPTED). PR-4 ACCEPTANCE GATE. Store keeps legacy compatibility here.
 - `unresolved_among` is a TEMPORARY CALLER-SCOPED accessor, NOT global safety proof (unnamed keys invisible).
   Global enumeration = DEDUP-ENUM-1 (storage-layer capability, owned elsewhere; storage.py untouched).
-- Exception hierarchy: target = sibling IO / integrity errors under DedupStoreError. NOT changed now (existing
-  `test_closed_storage_fails_closed` and `except DedupStoreCorruptError` consumers depend on subclassing).
-  CONTROLLED FOLLOW-UP GATE before PR-4 integration: sibling separation with all catches/tests migrated and
-  independently reviewed. Until then consumers MUST test DedupStoreIOError before DedupStoreCorruptError, or use
-  inspect()/violation_code.
+- Exception hierarchy: DONE in PR-4 prerequisite hardening (IO and integrity errors are siblings under
+  DedupStoreError; see tasks/PR4-readiness-prerequisites.md). Independent review pending.
 - PR-4 contract-test gate: caller-supplied evidence refs (request_digest, reconciliation_evidence_ref,
   preflight_decision_ref) are not validated by the store for secrets/PII.
 
