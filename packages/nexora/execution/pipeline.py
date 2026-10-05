@@ -559,7 +559,9 @@ class ExecutionPipeline:
         if (
             type(records) is not tuple
             or not records
-            or not all(type(r) is ReconciliationRecord for r in records)
+            or not all(
+                type(r) is ReconciliationRecord and type(r.observed_at) is datetime for r in records
+            )
         ):
             raise _Stop("reconciliation_evidence_records_invalid")
         # Same-snapshot rule: every record is from ONE classification run.

@@ -1457,3 +1457,58 @@ def test_plain_exact_tuple_and_datetime_are_still_accepted() -> None:
 
 def _evidence_raw(records: Any) -> ReconciliationEvidence:
     return ReconciliationEvidence(records=records, evidence_ref=EVIDENCE_REF, observed_at=NOW)
+
+
+class _LyingRecordDatetime(datetime):
+    """Record-level observed_at that lies in every comparison/subtraction."""
+
+    def __eq__(self, other: object) -> bool:
+        return True
+
+    def __ne__(self, other: object) -> bool:
+        return False
+
+    __hash__ = datetime.__hash__
+
+    def __sub__(self, other: Any) -> Any:
+        return timedelta(0)
+
+    def __rsub__(self, other: Any) -> timedelta:
+        return timedelta(0)
+
+
+def _lying_record_evidence() -> ReconciliationEvidence:
+    lying = _LyingRecordDatetime(2026, 10, 5, 7, 0, tzinfo=UTC)  # really 5h stale
+    record = ReconciliationRecord(
+        position_ref="pos-1",
+        finding=ReconciliationFinding.MATCH,
+        local_quantity=Decimal("1.00"),
+        broker_quantity=Decimal("1.00"),
+        observed_at=lying,
+    )
+    # evidence-level observed_at is exact and fresh; only the record-level value lies
+    return ReconciliationEvidence(records=(record,), evidence_ref=EVIDENCE_REF, observed_at=NOW)
+
+
+def test_record_level_datetime_subclass_denied_in_seam_composition() -> None:
+    rig = Rig()
+    outcome = rig.run(_inputs(reconciliation=_lying_record_evidence()))
+    assert outcome.reason_codes == ("reconciliation_evidence_records_invalid",)
+    assert outcome.trace == ("1",)
+    assert rig.durable_writes() == [] and rig.adapter.calls == [] and rig.preflight.calls == 0
+    assert "preflight" not in rig.log and "resolve" not in rig.log
+
+
+def test_record_level_datetime_subclass_denied_in_production_composition(tmp_path: Path) -> None:
+    log: list[str] = []
+    pipeline, _ = _production_pipeline(tmp_path, log)
+    outcome = pipeline.run(_inputs(reconciliation=_lying_record_evidence()))
+    assert outcome.reason_codes == ("reconciliation_evidence_records_invalid",)
+    assert outcome.trace == ("1",)
+    for write in ("claim", "record_attempt", "record_abort", "record_result", "release_for_retry"):
+        assert write not in log
+
+
+def test_record_with_plain_exact_datetime_is_still_accepted() -> None:
+    assert type(_match().observed_at) is datetime
+    assert Rig().run(_inputs()).status is PipelineStatus.COMPLETED
