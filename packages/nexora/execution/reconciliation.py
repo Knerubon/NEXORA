@@ -38,6 +38,10 @@ class ReconciliationFinding(StrEnum):
     PROTECTION_MISMATCH = "PROTECTION_MISMATCH"
     EXECUTION_RESULT_UNKNOWN = "EXECUTION_RESULT_UNKNOWN"
     RESTART_RECOVERY_PENDING = "RESTART_RECOVERY_PENDING"
+    # ADR-035 section 4.6 (OPEN-6 shape): evidence classification only. These
+    # are never an authorization or a state transition.
+    CLOSE_PENDING_CONFIRMED = "CLOSE_PENDING_CONFIRMED"
+    BROKER_FLAT_CONFIRMED = "BROKER_FLAT_CONFIRMED"
 
 
 _FINDING_STATUS: dict[ReconciliationFinding, ReconciliationStatus] = {
@@ -48,6 +52,10 @@ _FINDING_STATUS: dict[ReconciliationFinding, ReconciliationStatus] = {
     ReconciliationFinding.PROTECTION_MISMATCH: ReconciliationStatus.UNSYNCHRONIZED,
     ReconciliationFinding.EXECUTION_RESULT_UNKNOWN: ReconciliationStatus.UNKNOWN,
     ReconciliationFinding.RESTART_RECOVERY_PENDING: ReconciliationStatus.UNKNOWN,
+    # Exposure still exists and is in transition: new trades stay blocked.
+    ReconciliationFinding.CLOSE_PENDING_CONFIRMED: ReconciliationStatus.UNKNOWN,
+    # Unsynchronized until the local record is brought to CLOSED (not done here).
+    ReconciliationFinding.BROKER_FLAT_CONFIRMED: ReconciliationStatus.UNSYNCHRONIZED,
 }
 
 
@@ -80,6 +88,8 @@ class ReconciliationRecord:
             in (
                 ReconciliationFinding.LOCAL_OPEN_BROKER_MISSING,
                 ReconciliationFinding.BROKER_POSITION_LOCAL_MISSING,
+                ReconciliationFinding.CLOSE_PENDING_CONFIRMED,
+                ReconciliationFinding.BROKER_FLAT_CONFIRMED,
             )
             and self.position_ref is None
         ):
