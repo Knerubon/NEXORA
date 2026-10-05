@@ -370,7 +370,7 @@ def test_manual_allowed_decision_is_not_evaluate_output() -> None:
     assert _eval(_request(K.OPEN)) != manual
 
 
-def test_preflight_reason_code_vocabulary_is_exactly_ten() -> None:
+def test_preflight_reason_code_vocabulary_is_exactly_eleven() -> None:
     codes = {
         v
         for k, v in vars(preflight).items()
@@ -387,4 +387,5 @@ def test_preflight_reason_code_vocabulary_is_exactly_ten() -> None:
         "preflight_capabilities_stale",
         "preflight_stops_freeze_check_unavailable",
         "preflight_policy_evaluation_unavailable",
+        "preflight_reduce_residual_volume_invalid",  # PR-7 (OPEN-8 residual), the only addition
     }

@@ -75,6 +75,8 @@ from nexora.position.models import PositionInputError, PositionRecord, Protectio
 from nexora.risk.models import RiskDecision
 from nexora.storage import SQLiteJournal
 
+from tests.execution_resolver_fixtures import TableResolverForTestsOnly
+
 NOW = datetime(2026, 10, 5, 12, 0, tzinfo=UTC)
 BOUND = timedelta(seconds=60)
 EVIDENCE_REF = "sha256:" + "a" * 64
@@ -101,7 +103,11 @@ class FakeAdapterForTestsOnly:
         self.calls: list[ExecutionRequest] = []
         self.on_submit: Callable[[], None] | None = None
 
-    def capabilities(self) -> BrokerCapabilities:  # pragma: no cover - never used
+    @property
+    def adapter_mode(self) -> str:
+        return SIMULATION_MODE
+
+    def capabilities(self) -> BrokerCapabilities:
         return _caps()
 
     def submit(self, request: ExecutionRequest) -> ExecutionResult:
@@ -118,6 +124,7 @@ class AllowPreflightForTestsOnly:
     def __init__(self, log: list[str]) -> None:
         self.log = log
         self.calls = 0
+        self.position_quantities: list[Decimal | None] = []
 
     def evaluate(
         self,
@@ -127,9 +134,11 @@ class AllowPreflightForTestsOnly:
         *,
         now: datetime,
         max_capabilities_age: timedelta | None = None,
+        position_quantity: Decimal | None = None,
     ) -> PreflightDecision:
         self.log.append("preflight")
         self.calls += 1
+        self.position_quantities.append(position_quantity)
         return PreflightDecision(
             allowed=True,
             reason_codes=(),
@@ -356,7 +365,7 @@ class Rig:
         behavior: Callable[[ExecutionRequest], Any] | None = None,
         genesis: bool = True,
         clock: Callable[[], datetime] | None = None,
-        resolver: Callable[[str], str | None] | None = None,
+        resolver: Any = None,
         bounds: bool = True,
     ) -> None:
         self.log: list[str] = []
@@ -368,12 +377,16 @@ class Rig:
         self.adapter = FakeAdapterForTestsOnly(self.log, behavior)
         self.preflight = AllowPreflightForTestsOnly(self.log)
         self.resolver_calls: list[str] = []
-        base_resolver = resolver or {"SYM": "inst-1"}.get
+        base_resolver = resolver or TableResolverForTestsOnly({"SYM": "inst-1"})
+        rig = self
 
-        def recording_resolver(symbol: str) -> str | None:
-            self.resolver_calls.append(symbol)
-            self.log.append("resolve")
-            return base_resolver(symbol)
+        class _RecordingResolver:
+            def resolve_execution_instrument(self, symbol: str) -> Any:
+                rig.resolver_calls.append(symbol)
+                rig.log.append("resolve")
+                return base_resolver.resolve_execution_instrument(symbol)
+
+        recording_resolver = _RecordingResolver()
 
         self.pipeline = ExecutionPipeline(
             dedup_store=self.store,
@@ -404,7 +417,7 @@ def _production_pipeline(
     pipeline = ExecutionPipeline(
         dedup_store=store,
         clock=lambda: NOW,
-        instrument_resolver={"SYM": "inst-1"}.get,
+        instrument_resolver=TableResolverForTestsOnly({"SYM": "inst-1"}),
         max_reconciliation_evidence_age=BOUND,
         max_preflight_age=BOUND,
         max_capabilities_age=BOUND,
@@ -471,7 +484,11 @@ def test_pipeline_refuses_a_raw_adapter_and_a_forged_seam() -> None:
     with pytest.raises(PipelineWiringError):
         ExecutionPipeline(dedup_store=store, clock=lambda: NOW, transmission=adapter)  # type: ignore[arg-type]
     forged = NonProductionTransmissionSeam(
-        adapter=adapter, preflight=AllowPreflightForTestsOnly(log), _token=object()
+        adapter=adapter,
+        preflight=AllowPreflightForTestsOnly(log),
+        adapter_mode=SIMULATION_MODE,
+        capabilities=_caps(),
+        _token=object(),
     )
     with pytest.raises(PipelineWiringError) as err:
         ExecutionPipeline(dedup_store=store, clock=lambda: NOW, transmission=forged)
@@ -494,8 +511,9 @@ def test_seam_refuses_unmarked_namespaced_and_non_adapters() -> None:
     with pytest.raises(PipelineWiringError, match="does_not_implement"):
         non_production_transmission_seam(object())
     simulated = SimulatedBrokerAdapter(mode=SIMULATION_MODE, capabilities=_caps())
-    with pytest.raises(PipelineWiringError):  # shipped simulator is refused too
-        non_production_transmission_seam(simulated)
+    # PR-7: the exact shipped simulator MAY be wired (it can still never transmit, see
+    # tests/test_execution_pr7_narrow_consumers.py).
+    assert non_production_transmission_seam(simulated).adapter_mode == SIMULATION_MODE
 
 
 def _imports(tree: ast.AST) -> list[tuple[str, str | None]]:
@@ -524,7 +542,12 @@ def test_pipeline_module_has_no_broker_sdk_order_send_or_real_adapter() -> None:
         assert "metatrader" not in module.lower()
     assert "order_send" not in source
     from_broker = {n for m, n in _imports(tree) if m == "nexora.execution.broker_adapter"}
-    assert from_broker == {"BrokerExecutionAdapter"}  # the Protocol only
+    # The Protocol and the gate helpers only; the simulator CLASS is never imported here.
+    assert from_broker == {
+        "BrokerExecutionAdapter",
+        "PHASE1_EXECUTABLE_ADAPTER_MODES",
+        "is_shipped_simulated_adapter",
+    }
     assert "SimulatedBrokerAdapter" not in source
 
 
@@ -691,7 +714,7 @@ def test_earlier_denial_prevents_all_later_steps(
 
 
 def test_resolver_missing_or_unbound_symbol_denies_before_authority() -> None:
-    rig = Rig(resolver=lambda s: None)
+    rig = Rig(resolver=TableResolverForTestsOnly({}))
     outcome = rig.run(_inputs())
     assert outcome.reason_codes == ("execution_binding_missing",) and outcome.trace == ("1", "2")
     genesis_store = JournalExecutionDedupStore(SQLiteJournal(Path(":memory:")))
@@ -1252,7 +1275,7 @@ def test_released_generation_claim_race_never_transmits_deterministic() -> None:
     a_pipeline = ExecutionPipeline(
         dedup_store=rig_b.inner,
         clock=lambda: NOW,
-        instrument_resolver={"SYM": "inst-1"}.get,
+        instrument_resolver=TableResolverForTestsOnly({"SYM": "inst-1"}),
         max_reconciliation_evidence_age=BOUND,
         max_preflight_age=BOUND,
         transmission=non_production_transmission_seam(

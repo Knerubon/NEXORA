@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from nexora.execution.broker_adapter import SIMULATION_MODE
 from nexora.execution.dedup_store import JournalExecutionDedupStore
 from nexora.execution.models import ExecutionRequest, ExecutionResult, ExecutionStatus
 from nexora.execution.pipeline import (
@@ -20,7 +21,8 @@ from nexora.execution.pipeline import (
 )
 from nexora.storage import SQLiteJournal
 
-from tests.test_execution_pipeline import AllowPreflightForTestsOnly, _inputs, _result
+from tests.execution_resolver_fixtures import TableResolverForTestsOnly
+from tests.test_execution_pipeline import AllowPreflightForTestsOnly, _caps, _inputs, _result
 
 NOW = datetime(2026, 10, 5, 12, 0, tzinfo=UTC)
 PROCESSES = 4
@@ -36,8 +38,12 @@ class CountingAdapterForTestsOnly:
         self.status = status
         self.submits = 0
 
-    def capabilities(self) -> Any:  # pragma: no cover
-        raise NotImplementedError
+    @property
+    def adapter_mode(self) -> str:
+        return SIMULATION_MODE
+
+    def capabilities(self) -> Any:
+        return _caps()
 
     def submit(self, request: ExecutionRequest) -> ExecutionResult:
         self.submits += 1
@@ -53,7 +59,7 @@ def _worker(
         pipeline = ExecutionPipeline(
             dedup_store=store,
             clock=lambda: NOW,
-            instrument_resolver={"SYM": "inst-1"}.get,
+            instrument_resolver=TableResolverForTestsOnly({"SYM": "inst-1"}),
             max_reconciliation_evidence_age=timedelta(seconds=60),
             max_preflight_age=timedelta(seconds=60),
             transmission=non_production_transmission_seam(

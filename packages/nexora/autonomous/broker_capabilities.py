@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from decimal import Decimal
+from decimal import MAX_EMAX, MIN_EMIN, Context, Decimal
 
 from nexora.market_data.instruments import FeedBinding, InstrumentDefinition
 
@@ -269,6 +269,80 @@ def validate_volume(capabilities: BrokerCapabilities, quantity: Decimal) -> str 
             else capabilities.volume_min
         )
         if not _on_step_grid(quantity, anchor, capabilities.volume_step):
+            return REASON_VOLUME_STEP_MISMATCH
+        return None
+    except Exception:
+        return REASON_VOLUME_STEP_MISMATCH
+
+
+# Technical safeguard for the residual-volume arithmetic only (not a trading limit): the
+# exact sum of two small capability-bounded Decimals is formed in a private context; a
+# pathological operand pair that would need more digits than this is denied, never
+# rounded.
+_MAX_EXACT_SUM_DIGITS = 100_000
+
+
+def _exact_sum(left: Decimal, right: Decimal) -> Decimal | None:
+    """Exact ``left + right`` for finite Decimals, independent of the ambient context, or
+    ``None`` when the exact result would need more than ``_MAX_EXACT_SUM_DIGITS`` digits."""
+
+    high = max(left.adjusted(), right.adjusted()) + 2
+    _, _, left_exponent = left.as_tuple()
+    _, _, right_exponent = right.as_tuple()
+    assert isinstance(left_exponent, int) and isinstance(right_exponent, int)  # finite
+    low = min(left_exponent, right_exponent)
+    digits = high - low + 1
+    if digits > _MAX_EXACT_SUM_DIGITS:
+        return None
+    context = Context(prec=max(digits, 1), Emax=MAX_EMAX, Emin=MIN_EMIN, traps=[])
+    return context.add(left, right)
+
+
+def validate_residual_volume(
+    capabilities: BrokerCapabilities, position_quantity: object, reduce_quantity: object
+) -> str | None:
+    """OPEN-8 residual rule for a REDUCE (ADR-035 s4.5 / s11 OPEN-8; no exemption, so a
+    non-conforming residual is blocked). Pure and TOTAL (never raises).
+
+    The residual ``r = position_quantity - reduce_quantity`` is valid iff ``r > 0``,
+    ``r >= volume_min`` and ``(r - anchor) / volume_step`` is an integer (anchor =
+    ``volume_step_anchor`` if declared, else ``volume_min``). ``volume_max`` bounds an
+    ORDER quantity, not a position, so it is deliberately NOT applied to the residual
+    (the requested order quantity is validated separately by ``validate_volume``).
+
+    Exact: no rounding, capping or adjustment. ``r`` is never materialised; the checks
+    are ``position >= reduce + volume_min`` and the shared exact step test on
+    ``(position, reduce + anchor)`` (``r - anchor == position - (reduce + anchor)``),
+    which handles any exponent of ``position_quantity``. Returns a volume reason code
+    (``volume_below_min`` / ``volume_not_multiple_of_step``) or ``None`` when valid;
+    non-Decimal / non-finite / non-positive inputs, ``reduce >= position`` and any
+    unexpected failure are rejected fail-closed.
+    """
+
+    try:
+        if not isinstance(capabilities, BrokerCapabilities):
+            return REASON_VOLUME_STEP_MISMATCH
+        for value in (position_quantity, reduce_quantity):
+            if not isinstance(value, Decimal) or not value.is_finite() or value <= 0:
+                return REASON_VOLUME_STEP_MISMATCH
+        assert isinstance(position_quantity, Decimal)
+        assert isinstance(reduce_quantity, Decimal)
+        if reduce_quantity >= position_quantity:
+            return REASON_VOLUME_BELOW_MIN
+        floor = _exact_sum(reduce_quantity, capabilities.volume_min)
+        if floor is None:
+            return REASON_VOLUME_STEP_MISMATCH
+        if position_quantity < floor:
+            return REASON_VOLUME_BELOW_MIN
+        anchor = (
+            capabilities.volume_step_anchor
+            if capabilities.volume_step_anchor is not None
+            else capabilities.volume_min
+        )
+        shifted = _exact_sum(reduce_quantity, anchor)
+        if shifted is None:
+            return REASON_VOLUME_STEP_MISMATCH
+        if not _on_step_grid(position_quantity, shifted, capabilities.volume_step):
             return REASON_VOLUME_STEP_MISMATCH
         return None
     except Exception:
