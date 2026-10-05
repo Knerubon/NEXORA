@@ -11,6 +11,7 @@ from nexora.execution.dedup_store import (
     ClaimOutcome,
     DedupStoreCorruptError,
     DedupStoreError,
+    DedupStoreIOError,
     ExecutionDedupStore,
     InMemoryExecutionDedupStore,
     JournalExecutionDedupStore,
@@ -209,7 +210,7 @@ def test_unreadable_result_fails_closed(tmp_path: Path) -> None:
 def test_closed_storage_fails_closed(tmp_path: Path) -> None:
     s, journal = durable(tmp_path)
     journal.close()
-    with pytest.raises(DedupStoreCorruptError):
+    with pytest.raises(DedupStoreIOError):
         s.claim(KEY)
 
 

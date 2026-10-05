@@ -24,10 +24,11 @@ Two failure classes are kept apart (ADR-035 W3 rows 19/20):
 
 * integrity violation (malformed / contradictory / tampered stored events) ->
   ``DedupStoreCorruptError``; ``inspect`` reports state ``QUARANTINED``;
-* storage I/O failure -> ``DedupStoreIOError``. It subclasses
-  ``DedupStoreCorruptError`` ONLY so that pre-existing callers still fail
-  closed; always test ``DedupStoreIOError`` FIRST. It is a plain deny, never a
-  state, and is never recorded as quarantine.
+* storage I/O failure -> ``DedupStoreIOError``. It is a SIBLING of
+  ``DedupStoreCorruptError`` under ``DedupStoreError`` (neither subclasses the
+  other). It is a plain deny, never a state, never recorded as quarantine and
+  never success. A caller that must deny on both catches ``DedupStoreError`` (or
+  the pair explicitly); ``except DedupStoreCorruptError`` no longer sees I/O.
 
 UNSAFE EVIDENCE IS MONOTONIC within a generation: once any result of a generation
 was UNKNOWN, ACCEPTED, PARTIALLY_FILLED or FILLED, no later result (e.g. a clean
@@ -44,11 +45,15 @@ secrets/PII (PR-4 contract-test gate).
 GLOBAL ENUMERATION (DEDUP-ENUM-1) is a storage-layer capability and is NOT implemented
 here: the Journal cannot list streams, so `unresolved_among` is caller-scoped only.
 
-EXCEPTION HIERARCHY follow-up gate (before PR-4 integration): sibling IO / integrity
-errors under DedupStoreError, with all catches and tests migrated and independently
-reviewed. Until then consumers test DedupStoreIOError FIRST or use
-`inspect()` / `violation_code`. `DedupRecord.latest_result` is display-only; PR-4 must
+EXCEPTION HIERARCHY: IO and integrity errors are siblings under DedupStoreError (done;
+independent review pending). `DedupRecord.latest_result` is display-only; PR-4 must
 consume `inspect()` / `state()`.
+
+EVIDENCE REFS (``request_digest``, ``reconciliation_evidence_ref``,
+``preflight_decision_ref``) are OPAQUE REFERENCES, never payload: see
+``validate_opaque_ref`` (non-blank, <= 256 chars, charset ``[A-Za-z0-9._:/#|+-]``, no
+secret/credential keyword, no e-mail form). Enforced on write only (fail closed with
+``DedupStoreError``); stored legacy rows are not re-validated on read.
 
 Only the ``attempt`` and ``abort`` event names are added to the recognised set;
 every other name stays an integrity violation. Release after ``abort``
@@ -61,6 +66,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from datetime import datetime
@@ -105,13 +111,12 @@ class DedupStoreCorruptError(DedupStoreError):
     """Integrity violation in stored state. Callers must deny, not retry."""
 
 
-class DedupStoreIOError(DedupStoreCorruptError):
+class DedupStoreIOError(DedupStoreError):
     """Storage I/O failure (``dedup_store_unreadable`` / ``dedup_store_write_failed``).
 
     A plain deny for this attempt: nothing is recorded as quarantined and the
-    read may be retried later. Never read as "unseen". Subclasses
-    ``DedupStoreCorruptError`` solely for backward-compatible fail-closed
-    handling; it is NOT an integrity violation.
+    read may be retried later. Never read as "unseen". A SIBLING of
+    ``DedupStoreCorruptError``; it is NOT an integrity violation.
     """
 
 
@@ -272,6 +277,43 @@ def deserialize_result(raw: object) -> ExecutionResult:
         raise DedupStoreCorruptError("dedup_result_unreadable") from exc
 
 
+MAX_OPAQUE_REF_LENGTH = 256
+_OPAQUE_REF_RE = re.compile(r"[A-Za-z0-9._:/#|+-]+")
+_SECRET_MARKERS = (
+    "password",
+    "passwd",
+    "secret",
+    "token",
+    "bearer",
+    "apikey",
+    "api_key",
+    "api-key",
+    "authorization",
+    "credential",
+    "privatekey",
+    "private_key",
+    "private-key",
+    "-----begin",
+)
+
+
+def opaque_ref_violation(value: str) -> str | None:
+    """Reason code if ``value`` is not an acceptable opaque reference, else ``None``.
+
+    Minimal fail-closed guard so a ref cannot carry free text, e-mail/PII-looking
+    content or credentials. It is NOT a secret scanner; refs must still be opaque ids.
+    """
+
+    if len(value) > MAX_OPAQUE_REF_LENGTH:
+        return "too_long"
+    if not _OPAQUE_REF_RE.fullmatch(value):
+        return "charset_invalid"
+    lowered = value.lower()
+    if any(marker in lowered for marker in _SECRET_MARKERS):
+        return "secret_like"
+    return None
+
+
 def attempt_payload(
     idempotency_key: str,
     generation: int,
@@ -291,6 +333,9 @@ def attempt_payload(
     ):
         if not isinstance(value, str) or not value.strip():
             raise DedupStoreError(f"attempt_{name}_blank")
+        reason = opaque_ref_violation(value)
+        if reason is not None:
+            raise DedupStoreError(f"attempt_{name}_{reason}")
     if resolved_quantity is not None and (
         not isinstance(resolved_quantity, Decimal) or not resolved_quantity.is_finite()
     ):
@@ -494,9 +539,7 @@ class JournalExecutionDedupStore:
                 events = self._events(idempotency_key)
                 generation, claimed = self._state(idempotency_key, events)
                 state, latest = self._w3(events, generation, claimed)
-            except DedupStoreIOError:
-                raise
-            except DedupStoreCorruptError as exc:
+            except DedupStoreCorruptError as exc:  # I/O errors are siblings and propagate
                 return DedupKeyStatus(
                     idempotency_key=idempotency_key,
                     state=DedupKeyState.QUARANTINED,
