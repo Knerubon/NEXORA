@@ -1,6 +1,7 @@
-# DEDUP-ENUM-1 - Durable enumeration of unresolved dedup keys (PLAN ONLY)
+# DEDUP-ENUM-1 - Durable enumeration of unresolved dedup keys
 
-Status: PROPOSAL FOR RIN. Nothing here is decided; no implementation exists or is authorized by this file.
+Status: Option A IMPLEMENTED (draft PR, self-review; independent + Security review pending). The sections below up to
+"Decision and implementation" are the original proposal, kept for history.
 Authority: ADR-035 s3.8 / W5 / OPEN-16 / OPEN-9 (docs/decisions/ADR-035-execution-integration-safety-amendment.md).
 
 ## Problem
@@ -54,3 +55,43 @@ Option B is the cleanest long-term (single source of truth, no ordering hazard) 
 Option A is the smallest self-contained step and is fail-safe if the index-before-claim order is enforced and tested.
 Suggested: Rin decides between A (execution/dedup track, owner DEV-EXEC) and B (storage owner, Architect-coordinated ADR).
 Until decided, the OPEN-16 gate stays blocked (ADR open item 9) and `unresolved_among` stays documented as non-global.
+
+## Decision and implementation (Option A)
+Rin decision (frozen): Option A, durable index stream. The index is DISCOVERY METADATA, NOT execution truth. Required flow:
+index -> candidate key -> authoritative `inspect()`/`state()` -> decision. Execution permission is never derived from the
+index. If completeness/integrity cannot be established: FAIL CLOSED.
+
+Design (`execution/dedup_store.py` only; storage.py untouched, Journal Protocol only):
+- Index stream `execution-dedup-index` (no ':' so it cannot collide with `execution-dedup:<key>`). Rows: `key#<k>` =
+  `{event: index_register, idempotency_key: k}` and `genesis` = `{event: index_genesis, version: 1}`. Same Journal envelope/hash,
+  first-writer-wins, no `expected_count` => concurrent writers/processes lose no registration; re-registering is a no-op.
+- `claim()` registers the key BEFORE the first claim row (index first, claim second). A crash between them leaves an index
+  entry for an UNCLAIMED key (harmless, not enumerated). Index write failure => `DedupStoreIOError`, no claim written.
+  claim/attempt/abort/result/release outcomes are otherwise unchanged (all pre-existing dedup tests pass unmodified).
+- Accessor (name/type FLAGGED for Rin to freeze; minimal choice): `enumerate_unresolved() -> tuple[DedupKeyStatus, ...]`,
+  sorted by key. Includes RESULT_UNSAFE, QUARANTINED, ATTEMPTED_NO_RESULT, CLAIMED_NOT_ATTEMPTED, ABORTED_NEVER_ATTEMPTED
+  (still claimed, OPEN-14) and ever-UNKNOWN in the current generation; excludes UNCLAIMED and cleanly released/clean-rejected.
+- Fail closed: index I/O => `DedupStoreIOError`; malformed/duplicate/hash-failed index row => `DedupStoreCorruptError`; per-key
+  read I/O => propagates; per-key integrity violation => key reported QUARANTINED; genesis missing =>
+  `DedupEnumerationIncompleteError` (new sibling under `DedupStoreError`). Never a partial list.
+- Extra admin/audit methods: `register_known_keys(keys)`, `establish_index_genesis(legacy_keys=())`,
+  `unindexed_claims_among(keys)` (caller-scoped audit: claimed but not indexed).
+- `unresolved_among` remains documented CALLER-SCOPED / non-global.
+
+### Legacy-key question (RECORDED FOR RIN)
+Streams claimed before this change have no index row and cannot be listed (Journal cannot list streams). Mechanism: enumeration
+refuses (`dedup_index_genesis_missing`) until an operator runs the one-time `establish_index_genesis(legacy_keys)`, which registers
+the supplied legacy keys and then writes the genesis marker. Residual limits (cannot be closed without Option B / a policy step):
+1. Genesis is an operator ASSERTION; the store cannot verify the legacy key list is complete. A forgotten legacy key stays invisible
+   (auditable only via `unindexed_claims_among` for keys someone names).
+2. Pre-index code still claiming after genesis voids completeness (deployment rule: no pre-change writers once genesis exists).
+3. Deleting rows from the index (truncation) is not detectable beyond per-row hashes; a claimed key without an index row is only
+   discoverable via known keys. Needs Security review.
+Rin to confirm: (a) acceptable operator process for the legacy list (source of the list for PROD), (b) accessor name/type,
+(c) that fresh/dev stores call `establish_index_genesis()` at bootstrap. No RIN_DECISION_REQUIRED on retry/idempotency semantics: none changed.
+
+### PR-4 consumption rule (OPEN-16 gate)
+Call `enumerate_unresolved()`; the gate MUST then consume each returned status (already `inspect()`-derived) and block globally on
+RESULT_UNSAFE, QUARANTINED, ATTEMPTED_NO_RESULT, CLAIMED_NOT_ATTEMPTED, ABORTED_NEVER_ATTEMPTED and ever-UNKNOWN; and deny (fail
+closed) on ANY `DedupStoreError` from enumeration (I/O, corrupt, genesis missing). An empty result is "none unresolved" only when
+no exception was raised. The index never grants permission; the per-key `inspect()` remains the only authority.
