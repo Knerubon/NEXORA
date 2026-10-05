@@ -23,7 +23,10 @@ No implementation, ADR, task-cleanup, runtime, broker, AUTO, PROD or release/tag
 
 ## Governance note
 This PR changes the authority model itself. It may be merged only on an explicit per-PR
-`RIN_MERGE_AUTHORIZED PR #<n> <full 40-char SHA>`; no Wave authority covers it.
+`RIN_MERGE_AUTHORIZED PR #<n> <full 40-char SHA>` naming the exact reviewed full SHA;
+`RIN_WAVE_MERGE_AUTHORIZED — <Wave>` never covers it. Wave authority is scoped to the named
+Wave, ends on Rin's acceptance of the Final Wave Report or revocation/supersession, and never
+implies AUTO/broker/paper-demo/PROD/release unlock or Security boundary changes (AGENTS.md 20.2, 20.7).
 
 ## Validation / handoff
 - Application tests: not_run (docs-only).
