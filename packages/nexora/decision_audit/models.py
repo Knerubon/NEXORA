@@ -8,13 +8,30 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from enum import StrEnum
 from typing import Literal
 
 AUDIT_SCHEMA_VERSION: Literal[1] = 1
 AuditAction = Literal["BUY", "SELL", "WAIT"]
 # Eligibility is NOT execution authorization: downstream Risk/Authority/Execution gates
 # keep full, independent authority. "eligible" only means audit + data quality did not deny.
-TradeEligibility = Literal["eligible_for_downstream_gates", "denied_data_quality", "not_applicable"]
+TradeEligibility = Literal[
+    "eligible_for_downstream_gates",
+    "denied_data_quality",
+    # BUY/SELL decision without a genuinely emitted, valid signal (for example the engine
+    # suppressed it as a duplicate of an active signal): nothing new exists to open.
+    "denied_no_emitted_signal",
+    # BUY/SELL decision whose action, signal identity or evidence disagree with each other.
+    "denied_inconsistent_output",
+    "not_applicable",
+]
+
+
+class AppendOutcome(StrEnum):
+    """Result of a successful append. A replay is never a fresh authorization."""
+
+    CREATED = "created"
+    REPLAYED = "replayed"  # byte-identical record already stored; nothing was written
 
 
 class AuditError(Exception):

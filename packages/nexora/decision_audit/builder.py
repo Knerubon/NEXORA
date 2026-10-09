@@ -1,15 +1,21 @@
-"""Builds a DecisionAuditRecord from existing pipeline output (no new decision logic)."""
+"""Builds a DecisionAuditRecord from existing pipeline output (no new decision logic).
+
+The builder never accepts a caller-supplied ``QualityVerdict``. It takes the market-data
+snapshot and a ``DataQualityGuard``, obtains the verdict itself and re-verifies that the
+verdict is bound to the exact evaluated event and snapshot hash (see ``invariants``).
+"""
 
 from __future__ import annotations
 
-import hashlib
-import re
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
 
-from nexora.artifacts import canonical_hash, canonical_serialize
-from nexora.data_quality import QualityVerdict
+from nexora.artifacts import canonical_hash
+from nexora.data_quality import DataQualityGuard, MarketDataSnapshot, QualityVerdict
+from nexora.decision_audit.identity import correlation_id as make_correlation_id
+from nexora.decision_audit.identity import validate_component
+from nexora.decision_audit.invariants import check_record_invariants, obtain_verified_quality
 from nexora.decision_audit.models import (
     AUDIT_SCHEMA_VERSION,
     AuditBlocker,
@@ -22,28 +28,44 @@ from nexora.decision_audit.models import (
     MarketDataReference,
     TradeEligibility,
 )
+from nexora.decision_audit.payload_policy import scan_input_for_sensitive_keys, validate_payload
 from nexora.market_data.models import NormalizedPriceEvent
 
-_SECRET_KEY = re.compile(
-    r"(password|passwd|secret|token|api[_-]?key|authorization|credential|dsn|private[_-]?key)",
-    re.IGNORECASE,
-)
-_SECRET_VALUE = re.compile(r"(://[^/\s:@]+:[^/\s@]+@|bearer\s+[a-z0-9._-]{12,})", re.IGNORECASE)
+_SIDE_FOR_ACTION = {"BUY": "long", "SELL": "short"}
+_READ_SECTIONS = ("entry_readiness", "regime", "structure", "trendline")
 
 
 def build_decision_audit_record(
     *,
     output: Mapping[str, Any],
     event: NormalizedPriceEvent,
-    quality: QualityVerdict,
+    snapshot: MarketDataSnapshot,
+    guard: DataQualityGuard,
+    evaluated_at: datetime | None,
     environment: str,
     instrument_id: str | None = None,
     risk_authority_outcome: str | None = None,
     lifecycle_ref: str | None = None,
 ) -> DecisionAuditRecord:
-    """Raise ``AuditError`` when the decision cannot be reconstructed faithfully."""
-    if not environment:
-        raise AuditError("missing_environment")
+    """Raise ``AuditError`` when the decision cannot be reconstructed faithfully.
+
+    ``snapshot`` must end in ``event``; the Guard is evaluated here, never trusted from the
+    caller. ``evaluated_at`` is the caller's explicit clock (``None`` yields an unknown,
+    denying verdict).
+    """
+    environment = validate_component(environment, "missing_environment")
+    if not isinstance(output, Mapping):
+        raise AuditError("missing_signals")
+    if not isinstance(event, NormalizedPriceEvent):
+        raise AuditError("invalid_quality_input")
+    quality = obtain_verified_quality(
+        guard=guard, snapshot=snapshot, event=event, evaluated_at=evaluated_at
+    )
+    for stamp in (event.event_time, event.received_at):
+        if not isinstance(stamp, datetime) or stamp.tzinfo is None or stamp.utcoffset() is None:
+            raise AuditError("invalid_event_time")
+
+    _reject_sensitive_input(output)
     signals = _mapping(output.get("signals"), "missing_signals")
     decision = _mapping(signals.get("decision"), "missing_decision")
     action = decision.get("action")
@@ -57,13 +79,20 @@ def build_decision_audit_record(
         raise AuditError("missing_signal_sequence")
     if str(signals.get("symbol")) != event.symbol:
         raise AuditError("symbol_mismatch")
+    # No fabricated score: a missing or non-integer score is an unreconstructable decision.
+    score = decision.get("score")
+    if type(score) is not int:
+        raise AuditError("invalid_score")
 
     gaps: list[str] = []
     evidence: list[EvidenceRef] = []
     blockers: list[AuditBlocker] = []
+    positive: list[EvidenceRef] = []
 
     for item in decision.get("positive_evidence", ()):
-        evidence.append(_evidence(item))
+        ref = _evidence(item)
+        evidence.append(ref)
+        positive.append(ref)
     for item in decision.get("negative_evidence", ()):
         ref = _evidence(item)
         evidence.append(ref)
@@ -104,35 +133,27 @@ def build_decision_audit_record(
     for finding in quality.findings:
         blockers.append(AuditBlocker("data_quality", finding.code, finding.severity))
 
-    latest = signals.get("latest")
     decided_at = event.received_at.astimezone(UTC)
-    signal_id: str | None = None
-    emitted = False
-    reasons: tuple[str, ...] = ()
-    reason_codes: tuple[str, ...] = ()
-    if action != "WAIT" and isinstance(latest, Mapping):
-        # `latest` persists across events; it belongs to this decision only if decided now.
-        if _same_instant(latest.get("decision_time"), decided_at):
-            signal_id = _opt_str(latest.get("signal_id"))
-            emitted = signal_id is not None
-            reasons = tuple(str(r) for r in latest.get("reasons", ()))
-            reason_codes = tuple(str(c) for c in latest.get("reason_codes", ()))
-    if action == "WAIT" or not emitted:
+    link = _resolve_signal(
+        signals=signals,
+        decision=decision,
+        action=action,
+        sequence=sequence,
+        event=event,
+        decided_at=decided_at,
+        positive_codes=tuple(ref.code for ref in positive),
+        gaps=gaps,
+    )
+    reasons: tuple[str, ...] = link.reasons
+    reason_codes: tuple[str, ...] = link.reason_codes
+    if action == "WAIT" or not link.emitted:
         positives = decision.get("positive_evidence", ())
         reasons = reasons or tuple(str(i.get("reason")) for i in positives)
-        reason_codes = reason_codes or tuple(str(i.get("code")) for i in positives)
+        reason_codes = reason_codes or tuple(ref.code for ref in positive)
         if action == "WAIT" and not reason_codes:
             gaps.append("reason_codes:absent")
-    if action != "WAIT" and not emitted:
-        gaps.append("signal:not_emitted")
 
-    eligibility: TradeEligibility
-    if action == "WAIT":
-        eligibility = "not_applicable"
-    elif quality.new_trade_permitted:
-        eligibility = "eligible_for_downstream_gates"
-    else:
-        eligibility = "denied_data_quality"
+    eligibility = _eligibility(action, quality, link)
 
     decision_id = canonical_hash(
         {
@@ -146,14 +167,11 @@ def build_decision_audit_record(
             "schema": AUDIT_SCHEMA_VERSION,
         }
     )
-    correlation_id = (
-        "corr:" + hashlib.sha256(f"{event.symbol}|{event.identity_key}".encode()).hexdigest()[:32]
-    )
 
     record = DecisionAuditRecord(
         schema_version=AUDIT_SCHEMA_VERSION,
         decision_id=decision_id,
-        correlation_id=correlation_id,
+        correlation_id=make_correlation_id(event.symbol, event.identity_key),
         decided_at=decided_at,
         environment=environment,
         instrument=InstrumentIdentity(event.symbol, event.source, event.units, instrument_id),
@@ -166,9 +184,9 @@ def build_decision_audit_record(
             snapshot_hash=quality.snapshot_hash,
         ),
         action=action,
-        score=int(decision.get("score", 0)),
-        signal_id=signal_id,
-        signal_emitted=emitted,
+        score=score,
+        signal_id=link.signal_id,
+        signal_emitted=link.emitted,
         signal_sequence=sequence,
         reasons=reasons,
         reason_codes=reason_codes,
@@ -186,38 +204,127 @@ def build_decision_audit_record(
             entry_readiness_config=readiness_version,
             audit_schema=AUDIT_SCHEMA_VERSION,
         ),
-        data_quality=DataQualityRef(
-            state=quality.state,
-            new_trade_permitted=quality.new_trade_permitted,
-            finding_codes=tuple(f.code for f in quality.findings),
-            config_version=quality.config_version,
-            snapshot_hash=quality.snapshot_hash,
-            evaluated_at=quality.evaluated_at,
-        ),
+        data_quality=quality_reference(quality),
         trade_eligibility=eligibility,
         risk_authority_outcome=risk_authority_outcome,
         lifecycle_ref=lifecycle_ref,
     )
-    assert_no_secrets(record)
+    validate_payload(record)
+    check_record_invariants(record)
     return record
 
 
-def assert_no_secrets(record: DecisionAuditRecord) -> None:
-    """Reject records that look like they carry credentials; never echo the content."""
+def quality_reference(quality: QualityVerdict) -> DataQualityRef:
+    return DataQualityRef(
+        state=quality.state,
+        new_trade_permitted=quality.new_trade_permitted,
+        finding_codes=tuple(f.code for f in quality.findings),
+        config_version=quality.config_version,
+        snapshot_hash=quality.snapshot_hash,
+        evaluated_at=quality.evaluated_at,
+    )
 
-    def walk(value: Any) -> None:
-        if isinstance(value, Mapping):
-            for key, item in value.items():
-                if _SECRET_KEY.search(str(key)):
-                    raise AuditError("audit_redaction_violation")
-                walk(item)
-        elif isinstance(value, (list, tuple)):
-            for item in value:
-                walk(item)
-        elif isinstance(value, str) and _SECRET_VALUE.search(value):
-            raise AuditError("audit_redaction_violation")
 
-    walk(canonical_serialize(record))
+class _SignalLink:
+    """What the engine output proves about the signal for one BUY/SELL/WAIT decision."""
+
+    __slots__ = ("emitted", "inconsistent", "reason_codes", "reasons", "signal_id")
+
+    def __init__(
+        self,
+        *,
+        signal_id: str | None = None,
+        emitted: bool = False,
+        inconsistent: bool = False,
+        reasons: tuple[str, ...] = (),
+        reason_codes: tuple[str, ...] = (),
+    ) -> None:
+        self.signal_id = signal_id
+        self.emitted = emitted
+        self.inconsistent = inconsistent
+        self.reasons = reasons
+        self.reason_codes = reason_codes
+
+
+def _resolve_signal(
+    *,
+    signals: Mapping[str, Any],
+    decision: Mapping[str, Any],
+    action: str,
+    sequence: int,
+    event: NormalizedPriceEvent,
+    decided_at: datetime,
+    positive_codes: tuple[str, ...],
+    gaps: list[str],
+) -> _SignalLink:
+    """A BUY/SELL carries a signal id only if one was genuinely emitted for *this* decision.
+
+    WAIT never reads ``latest`` and never gets an id. For BUY/SELL, ``latest`` persists across
+    events and the engine suppresses duplicates without appending, so ``latest`` belongs to this
+    decision only if it was decided at this instant *and* every identity field agrees with the
+    action, symbol, sequence and evidence. Anything else is not an emitted signal.
+    """
+    if action == "WAIT":
+        return _SignalLink()
+    latest = signals.get("latest")
+    if not isinstance(latest, Mapping):
+        gaps.append("signal:absent")
+        return _SignalLink()
+    if not _same_instant(latest.get("decision_time"), decided_at):
+        gaps.append("signal:not_emitted")  # suppressed duplicate, or an earlier decision's signal
+        return _SignalLink()
+
+    problems: list[str] = []
+    signal_id = latest.get("signal_id")
+    if not isinstance(signal_id, str) or not signal_id or len(signal_id) > 128:
+        problems.append("signal_id")
+    if latest.get("symbol") != event.symbol:
+        problems.append("symbol")
+    latest_sequence = latest.get("sequence")
+    if type(latest_sequence) is not int or latest_sequence != sequence:
+        problems.append("sequence")
+    if latest.get("side") != _SIDE_FOR_ACTION[action]:
+        problems.append("side")
+    if latest.get("status") != "active":
+        problems.append("status")
+    embedded = latest.get("decision")
+    if isinstance(embedded, Mapping) and embedded.get("action") != action:
+        problems.append("action")
+    codes = tuple(str(c) for c in latest.get("reason_codes", ()))
+    if not positive_codes:
+        problems.append("evidence_empty")  # an actionable decision must have positive evidence
+    elif codes != positive_codes:
+        problems.append("evidence")
+    if problems:
+        gaps.extend(f"signal:inconsistent:{name}" for name in problems)
+        return _SignalLink(inconsistent=True)
+    assert isinstance(signal_id, str)
+    return _SignalLink(
+        signal_id=signal_id,
+        emitted=True,
+        reasons=tuple(str(r) for r in latest.get("reasons", ())),
+        reason_codes=codes,
+    )
+
+
+def _eligibility(action: str, quality: QualityVerdict, link: _SignalLink) -> TradeEligibility:
+    if action == "WAIT":
+        return "not_applicable"
+    if not quality.new_trade_permitted:
+        return "denied_data_quality"
+    if link.inconsistent:
+        return "denied_inconsistent_output"
+    if not link.emitted:
+        return "denied_no_emitted_signal"
+    return "eligible_for_downstream_gates"
+
+
+def _reject_sensitive_input(output: Mapping[str, Any]) -> None:
+    """Hard-fail on credential-like keys in every engine-output section the audit reads."""
+    scan_input_for_sensitive_keys({key: None for key in output})
+    scan_input_for_sensitive_keys(output.get("signals"), skip=frozenset({"history"}))
+    for name in _READ_SECTIONS:
+        scan_input_for_sensitive_keys(output.get(name))
 
 
 def _evidence(item: Any) -> EvidenceRef:
@@ -288,6 +395,9 @@ def _same_instant(value: Any, moment: datetime) -> bool:
     if not isinstance(value, str):
         return False
     try:
-        return datetime.fromisoformat(value).astimezone(UTC) == moment
+        parsed = datetime.fromisoformat(value)
     except ValueError:
         return False
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return False
+    return parsed.astimezone(UTC) == moment

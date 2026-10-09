@@ -23,9 +23,36 @@ from nexora.market_data.models import NormalizedPriceEvent
 
 
 class DataQualityGuard:
+    """Stateless, deterministic verdict producer. Final: it cannot be subclassed.
+
+    Stateless means the Guard remembers nothing between calls. Ordering, sequence-gap,
+    duplicate and staleness checks therefore only cover the events inside the snapshot it is
+    given; see ``SequenceHistoryProvider`` and ADR-036 D2a for the required history source.
+    """
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        # A subclass could override ``evaluate`` and return a permissive verdict. The audit
+        # gate trusts only this exact class, so extension is closed.
+        raise TypeError("DataQualityGuard_is_final")
+
     def __init__(self, config: QualityGuardConfig, expectation: QualityExpectation) -> None:
+        if not isinstance(config, QualityGuardConfig) or not isinstance(
+            expectation, QualityExpectation
+        ):
+            raise TypeError("invalid_guard_inputs")
+        # Re-validate: a config built by bypassing __init__ must still never reach a verdict.
+        config.validate()
+        expectation.validate()
         self._config = config
         self._expectation = expectation
+
+    @property
+    def config_version(self) -> str:
+        return self._config.version
+
+    @property
+    def expectation(self) -> QualityExpectation:
+        return self._expectation
 
     def evaluate(
         self, snapshot: MarketDataSnapshot, *, evaluated_at: datetime | None
@@ -69,6 +96,7 @@ class DataQualityGuard:
             key = event.identity_key
             findings.extend(self._identity(event))
             findings.extend(self._numeric(event))
+            findings.extend(self._prices(event))
             findings.extend(self._quote(event))
             findings.extend(self._clock(event, now))
             if key in seen:
@@ -161,6 +189,112 @@ class DataQualityGuard:
                     )
                 )
         return out
+
+    def _prices(self, event: NormalizedPriceEvent) -> list[QualityFinding]:
+        """Re-validate price/OHLC consistency; events are plain dataclasses, not validated.
+
+        The normalizer enforces these rules for adapter output, but ``NormalizedPriceEvent``
+        carries no constructor validation and can arrive from replay, storage or tests. The
+        Guard is the trust boundary for trade eligibility, so it re-checks them here.
+        """
+        key, out = event.identity_key, []
+        if event.kind not in ("tick", "bar"):
+            return [QualityFinding(m.INVALID_EVENT_KIND, "blocking", key, _ev(kind=event.kind))]
+        precision = event.precision
+        if type(precision) is not int or not 0 <= precision <= 10:
+            out.append(
+                QualityFinding(m.INVALID_PRECISION, "blocking", key, _ev(precision=precision))
+            )
+            return out
+        for name, value in (
+            ("price", event.price),
+            ("last", event.last),
+            ("open", event.open_price),
+            ("high", event.high),
+            ("low", event.low),
+            ("close", event.close),
+        ):
+            if _is_finite_decimal(value) and value <= 0:  # type: ignore[operator]
+                out.append(QualityFinding(m.INVALID_PRICE, "blocking", key, _ev(field=name)))
+        if event.kind == "bar":
+            out.extend(self._ohlc(event))
+        out.extend(self._price_matches_source(event, precision))
+        return out
+
+    def _ohlc(self, event: NormalizedPriceEvent) -> list[QualityFinding]:
+        key = event.identity_key
+        open_, high, low, close = event.open_price, event.high, event.low, event.close
+        missing = [
+            name
+            for name, value in (("open", open_), ("high", high), ("low", low), ("close", close))
+            if value is None
+        ]
+        if missing:
+            return [
+                QualityFinding(m.INCOMPLETE_OHLC, "unknown", key, _ev(missing=",".join(missing)))
+            ]
+        values = (open_, high, low, close)
+        if not all(_is_finite_decimal(v) for v in values):
+            return []  # already reported as non-finite / wrong type
+        assert open_ is not None and high is not None and low is not None and close is not None
+        if not (low <= open_ <= high and low <= close <= high):
+            return [
+                QualityFinding(
+                    m.INVALID_OHLC,
+                    "blocking",
+                    key,
+                    _ev(open=open_, high=high, low=low, close=close),
+                )
+            ]
+        return []
+
+    def _price_matches_source(
+        self, event: NormalizedPriceEvent, precision: int
+    ) -> list[QualityFinding]:
+        key, source = event.identity_key, event.price_source
+        expected: Decimal | None
+        if source == "mid":
+            bid, ask = event.bid, event.ask
+            expected = (
+                (bid + ask) / 2
+                if isinstance(bid, Decimal)
+                and isinstance(ask, Decimal)
+                and bid.is_finite()
+                and ask.is_finite()
+                else None
+            )
+        else:
+            expected = {
+                "bid": event.bid,
+                "ask": event.ask,
+                "last": event.last,
+                "open": event.open_price,
+                "high": event.high,
+                "low": event.low,
+                "close": event.close,
+            }.get(source)
+        if not _is_finite_decimal(event.price):
+            return []  # already reported as non-finite / wrong type
+        if not _is_finite_decimal(expected):
+            return [
+                QualityFinding(
+                    m.PRICE_SOURCE_MISMATCH,
+                    "unknown",  # provenance cannot be verified; not proven invalid
+                    key,
+                    _ev(price_source=source, reason="source_value_unavailable"),
+                )
+            ]
+        tolerance = Decimal(1).scaleb(-precision)  # one unit in the last place
+        if abs(event.price - expected) > tolerance:  # type: ignore[operator]
+            return [
+                QualityFinding(
+                    m.PRICE_SOURCE_MISMATCH,
+                    "blocking",
+                    key,
+                    _ev(price_source=source, price=event.price, source_value=expected),
+                )
+            ]
+        return []
 
     def _quote(self, event: NormalizedPriceEvent) -> list[QualityFinding]:
         cfg, key = self._config, event.identity_key
@@ -322,6 +456,10 @@ def _fingerprint(event: NormalizedPriceEvent) -> str:
         return canonical_hash(event)
     except Exception:
         return "repr:" + repr(event)
+
+
+def _is_finite_decimal(value: object) -> bool:
+    return isinstance(value, Decimal) and value.is_finite()
 
 
 def _finite(value: Decimal | float) -> bool:

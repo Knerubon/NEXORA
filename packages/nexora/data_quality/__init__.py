@@ -8,6 +8,7 @@ from nexora.data_quality.models import (
     QualityGuardConfig,
     QualityState,
     QualityVerdict,
+    SequenceHistoryProvider,
 )
 
 __all__ = [
@@ -18,4 +19,5 @@ __all__ = [
     "QualityGuardConfig",
     "QualityState",
     "QualityVerdict",
+    "SequenceHistoryProvider",
 ]

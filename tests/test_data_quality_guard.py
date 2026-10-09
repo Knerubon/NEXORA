@@ -169,12 +169,14 @@ def test_spread_to_price_ratio_cap() -> None:
 
 
 def test_missing_bid_ask_is_unknown_when_required_and_ignored_when_not() -> None:
-    event = replace(tick(1, "100"), bid=None, ask=None)
+    # Self-consistent last-price event: only the bid/ask pair is absent.
+    event = replace(tick(1, "100"), bid=None, ask=None, price_source="last", last=D("100"))
     snapshot = MarketDataSnapshot((event,))
     required = _guard().evaluate(snapshot, evaluated_at=_now(event))
     assert (required.state, required.new_trade_permitted) == ("unknown", False)
     assert _codes(required) == {m.MISSING_BID_ASK}
-    assert _guard(require_bid_ask=False).evaluate(snapshot, evaluated_at=_now(event)).state == "ok"
+    relaxed = _guard(require_bid_ask=False, max_spread=None)
+    assert relaxed.evaluate(snapshot, evaluated_at=_now(event)).state == "ok"
 
 
 @pytest.mark.parametrize("field", ["price", "bid", "ask", "last", "close"])

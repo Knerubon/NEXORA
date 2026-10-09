@@ -22,9 +22,9 @@ from nexora.data_quality import (
     MarketDataSnapshot,
     QualityExpectation,
     QualityGuardConfig,
-    QualityVerdict,
 )
 from nexora.decision_audit import (
+    AppendOutcome,
     AuditError,
     AuditGateOutcome,
     DecisionAuditGate,
@@ -58,8 +58,8 @@ def _guard() -> DataQualityGuard:
     return DataQualityGuard(QUALITY_CONFIG, EXPECTED)
 
 
-def _verdict(event: NormalizedPriceEvent) -> QualityVerdict:
-    return _guard().evaluate(MarketDataSnapshot((event,)), evaluated_at=event.received_at)
+def _snap(event: NormalizedPriceEvent) -> MarketDataSnapshot:
+    return MarketDataSnapshot((event,))
 
 
 @pytest.fixture
@@ -76,7 +76,9 @@ def _run(
     rows = []
     for event in tick_events(count):
         output = pipeline.process(event)
-        result = gate.record_decision(output=output, event=event, quality=_verdict(event))
+        result = gate.record_decision(
+            output=output, event=event, snapshot=_snap(event), evaluated_at=event.received_at
+        )
         rows.append((event, output, result))
     return rows
 
@@ -114,7 +116,7 @@ class _FailingJournal:
 
 
 def _gate(journal: Any, environment: str = "development") -> DecisionAuditGate:
-    return DecisionAuditGate(DecisionAuditStore(journal, environment=environment))
+    return DecisionAuditGate(DecisionAuditStore(journal, environment=environment), _guard())
 
 
 # 1. BUY/SELL/WAIT audit completeness ---------------------------------------------------------
@@ -148,7 +150,9 @@ def test_each_action_has_a_reconstructable_record(
     journal: SQLiteJournal, index: int, action: str
 ) -> None:
     event, output = _step(index)
-    result = _gate(journal).record_decision(output=output, event=event, quality=_verdict(event))
+    result = _gate(journal).record_decision(
+        output=output, event=event, snapshot=_snap(event), evaluated_at=event.received_at
+    )
     record = result.record
     assert record is not None and record.action == action
     assert record.market_data.event_identity_key == event.identity_key
@@ -171,7 +175,9 @@ def test_each_action_has_a_reconstructable_record(
 def test_wait_decisions_are_audited_even_when_quality_is_bad(journal: SQLiteJournal) -> None:
     event, output = _step(WAIT_INDEX)
     bad = replace(event, bid=D("101"), ask=D("100"))
-    result = _gate(journal).record_decision(output=output, event=bad, quality=_verdict(bad))
+    result = _gate(journal).record_decision(
+        output=output, event=bad, snapshot=_snap(bad), evaluated_at=bad.received_at
+    )
     assert result.record is not None and result.record.action == "WAIT"
     assert result.record.data_quality.state == "blocked"
     assert result.new_trade_eligible is False
@@ -185,7 +191,11 @@ def test_signal_id_is_never_invented_for_non_emitted_actionable_decisions(
     stale = copy.deepcopy(output)
     stale["signals"]["latest"]["decision_time"] = "2000-01-01T00:00:00+00:00"
     record = (
-        _gate(journal).record_decision(output=stale, event=event, quality=_verdict(event)).record
+        _gate(journal)
+        .record_decision(
+            output=stale, event=event, snapshot=_snap(event), evaluated_at=event.received_at
+        )
+        .record
     )
     assert record is not None
     assert record.signal_id is None and record.signal_emitted is False
@@ -211,9 +221,9 @@ def test_replay_produces_identical_records_and_stable_ids(tmp_path: Path) -> Non
 
 def test_replaying_into_the_same_store_is_idempotent(journal: SQLiteJournal) -> None:
     store = DecisionAuditStore(journal, environment="development")
-    _run(DecisionAuditGate(store), 60)
+    _run(DecisionAuditGate(store, _guard()), 60)
     before = store.read("XAUUSD")
-    results = _run(DecisionAuditGate(store), 60)
+    results = _run(DecisionAuditGate(store, _guard()), 60)
     assert store.read("XAUUSD") == before  # no duplicate rows, no overwrite
     assert all(r.outcome is not AuditGateOutcome.DENIED_AUDIT_FAILURE for _, _, r in results)
 
@@ -224,12 +234,16 @@ def test_correlation_is_stable_across_environments_but_decision_ids_are_not(
     event, output = _step(BUY_INDEX)
     dev = (
         _gate(journal, "development")
-        .record_decision(output=output, event=event, quality=_verdict(event))
+        .record_decision(
+            output=output, event=event, snapshot=_snap(event), evaluated_at=event.received_at
+        )
         .record
     )
     prod = (
         _gate(journal, "production")
-        .record_decision(output=output, event=event, quality=_verdict(event))
+        .record_decision(
+            output=output, event=event, snapshot=_snap(event), evaluated_at=event.received_at
+        )
         .record
     )
     assert dev is not None and prod is not None
@@ -246,12 +260,19 @@ def test_missing_optional_evidence_is_recorded_not_fabricated(
 ) -> None:
     event, output = _step(BUY_INDEX)
     gate = _gate(journal)
-    full = gate.record_decision(output=output, event=event, quality=_verdict(event)).record
+    full = gate.record_decision(
+        output=output, event=event, snapshot=_snap(event), evaluated_at=event.received_at
+    ).record
     partial_output = {k: v for k, v in output.items() if k != missing}
     # A different environment keeps the second write from colliding with the first record.
     partial = (
         _gate(journal, "staging")
-        .record_decision(output=partial_output, event=event, quality=_verdict(event))
+        .record_decision(
+            output=partial_output,
+            event=event,
+            snapshot=_snap(event),
+            evaluated_at=event.received_at,
+        )
         .record
     )
     assert full is not None and partial is not None
@@ -283,7 +304,9 @@ def test_unreconstructable_decisions_are_denied_not_guessed(
     event, output = _step(BUY_INDEX)
     broken = copy.deepcopy(output)
     mutate(broken)
-    result = _gate(journal).record_decision(output=broken, event=event, quality=_verdict(event))
+    result = _gate(journal).record_decision(
+        output=broken, event=event, snapshot=_snap(event), evaluated_at=event.received_at
+    )
     assert result.outcome is AuditGateOutcome.DENIED_AUDIT_FAILURE
     assert result.new_trade_eligible is False and result.record is None
     assert DecisionAuditStore(journal, environment="development").read("XAUUSD") == ()
@@ -296,7 +319,9 @@ def test_unreconstructable_decisions_are_denied_not_guessed(
 def test_audit_persistence_failure_denies_and_never_leaks(index: int) -> None:
     event, output = _step(index)
     gate = _gate(_FailingJournal(OSError("disk full password=hunter2")))
-    result = gate.record_decision(output=output, event=event, quality=_verdict(event))
+    result = gate.record_decision(
+        output=output, event=event, snapshot=_snap(event), evaluated_at=event.received_at
+    )
     assert result.outcome is AuditGateOutcome.DENIED_AUDIT_FAILURE
     assert result.new_trade_eligible is False
     assert result.failure_code == "audit_persistence_failed"
@@ -307,11 +332,15 @@ def test_identity_conflict_and_unexpected_errors_deny() -> None:
     event, output = _step(BUY_INDEX)
     conflict = _gate(_FailingJournal(ValueError("journal_identity_conflict")))
     assert (
-        conflict.record_decision(output=output, event=event, quality=_verdict(event)).failure_code
+        conflict.record_decision(
+            output=output, event=event, snapshot=_snap(event), evaluated_at=event.received_at
+        ).failure_code
         == "audit_identity_conflict"
     )
     boom = _gate(_FailingJournal(RuntimeError("anything")))
-    result = boom.record_decision(output=output, event=event, quality=_verdict(event))
+    result = boom.record_decision(
+        output=output, event=event, snapshot=_snap(event), evaluated_at=event.received_at
+    )
     assert result.outcome is AuditGateOutcome.DENIED_AUDIT_FAILURE and not result.new_trade_eligible
 
 
@@ -319,10 +348,15 @@ def test_existing_record_cannot_be_overwritten(journal: SQLiteJournal) -> None:
     store = DecisionAuditStore(journal, environment="development")
     event, output = _step(BUY_INDEX)
     record = build_decision_audit_record(
-        output=output, event=event, quality=_verdict(event), environment="development"
+        output=output,
+        event=event,
+        snapshot=_snap(event),
+        guard=_guard(),
+        evaluated_at=event.received_at,
+        environment="development",
     )
-    assert store.append(record) is True
-    assert store.append(record) is False  # identical replay is a no-op
+    assert store.append(record) is AppendOutcome.CREATED
+    assert store.append(record) is AppendOutcome.REPLAYED  # identical replay is a no-op
     tampered = replace(record, score=record.score + 1)
     with pytest.raises(AuditError) as caught:
         store.append(tampered)
@@ -340,7 +374,9 @@ def test_poor_data_quality_denies_actionable_decisions_but_still_audits(
 ) -> None:
     event, output = _step(BUY_INDEX)
     bad = replace(event, bid=D("101"), ask=D("100"))  # crossed book
-    result = _gate(journal).record_decision(output=output, event=bad, quality=_verdict(bad))
+    result = _gate(journal).record_decision(
+        output=output, event=bad, snapshot=_snap(bad), evaluated_at=bad.received_at
+    )
     assert result.outcome is AuditGateOutcome.RECORDED_DENIED_DATA_QUALITY
     assert result.new_trade_eligible is False
     record = result.record
@@ -353,14 +389,15 @@ def test_poor_data_quality_denies_actionable_decisions_but_still_audits(
 @pytest.mark.parametrize("verdict_state", ["blocked", "unknown"])
 def test_unknown_quality_also_denies(journal: SQLiteJournal, verdict_state: str) -> None:
     event, output = _step(BUY_INDEX)
-    quality = _guard().evaluate(
-        MarketDataSnapshot(())
-        if verdict_state == "unknown"
-        else MarketDataSnapshot((replace(event, symbol="EURUSD"),)),
-        evaluated_at=event.received_at,
+    if verdict_state == "unknown":
+        subject, at = event, None  # unsynchronized clock: validity cannot be established
+    else:
+        subject, at = replace(event, source="other-source"), event.received_at  # identity mismatch
+    result = _gate(journal).record_decision(
+        output=output, event=subject, snapshot=_snap(subject), evaluated_at=at
     )
-    assert quality.state == verdict_state
-    result = _gate(journal).record_decision(output=output, event=event, quality=quality)
+    assert result.record is not None and result.record.data_quality.state == verdict_state
+    assert result.outcome is AuditGateOutcome.RECORDED_DENIED_DATA_QUALITY
     assert result.new_trade_eligible is False
 
 
@@ -380,7 +417,9 @@ def test_credential_like_content_is_rejected_not_persisted(journal: SQLiteJourna
             "source_refs": [],
         }
     ]
-    result = _gate(journal).record_decision(output=leaky, event=event, quality=_verdict(event))
+    result = _gate(journal).record_decision(
+        output=leaky, event=event, snapshot=_snap(event), evaluated_at=event.received_at
+    )
     assert result.outcome is AuditGateOutcome.DENIED_AUDIT_FAILURE
     assert result.failure_code == "audit_redaction_violation"
     assert "s3cr3t" not in repr(result)
@@ -395,7 +434,7 @@ def test_environment_streams_are_isolated_on_a_shared_journal(journal: SQLiteJou
     prod = DecisionAuditStore(journal, environment="production")
     assert dev.stream("XAUUSD") != prod.stream("XAUUSD")
     assert dev.stream("XAUUSD") == "audit:v1:development:XAUUSD"
-    _run(DecisionAuditGate(dev), 20)
+    _run(DecisionAuditGate(dev, _guard()), 20)
     assert len(dev.read("XAUUSD")) == 20
     assert prod.read("XAUUSD") == ()
 
@@ -403,7 +442,12 @@ def test_environment_streams_are_isolated_on_a_shared_journal(journal: SQLiteJou
 def test_store_rejects_a_record_from_another_environment(journal: SQLiteJournal) -> None:
     event, output = _step(BUY_INDEX)
     record = build_decision_audit_record(
-        output=output, event=event, quality=_verdict(event), environment="production"
+        output=output,
+        event=event,
+        snapshot=_snap(event),
+        guard=_guard(),
+        evaluated_at=event.received_at,
+        environment="production",
     )
     with pytest.raises(AuditError) as caught:
         DecisionAuditStore(journal, environment="development").append(record)
@@ -432,7 +476,9 @@ def test_signal_engine_decisions_are_pinned_on_the_fixture_and_untouched_by_audi
     for event, expected in zip(tick_events(EVENT_COUNT), plain_outputs, strict=True):
         output = audited.process(event)
         snapshot = copy.deepcopy(output)
-        gate.record_decision(output=output, event=event, quality=_verdict(event))
+        gate.record_decision(
+            output=output, event=event, snapshot=_snap(event), evaluated_at=event.received_at
+        )
         assert output == snapshot  # the gate is read-only on engine output
         assert canonical_hash(output) == canonical_hash(expected)  # identical with/without audit
 
@@ -453,7 +499,8 @@ def test_record_round_trips_through_canonical_storage(journal: SQLiteJournal) ->
         .record_decision(
             output=output,
             event=event,
-            quality=_verdict(event),
+            snapshot=_snap(event),
+            evaluated_at=event.received_at,
             instrument_id="inst:xauusd",
             risk_authority_outcome="risk:ref-1",
             lifecycle_ref="lifecycle:ref-1",
