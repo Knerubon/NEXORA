@@ -28,8 +28,11 @@ from nexora.execution.reconciliation import (
 )
 from nexora.position.models import PositionRecord, ProtectionLevels
 
+from tests.execution_resolver_fixtures import identity_resolver
+
 NOW = datetime(2026, 10, 5, tzinfo=UTC)
 INSTR = "instrument:test"
+RESOLVER = identity_resolver(INSTR)
 
 
 def _local(
@@ -84,6 +87,7 @@ def _run(
         local_positions=local,
         broker_snapshot=BrokerSnapshot(positions=tuple(broker), complete=complete),
         observed_at=NOW,
+        instrument_resolver=RESOLVER,
     )
 
 
@@ -207,6 +211,7 @@ def test_naive_observed_at_rejected() -> None:
             local_positions=[_local()],
             broker_snapshot=BrokerSnapshot(positions=(), complete=True),
             observed_at=datetime(2026, 10, 5),  # noqa: DTZ001
+            instrument_resolver=RESOLVER,
         )
 
 
@@ -226,7 +231,9 @@ def test_inputs_not_mutated() -> None:
     local = [_local()]
     snap = BrokerSnapshot(positions=(_broker(close_pending=True),), complete=True)
     before = (dataclasses.asdict(local[0]), dataclasses.asdict(snap))
-    classify_reconciliation(local_positions=local, broker_snapshot=snap, observed_at=NOW)
+    classify_reconciliation(
+        local_positions=local, broker_snapshot=snap, observed_at=NOW, instrument_resolver=RESOLVER
+    )
     assert (dataclasses.asdict(local[0]), dataclasses.asdict(snap)) == before
     with pytest.raises(dataclasses.FrozenInstanceError):
         snap.complete = False  # type: ignore[misc]

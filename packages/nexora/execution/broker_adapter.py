@@ -25,6 +25,11 @@ from nexora.execution.models import ExecutionRequest, ExecutionResult, Execution
 
 SIMULATION_MODE = "simulation"
 
+# Phase-1 executable adapter-mode vocabulary (ADR-035 INV-25, PR-7): CLOSED, SIMULATION
+# only. PAPER/DEMO/REAL are deliberately NOT members: no other value is constructible or
+# accepted until a dedicated governance ADR defines them.
+PHASE1_EXECUTABLE_ADAPTER_MODES: frozenset[str] = frozenset({SIMULATION_MODE})
+
 # Normalized, broker-agnostic reason codes produced by the simulated adapter.
 REASON_INSTRUMENT_NOT_SUPPORTED = "instrument_not_supported"
 REASON_VOLUME_BELOW_MIN = "volume_below_min"
@@ -61,6 +66,13 @@ class BrokerExecutionAdapter(Protocol):
       ``BrokerCapabilities`` and reject violations with a normalized,
       broker-agnostic ``reason_code`` (never a broker retcode).
     """
+
+    @property
+    def adapter_mode(self) -> str:
+        """Read-only mode accessor (ADR-035 INV-25, Option B). Adapter SELF-ATTESTATION
+        only: the wiring gate reads it ONCE at composition and captures the value. The
+        only accepted Phase-1 value is ``SIMULATION_MODE``."""
+        ...
 
     def capabilities(self) -> BrokerCapabilities:
         """Return the capabilities the adapter enforces."""
@@ -121,6 +133,10 @@ class SimulatedBrokerAdapter:
         self._script: deque[ScriptedOutcome] = deque(script)
         self._results: dict[str, ExecutionResult] = {}
         self.simulated_fill_count = 0
+
+    @property
+    def adapter_mode(self) -> str:
+        return SIMULATION_MODE
 
     def capabilities(self) -> BrokerCapabilities:
         return self._capabilities
@@ -235,3 +251,10 @@ class SimulatedBrokerAdapter:
             price=price,
             order_ref=order_ref,
         )
+
+
+def is_shipped_simulated_adapter(adapter: object) -> bool:
+    """Exact-class allow-list entry for the shipped simulator: ``type(adapter) is
+    SimulatedBrokerAdapter`` (a subclass is NOT the shipped simulator). Pure."""
+
+    return type(adapter) is SimulatedBrokerAdapter

@@ -8,7 +8,14 @@ always derived from the finding by ``ReconciliationRecord`` itself.
 
 Conventions (documented decisions, not new contract):
 
-* Local ``PositionRecord.symbol`` is the canonical ADR-025 ``instrument_id``.
+* Local ``PositionRecord.symbol`` is an ``execution_symbol``; it is converted to the
+  canonical ADR-025 ``instrument_id`` EXACTLY ONCE through the REQUIRED explicit
+  ``ExecutionInstrumentResolver`` (ADR-035 s5.1/s5.2, INV-19; PR-7). There is NO identity
+  default (``symbol == instrument_id`` is no longer assumed). A local position whose
+  symbol cannot be resolved (no binding, legacy, raising or mismatched resolver) can
+  never pair with a broker position and can never be confirmed flat: it falls to
+  ``LOCAL_OPEN_BROKER_MISSING`` (fail closed). Ownership is never inferred from
+  symbol/side/quantity; a broker position without a declared attribution stays broker-only.
 * A local position is expected on the broker unless its state is ``CLOSED``
   (``EXIT_PENDING``/``EMERGENCY`` included: fail closed rather than guess).
 * Matching is by ``nexora_position_ref`` on the broker snapshot position. A
@@ -41,7 +48,16 @@ from datetime import datetime
 from decimal import Decimal
 
 from nexora.autonomous_contracts import TradeState
-from nexora.execution.models import ExecutionResult, ExecutionStatus, Side
+from nexora.execution.instrument_resolution import (
+    ExecutionBindingMissingError,
+    resolve_binding_instrument_id,
+)
+from nexora.execution.models import (
+    ExecutionInstrumentResolver,
+    ExecutionResult,
+    ExecutionStatus,
+    Side,
+)
 from nexora.execution.reconciliation import (
     ReconciliationFinding,
     ReconciliationRecord,
@@ -137,12 +153,22 @@ def _compare_snapshot(
     local_positions: Iterable[PositionRecord],
     snapshot: BrokerSnapshot,
     observed_at: datetime,
+    instrument_resolver: object,
 ) -> list[ReconciliationRecord]:
     local_by_id: dict[str, PositionRecord] = {}
     for local in local_positions:
         if local.position_id in local_by_id:
             raise ReconcilerInputError("duplicate_local_position_id")
         local_by_id[local.position_id] = local
+    # execution_symbol -> instrument_id once per local position; None = unresolvable.
+    local_instrument: dict[str, str | None] = {}
+    for local in local_by_id.values():
+        try:
+            local_instrument[local.position_id] = resolve_binding_instrument_id(
+                instrument_resolver, local.symbol
+            )
+        except ExecutionBindingMissingError:
+            local_instrument[local.position_id] = None
     broker_refs: set[str] = set()
     for broker in snapshot.positions:
         if broker.broker_position_ref in broker_refs:
@@ -169,7 +195,7 @@ def _compare_snapshot(
             candidate is None
             or candidate.state is TradeState.CLOSED
             or candidate.position_id in paired_local
-            or candidate.symbol != broker.instrument_id
+            or local_instrument[candidate.position_id] != broker.instrument_id
             or candidate.side != broker.side
         ):
             records.append(
@@ -234,9 +260,10 @@ def _compare_snapshot(
             if (
                 snapshot.complete
                 and local.position_id not in claims
+                and local_instrument[local.position_id] is not None
                 and not any(
                     b.nexora_position_ref is None
-                    and b.instrument_id == local.symbol
+                    and b.instrument_id == local_instrument[local.position_id]
                     and b.side == local.side
                     for b in snapshot.positions
                 )
@@ -278,6 +305,7 @@ def classify_reconciliation(
     local_positions: Iterable[PositionRecord],
     broker_snapshot: BrokerSnapshot | None,
     observed_at: datetime,
+    instrument_resolver: ExecutionInstrumentResolver,
     execution_results: Iterable[ExecutionResult] = (),
     restart_recovery_pending: bool = False,
 ) -> tuple[ReconciliationRecord, ...]:
@@ -285,12 +313,15 @@ def classify_reconciliation(
 
     Output is sorted by ``(position_ref or "", finding, details_ref or "")``.
     ``broker_snapshot is None`` (broker state unavailable) produces no
-    position-comparison records.
+    position-comparison records. ``instrument_resolver`` is REQUIRED (no default): the
+    same resolver instance the pipeline uses (ADR-035 s5.2, INV-19).
     """
 
     records: list[ReconciliationRecord] = []
     if broker_snapshot is not None:
-        records.extend(_compare_snapshot(local_positions, broker_snapshot, observed_at))
+        records.extend(
+            _compare_snapshot(local_positions, broker_snapshot, observed_at, instrument_resolver)
+        )
     for result in execution_results:
         if result.status is ExecutionStatus.UNKNOWN:
             records.append(

@@ -20,17 +20,28 @@ HARD BOUNDARIES (all enforced by tests):
 * No real broker adapter exists, is imported, constructed or wired here: no default
   adapter, no env/flag/config switch, no MT5 import, no broker order call. ``adapter.submit``
   can only be reached through the non-production seam
-  (``non_production_transmission_seam``), which refuses any adapter that is not explicitly
-  marked ``NEXORA_NON_PRODUCTION_TEST_ADAPTER = True`` and which lives outside the
-  ``nexora.`` package namespace (so ``SimulatedBrokerAdapter`` and every production adapter
-  class are refused). The seam is referenced ONLY by this module and tests (AST-enforced).
-  The marker is adapter self-attestation, a speed bump and an audit signal, not a safeguard
-  against a malicious caller; the real barrier is that no adapter exists and preflight is
-  deny-only.
+  (``non_production_transmission_seam``). PR-7 wiring gate (ADR-035 INV-25, Option B): the
+  seam accepts ONLY (a) the exact class ``SimulatedBrokerAdapter`` or (b) an explicitly
+  marked ``NEXORA_NON_PRODUCTION_TEST_ADAPTER = True`` test double defined outside the
+  ``nexora.`` namespace; every other class (including a subclass of the simulator and every
+  production adapter class) is refused. The adapter's read-only ``adapter_mode`` must be the
+  closed Phase-1 vocabulary (``simulation`` only) and is read ONCE, as are the adapter's
+  ``capabilities()``; both are captured in the seam and never re-read, so a later change in
+  the adapter cannot alter the gate. Preflight capabilities come from that captured object;
+  a differing caller-supplied ``capabilities`` denies. The seam is referenced ONLY by this
+  module and tests (AST-enforced). ``mode`` is adapter self-attestation, not protection
+  against a malicious adapter; the real barrier is that no real adapter exists, preflight
+  is deny-only, and the production composition has no transmission wiring. Wiring the
+  shipped simulator does NOT make anything transmit: the real ``ExecutionPreflight`` still
+  never allows.
 * ``recover_from_emergency`` / ``plan_emergency_recovery`` are never called. An EMERGENCY
   position is denied at resolution. ``operator_ref`` is never consulted (audit only).
 * The pipeline never retries, never reclaims, never loops, never calls
   ``establish_index_genesis`` / ``register_known_keys``.
+* The instrument resolver is the PR-1 ``ExecutionInstrumentResolver`` port (binding mode
+  only; legacy denied). Both ``intent.symbol`` and ``position.symbol`` are resolved through
+  it and must yield the same ``instrument_id``; any resolver failure denies
+  ``execution_binding_missing``.
 * ``DedupRecord.latest_result`` is never consulted: dedup safety comes from ``inspect()``
   / ``enumerate_unresolved()`` only.
 
@@ -45,8 +56,9 @@ Time: every clock read goes through the injected ``clock``; no ambient clock.
 Unresolved ADR items taken on the fail-closed path (see tasks/PR4-execution-pipeline.md):
 OPEN-1 (bounds are injected; absent => deny), OPEN-2/OPEN-6 (no BrokerStateQuery port:
 evidence is supplied by the caller; no post-execution classification performed),
-OPEN-5 (no in-flight position exclusion), OPEN-8 (no residual-volume check beyond
-preflight), OPEN-9 (the instrument resolver port is injected; none => deny), OPEN-14/15
+OPEN-5 (no in-flight position exclusion), OPEN-8 (the REDUCE residual-volume rule is a
+preflight deny gate; the pipeline passes the resolved position quantity), OPEN-9 (the
+instrument resolver port is injected; none => deny; legacy => deny), OPEN-14/15
 (an unfresh key, including a released generation, is denied: no same-key retry),
 OPEN-17 (OPEN/REDUCE quantity and MODIFY_PROTECTION payload are explicit inputs; absent =>
 deny), OPEN-19 (lifecycle result is computed once and returned, never persisted here),
@@ -80,7 +92,11 @@ from nexora.autonomous_contracts import (
     TradeState,
 )
 from nexora.entry_readiness.models import EntryReadinessState
-from nexora.execution.broker_adapter import BrokerExecutionAdapter
+from nexora.execution.broker_adapter import (
+    PHASE1_EXECUTABLE_ADAPTER_MODES,
+    BrokerExecutionAdapter,
+    is_shipped_simulated_adapter,
+)
 from nexora.execution.dedup_store import (
     ClaimOutcome,
     DedupEnumerationIncompleteError,
@@ -94,8 +110,13 @@ from nexora.execution.dedup_store import (
 )
 from nexora.execution.guard import GuardDecision, evaluate_execution_guard
 from nexora.execution.idempotency import derive_new_position_ref, execution_request_idempotency_key
+from nexora.execution.instrument_resolution import (
+    ExecutionBindingMissingError,
+    resolve_binding_instrument_id,
+)
 from nexora.execution.models import (
     ExecutionContractError,
+    ExecutionInstrumentResolver,
     ExecutionRequest,
     ExecutionResult,
     ExecutionStatus,
@@ -156,41 +177,85 @@ class _PreflightPort(Protocol):
         *,
         now: datetime,
         max_capabilities_age: timedelta | None = None,
+        position_quantity: Decimal | None = None,
     ) -> PreflightDecision: ...
+
+
+def _gate_adapter(adapter: object) -> tuple[str, BrokerCapabilities]:
+    """The ONE wiring gate (ADR-035 INV-25, PR-7 Option B): exact allow-listed class, closed
+    SIMULATION-only mode vocabulary, exact ``BrokerCapabilities``. Returns the mode and the
+    capabilities READ FROM THAT adapter. Re-run by the seam (``__post_init__``) and by the
+    pipeline constructor so a seam can never carry values belonging to another adapter."""
+
+    if not isinstance(adapter, BrokerExecutionAdapter):
+        raise PipelineWiringError("adapter_does_not_implement_broker_execution_adapter")
+    if not is_shipped_simulated_adapter(adapter):
+        adapter_type = type(adapter)
+        if getattr(adapter_type, ADAPTER_MARKER_ATTRIBUTE, False) is not True:
+            raise PipelineWiringError("adapter_not_marked_non_production_test_adapter")
+        module = adapter_type.__module__
+        if module == "nexora" or module.startswith("nexora."):
+            raise PipelineWiringError("adapter_in_production_namespace_refused")
+    try:
+        mode = adapter.adapter_mode
+    except Exception:
+        raise PipelineWiringError("adapter_mode_unreadable") from None
+    if type(mode) is not str or mode not in PHASE1_EXECUTABLE_ADAPTER_MODES:
+        raise PipelineWiringError("adapter_mode_not_simulation")
+    try:
+        capabilities = adapter.capabilities()
+    except Exception:
+        raise PipelineWiringError("adapter_capabilities_unavailable") from None
+    if type(capabilities) is not BrokerCapabilities:
+        raise PipelineWiringError("adapter_capabilities_invalid")
+    return mode, capabilities
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class NonProductionTransmissionSeam:
     """The ONLY way an adapter can be attached. Mint it with
     ``non_production_transmission_seam``; direct construction is refused by the pipeline.
-    Tests only: production modules must never reference it (AST-enforced)."""
+    Tests only: production modules must never reference it (AST-enforced).
+
+    Hardening: ``__post_init__`` re-runs the full gate on ``adapter`` and requires the
+    captured ``adapter_mode`` / ``capabilities`` to be exactly what THAT adapter reports, so
+    ``dataclasses.replace`` with another adapter (or stale captured values) fails closed.
+    The factory token is NOT an init field: ``replace`` / direct construction produce a seam
+    without it (refused by the pipeline), and a pickle/deepcopy round trip yields a different
+    token object."""
 
     adapter: BrokerExecutionAdapter
     preflight: _PreflightPort
-    _token: object = field(repr=False, compare=False)
+    adapter_mode: str  # captured at wiring
+    capabilities: BrokerCapabilities  # captured at wiring from THIS adapter
+    _token: object = field(default=None, init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        mode, capabilities = _gate_adapter(self.adapter)
+        if self.adapter_mode != mode or type(self.adapter_mode) is not str:
+            raise PipelineWiringError("seam_adapter_mode_not_from_adapter")
+        if self.capabilities != capabilities:
+            raise PipelineWiringError("seam_capabilities_not_from_adapter")
 
 
 def non_production_transmission_seam(
     adapter: object, *, preflight: _PreflightPort | None = None
 ) -> NonProductionTransmissionSeam:
-    """Permitted TEST-ONLY seam. Refuses an adapter that is not a ``BrokerExecutionAdapter``,
-    is not explicitly marked ``NEXORA_NON_PRODUCTION_TEST_ADAPTER = True`` on its class, or
-    whose class lives under the ``nexora.`` package (this excludes the shipped
-    simulator and every possible production adapter)."""
+    """Permitted TEST-ONLY wiring gate (see ``_gate_adapter``): accepts only the exact
+    shipped simulator class or an explicitly marked test double outside ``nexora.`` (a
+    subclass of the simulator is neither), SIMULATION mode only. Without an explicit
+    ``preflight`` the real, deny-only ``ExecutionPreflight`` is used, so a wired simulator
+    still can never transmit."""
 
-    if not isinstance(adapter, BrokerExecutionAdapter):
-        raise PipelineWiringError("adapter_does_not_implement_broker_execution_adapter")
-    adapter_type = type(adapter)
-    if getattr(adapter_type, ADAPTER_MARKER_ATTRIBUTE, False) is not True:
-        raise PipelineWiringError("adapter_not_marked_non_production_test_adapter")
-    module = adapter_type.__module__
-    if module == "nexora" or module.startswith("nexora."):
-        raise PipelineWiringError("adapter_in_production_namespace_refused")
-    return NonProductionTransmissionSeam(
-        adapter=adapter,
+    mode, capabilities = _gate_adapter(adapter)
+    seam = NonProductionTransmissionSeam(
+        adapter=adapter,  # type: ignore[arg-type]
         preflight=preflight if preflight is not None else ExecutionPreflight(),
-        _token=_SEAM_TOKEN,
+        adapter_mode=mode,
+        capabilities=capabilities,
     )
+    object.__setattr__(seam, "_token", _SEAM_TOKEN)
+    return seam
 
 
 # --------------------------------------------------------------------------- inputs / outputs
@@ -226,11 +291,6 @@ class PipelineInputs:
     protection: ProtectionRequest | None = None  # MODIFY_PROTECTION (OPEN-17); absent => deny
     price_constraint: PriceConstraint | None = None
     capabilities: BrokerCapabilities | None = None
-
-
-# Single ``execution_symbol -> canonical instrument_id`` conversion (ADR-035 s5.1); returns
-# ``None`` when no explicit binding exists. PROVISIONAL port shape (OPEN-9); no default exists.
-InstrumentResolver = Callable[[str], str | None]
 
 
 class PipelineStatus(StrEnum):
@@ -310,7 +370,7 @@ class ExecutionPipeline:
         *,
         dedup_store: ExecutionDedupStore,
         clock: Callable[[], datetime],
-        instrument_resolver: InstrumentResolver | None = None,
+        instrument_resolver: ExecutionInstrumentResolver | None = None,
         max_reconciliation_evidence_age: timedelta | None = None,
         max_preflight_age: timedelta | None = None,
         max_capabilities_age: timedelta | None = None,
@@ -321,6 +381,17 @@ class ExecutionPipeline:
             or transmission._token is not _SEAM_TOKEN
         ):
             raise PipelineWiringError("transmission_wiring_not_permitted")
+        if transmission is not None:
+            # Second layer: re-run the full gate on the adapter actually in the seam and
+            # require the captured values to belong to it.
+            mode, capabilities = _gate_adapter(transmission.adapter)
+            if (
+                type(transmission.adapter_mode) is not str
+                or transmission.adapter_mode != mode
+                or type(transmission.capabilities) is not BrokerCapabilities
+                or transmission.capabilities != capabilities
+            ):
+                raise PipelineWiringError("adapter_mode_not_simulation")
         if transmission is None and isinstance(dedup_store, InMemoryExecutionDedupStore):
             # INV-26 / OPEN-18: a non-durable store is refused outside the test seam.
             raise PipelineWiringError("in_memory_dedup_store_refused")
@@ -387,7 +458,9 @@ class ExecutionPipeline:
         request = guard.request
         assert request is not None
         trace.append("4")
-        decision = self._step4_preflight(inputs, request)
+        decision = self._step4_preflight(
+            inputs, request, res.position.quantity if res.position is not None else None
+        )
 
         trace.append("5")
         try:
@@ -648,14 +721,7 @@ class ExecutionPipeline:
         self, inputs: PipelineInputs, evidence: ReconciliationEvidence, now: datetime
     ) -> _Resolution:
         intent = inputs.intent
-        if self._resolver is None:
-            raise _Stop("execution_binding_missing")
-        try:
-            instrument_id = self._resolver(intent.symbol)
-        except Exception:
-            raise _Stop("execution_binding_missing") from None
-        if type(instrument_id) is not str or not instrument_id.strip():
-            raise _Stop("execution_binding_missing")
+        instrument_id = self._resolve_instrument(intent.symbol)
 
         position: PositionRecord | None = None
         quantity: Decimal | None
@@ -678,7 +744,7 @@ class ExecutionPipeline:
             if position.state not in _OPEN_STATES:
                 # EMERGENCY included: recovery is never attempted here (OPEN-20).
                 raise _Stop("position_not_open_or_managing")
-            if position.symbol != intent.symbol:
+            if self._resolve_instrument(position.symbol) != instrument_id:
                 raise _Stop("position_symbol_mismatch")
             if position.side != intent.side:
                 raise _Stop("position_side_mismatch")
@@ -729,6 +795,15 @@ class ExecutionPipeline:
             protection_change=protection_change,
             protection=protection,
         )
+
+    def _resolve_instrument(self, execution_symbol: str) -> str:
+        """The ONE ``execution_symbol -> instrument_id`` conversion (ADR-035 s5.1/s5.2);
+        binding mode only, fail closed on any resolver problem."""
+
+        try:
+            return resolve_binding_instrument_id(self._resolver, execution_symbol)
+        except ExecutionBindingMissingError:
+            raise _Stop("execution_binding_missing") from None
 
     @staticmethod
     def _payload_quantity(inputs: PipelineInputs) -> Decimal | None:
@@ -825,7 +900,10 @@ class ExecutionPipeline:
     # -- step 4 ------------------------------------------------------------
 
     def _step4_preflight(
-        self, inputs: PipelineInputs, request: ExecutionRequest
+        self,
+        inputs: PipelineInputs,
+        request: ExecutionRequest,
+        position_quantity: Decimal | None,
     ) -> PreflightDecision:
         now = self._now()
         port: _PreflightPort = (
@@ -833,12 +911,20 @@ class ExecutionPipeline:
             if self._transmission is not None
             else self._production_preflight
         )
+        capabilities = inputs.capabilities
+        if self._transmission is not None:
+            # Capabilities MUST be those of the wired adapter (captured once at wiring); a
+            # free caller input that differs is denied, never used.
+            if capabilities is not None and capabilities != self._transmission.capabilities:
+                raise _Stop("preflight_capabilities_adapter_mismatch")
+            capabilities = self._transmission.capabilities
         decision = port.evaluate(
             request,
-            inputs.capabilities,
+            capabilities,
             None,
             now=now,
             max_capabilities_age=self._max_capabilities_age,
+            position_quantity=position_quantity,
         )
         if not isinstance(decision, PreflightDecision):
             raise _Stop("preflight_decision_invalid")

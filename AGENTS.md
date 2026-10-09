@@ -117,7 +117,9 @@ Current workstreams (these describe work in flight, not permanent architecture):
 
 ## 5. Worktree isolation
 
-Every implementation workstream uses its own Git worktree:
+Every implementation workstream runs in its own isolated checkout. Cloud sessions are the primary development environment and use the cloud model in section 5.2; GitHub is the source of truth. The local `D:\NEXORA` worktree layout below is legacy: it is not a development environment and must not be assumed to exist (it is a recovery source only). Where a local Git worktree is still used, the rules below apply unchanged.
+
+Legacy local layout, one Git worktree per workstream:
 
 ```text
 D:\NEXORA\
@@ -154,6 +156,33 @@ Workstream
 - Other sessions may read committed history from Git, but must not modify the worktree, commit to its branch, stop its processes, touch its scratchpad or build a competing implementation of the same workstream.
 - Signs of another active owner include: the branch/worktree already exists, reflog entries you did not create, running processes whose command line points into the worktree, or another session's scratch files referencing it.
 - If you find any of these and ownership was not assigned to you: **STOP — WORKTREE ALREADY IN USE.** Report the branch, worktree, evidence (process/scratchpad/reflog) and wait. Do not take over, clean up, or create a parallel copy.
+
+### 5.2 Cloud sessions (primary development model)
+
+The cloud equivalent of a dedicated worktree is: **one task = one cloud session = one branch = one PR.** The session's isolated container is the worktree; every other rule in sections 5–7 applies to it, and all section 10/20 authority rules are unchanged.
+
+```text
+Workstream
+   ├── owner   (cloud session)
+   ├── branch  (claude/<scope>-<feature>-vN from a recorded origin/main SHA)
+   ├── owned paths (section 7)
+   └── PR      (draft until independent review)
+```
+
+Before starting a cloud workstream:
+
+1. `git fetch origin main` and record the approved base `origin/main` SHA.
+2. Verify the branch does not already exist (`git ls-remote --heads origin <branch>`) and that no open PR, other session or recorded workstream owns it or your target paths. Remote branch existence, an open PR on the branch, or another session's recorded ownership are the cloud signs of an active owner: **STOP — WORKSTREAM ALREADY IN USE** (same handling as section 5.1).
+3. Create the branch from that SHA; verify `git status --short` is clean and `git rev-parse HEAD` equals the base SHA; report both.
+4. Only the owning session commits or pushes to the branch. Other sessions (including independent reviewers) read it from GitHub and never push to it.
+5. Push to GitHub before the session ends; an unpushed cloud container is disposable and is not a place to keep work.
+
+Environment rules for cloud sessions:
+
+- Cloud sessions run only CLOUD-SAFE and SIMULATION checks (see [CLAUDE.md](CLAUDE.md) and [development guide](docs/development.md)). They never hold MT5 terminals, production DSNs, PROD journals/checkpoints or production secrets, and never set `NEXORA_MT5_*` or `NEXORA_POSTGRES_DSN` to a non-disposable target.
+- The Windows machine is the MT5 / broker integration node only. It runs WINDOWS-INTEGRATION checks as explicit, operator-started runs of a named SHA pulled from GitHub into a disposable checkout, and reports evidence back to the PR. It is not a development workspace; nothing there starts PROD automatically. PRODUCTION-ONLY actions keep their separate Rin authority (section 20.7).
+- Data that is not in Git (research configuration, instrument bindings, recorded datasets, journals) is backed up separately and brought into a cloud session only as explicitly approved, non-secret, non-production copies.
+- In handoffs (section 16) and PR descriptions, report `WORKTREE` as the cloud session (or `n/a`) and always report the base SHA.
 
 ## 6. Branch convention
 
@@ -246,6 +275,7 @@ Stop implementation and report when you encounter:
 
 - ambiguous architecture or unclear ownership
 - another active session/process in your target worktree (**STOP — WORKTREE ALREADY IN USE**, section 5.1)
+- another owner of your target branch, PR or paths in the cloud (**STOP — WORKSTREAM ALREADY IN USE**, section 5.2)
 - unclear DEV/PROD runtime identity (**STOP — RUNTIME OWNERSHIP UNCLEAR**, section 8.1)
 - incompatible shared contracts
 - dependency on another unfinished workstream

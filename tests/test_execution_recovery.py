@@ -29,8 +29,11 @@ from nexora.execution.recovery import (
 )
 from nexora.position.models import PositionRecord, ProtectionLevels
 
+from tests.execution_resolver_fixtures import identity_resolver
+
 NOW = datetime(2026, 10, 3, tzinfo=UTC)
 INSTR = "instrument:test"
+RESOLVER = identity_resolver(INSTR)
 D = Decimal
 
 
@@ -205,7 +208,10 @@ def test_end_to_end_with_classifier_flat_and_pending() -> None:
         (pending_snapshot, TradeState.EXIT_PENDING),
     ):
         recs = classify_reconciliation(
-            local_positions=[local], broker_snapshot=snap, observed_at=NOW
+            local_positions=[local],
+            broker_snapshot=snap,
+            observed_at=NOW,
+            instrument_resolver=RESOLVER,
         )
         plan = _plan(_ev(recs), local)
         assert plan.derived_target is target
