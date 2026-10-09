@@ -38,6 +38,8 @@ from nexora.edge.exits import (
     to_edge_trade,
 )
 from nexora.edge.splits import (
+    HoldoutAccess,
+    HoldoutAccessLog,
     HoldoutLocked,
     HoldoutUnlock,
     SplitError,
@@ -62,6 +64,8 @@ __all__ = [
     "ExitInputError",
     "ExitPolicy",
     "ExitResult",
+    "HoldoutAccess",
+    "HoldoutAccessLog",
     "HoldoutLocked",
     "HoldoutUnlock",
     "Provenance",

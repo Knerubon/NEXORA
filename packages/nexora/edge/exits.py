@@ -24,13 +24,28 @@ from typing import Literal
 
 from nexora.artifacts import canonical_hash
 from nexora.edge.costs import CostBreakdown, CostModel, compute_costs
+from nexora.edge.dataset import EdgeDatasetManifest, verify_edge_dataset
+from nexora.edge.splits import (
+    HoldoutAccess,
+    HoldoutAccessLog,
+    HoldoutUnlock,
+    Segment,
+    SplitPlan,
+    select_segment,
+)
 from nexora.market_data.models import NormalizedPriceEvent
 from nexora.signals import ResearchSignal
 
 Side = Literal["long", "short"]
 AmbiguityPolicy = Literal["stop_first", "target_first"]
 ExitReason = Literal["stop", "stop_gap", "target", "time"]
-ExitStatus = Literal["closed", "open_at_end", "no_entry", "rejected_invalid_plan"]
+ExitStatus = Literal[
+    "closed", "open_at_end", "no_entry", "rejected_invalid_plan", "skipped_overlap"
+]
+# one_position: a plan whose entry falls while an earlier trade is still open is skipped.
+# allow_overlap: every plan is booked independently (exposure may stack). There is NO default:
+# which one the baseline uses is an open Quant decision, so the caller must choose.
+Concurrency = Literal["one_position", "allow_overlap"]
 
 AMBIGUITY_ASSUMPTION = "same_bar_stop_and_target_order_unknown"
 
@@ -44,6 +59,7 @@ class ExitInputError(ValueError):
 @dataclass(frozen=True, slots=True)
 class ExitPolicy:
     version: str
+    concurrency: Concurrency
     ambiguity: AmbiguityPolicy = "stop_first"
     # Close at the bar close after this many bars (entry bar counts as 1). None = no time stop.
     max_hold_bars: int | None = None
@@ -55,9 +71,10 @@ class ExitPolicy:
         if self.entry_delay < timedelta(0):
             raise ExitInputError("negative_entry_delay")
 
-    def hash_payload(self) -> tuple[str, str, int | None, int]:
+    def hash_payload(self) -> tuple[str, str, str, int | None, int]:
         return (
             self.version,
+            self.concurrency,
             self.ambiguity,
             self.max_hold_bars,
             int(self.entry_delay.total_seconds()),
@@ -111,6 +128,9 @@ class ExitResult:
     alternative_exit_prices: tuple[tuple[str, Decimal], ...] = ()
     entry_spread: Decimal | None = None
     source_refs: tuple[str, ...] = ()
+    # True when `exit_time` is the bar close but the fill happened somewhere inside the bar,
+    # i.e. the holding time is an UPPER bound (conservative for swap, which is never a credit).
+    exit_time_upper_bound: bool = False
 
     def gross_per_unit(self, price: Decimal | None = None) -> Decimal:
         if self.entry_price is None or (price is None and self.exit_price is None):
@@ -180,11 +200,18 @@ def simulate_exit(
             source_refs=plan.source_refs,
         )
     risk = abs(entry - plan.stop_price)
-    spread = (
-        entry_bar.ask - entry_bar.bid
-        if entry_bar.ask is not None and entry_bar.bid is not None
-        else None
-    )
+    spread: Decimal | None = None
+    entry_notes: tuple[str, ...] = ()
+    if entry_bar.ask is not None and entry_bar.bid is not None:
+        if (
+            entry_bar.ask.is_finite()
+            and entry_bar.bid.is_finite()
+            and entry_bar.ask >= entry_bar.bid
+        ):
+            spread = entry_bar.ask - entry_bar.bid
+        else:
+            # A bad quote makes THIS trade's spread unavailable; it must not abort the run.
+            entry_notes = ("entry_quote_invalid_spread_unavailable",)
 
     def result(
         bar: NormalizedPriceEvent,
@@ -195,8 +222,9 @@ def simulate_exit(
         ambiguous: bool = False,
         alternatives: tuple[tuple[str, Decimal], ...] = (),
         extra: tuple[str, ...] = (),
+        at_open: bool = False,
     ) -> ExitResult:
-        assumptions = list(extra)
+        assumptions = [*entry_notes, *extra]
         if ambiguous:
             assumptions.append(f"{AMBIGUITY_ASSUMPTION}:{policy.ambiguity}")
         return ExitResult(
@@ -205,7 +233,7 @@ def simulate_exit(
             status="closed",
             entry_time=entry_bar.event_time,
             entry_price=entry,
-            exit_time=bar.received_at,
+            exit_time=bar.event_time if at_open else bar.received_at,
             exit_price=price,
             exit_reason=reason,
             bars_held=index - entry_index + 1,
@@ -215,6 +243,7 @@ def simulate_exit(
             alternative_exit_prices=alternatives,
             entry_spread=spread,
             source_refs=(*plan.source_refs, entry_bar.identity_key, bar.identity_key),
+            exit_time_upper_bound=reason in ("stop", "target") and not at_open,
         )
 
     for index in range(entry_index, len(bars)):
@@ -236,6 +265,21 @@ def simulate_exit(
                     bar.open_price,
                     "stop_gap",
                     extra=("stop_filled_at_gap_open",),
+                    at_open=True,
+                )
+            gapped_target = (
+                bar.open_price >= plan.target_price if long else bar.open_price <= plan.target_price
+            )
+            if gapped_target:
+                # The open prints before anything else, so the target was reached first even if
+                # the bar later trades through the stop: not ambiguous.
+                return result(
+                    bar,
+                    index,
+                    plan.target_price,
+                    "target",
+                    extra=("target_filled_at_target_price_no_gap_improvement",),
+                    at_open=True,
                 )
         if stop_hit and target_hit:
             stop_fill = plan.stop_price
@@ -250,7 +294,6 @@ def simulate_exit(
         if stop_hit:
             return result(bar, index, plan.stop_price, "stop")
         if target_hit:
-            # Filled at the target price even if the bar opened beyond it: no price improvement.
             return result(bar, index, plan.target_price, "target")
         if policy.max_hold_bars is not None and index - entry_index + 1 >= policy.max_hold_bars:
             return result(bar, index, bar.close, "time")
@@ -263,6 +306,7 @@ def simulate_exit(
         entry_price=entry,
         bars_held=len(bars) - entry_index,
         entry_spread=spread,
+        assumptions=entry_notes,
         source_refs=plan.source_refs,
     )
 
@@ -320,61 +364,145 @@ class EdgeExitRun:
     exit_policy: ExitPolicy
     cost_model: CostModel
     unit_size: Decimal
-    dataset_hash: str
+    # Bound to the verified dataset: see `verify_edge_dataset`.
+    manifest_hash: str
+    statistical_evidence_eligible: bool
+    segment: str  # "unsplit" or the evaluated segment name
+    split_plan_hash: str | None
+    holdout_access: HoldoutAccess | None
     trades: tuple[EdgeTrade, ...]
     unresolved: tuple[ExitResult, ...]
     ambiguous_count: int
+    skipped_overlap_count: int
     notes: tuple[str, ...]
 
 
 def run_exit_mode(
     plans: Sequence[TradePlan],
-    bars: Sequence[NormalizedPriceEvent],
+    events: Sequence[NormalizedPriceEvent],
     *,
+    manifest: EdgeDatasetManifest,
+    expected_manifest_hash: str,
     policy: ExitPolicy,
     cost_model: CostModel,
     unit_size: Decimal,
-    dataset_hash: str,
+    split: SplitPlan | None = None,
+    segment: Segment | None = None,
+    unlock: HoldoutUnlock | None = None,
+    access_log: HoldoutAccessLog | None = None,
 ) -> EdgeExitRun:
-    """Deterministic ledger for the SL/TP exit mode. Plans are processed in decision order."""
+    """Deterministic ledger for the SL/TP exit mode.
+
+    `events` must be the complete dataset described by `manifest`; it is re-verified here
+    (hashes, integrity, quality) so a run id can never name data it was not computed on.
+    With `split` + `segment` only that segment's completed bars are used (the holdout needs
+    an unlock and an access log); every plan must decide inside the segment. Without them
+    the run is labelled `unsplit` and is not valid out-of-sample evidence."""
     if not unit_size.is_finite() or unit_size <= 0:
         raise ExitInputError("invalid_unit_size")
+    if (split is None) != (segment is None):
+        raise ExitInputError("split_and_segment_must_be_given_together")
+    dataset = tuple(events)
+    try:
+        verify_edge_dataset(manifest, dataset, expected_manifest_hash=expected_manifest_hash)
+    except ValueError as exc:
+        raise ExitInputError(f"dataset_verification_failed:{exc}") from exc
     ids = [p.signal_id for p in plans]
     if len(set(ids)) != len(ids):
         raise ExitInputError("duplicate_signal_id")
+
+    access: HoldoutAccess | None = None
+    if split is not None and segment is not None:
+        low, high = split.bounds(segment)
+        chosen = select_segment(
+            split,
+            dataset,
+            [e.event_time for e in dataset],
+            segment,
+            unlock=unlock,
+            access_log=access_log,
+        )
+        if segment == "holdout":
+            assert access_log is not None
+            access = access_log.entries[-1]
+        # A bar that completes after the segment ends is not part of the segment.
+        bars = tuple(b for b in chosen if b.received_at <= high)
+        if any(not low <= p.decision_time < high for p in plans):
+            raise ExitInputError("plan_outside_segment")
+    else:
+        bars = dataset
+
     ordered = sorted(plans, key=lambda p: (p.decision_time, p.signal_id))
     trades: list[EdgeTrade] = []
     unresolved: list[ExitResult] = []
+    busy_until: datetime | None = None
+    blocked = False
     for plan in ordered:
         outcome = simulate_exit(plan, bars, policy)
+        if policy.concurrency == "one_position" and outcome.status in ("closed", "open_at_end"):
+            assert outcome.entry_time is not None
+            if blocked or (busy_until is not None and outcome.entry_time < busy_until):
+                unresolved.append(
+                    ExitResult(
+                        plan.signal_id,
+                        plan.side,
+                        "skipped_overlap",
+                        entry_time=outcome.entry_time,
+                        entry_price=outcome.entry_price,
+                        assumptions=("skipped_position_already_open",),
+                        source_refs=plan.source_refs,
+                    )
+                )
+                continue
+            if outcome.status == "closed":
+                busy_until = outcome.exit_time
+            else:
+                blocked = True  # never closed inside the data: nothing later can be entered
         if outcome.status == "closed":
             trades.append(to_edge_trade(outcome, cost_model, unit_size=unit_size))
         else:
             unresolved.append(outcome)
+
+    segment_name = segment if segment is not None else "unsplit"
     run_id = "edge-exit-run:" + canonical_hash(
         (
             policy.hash_payload(),
             cost_model,
             unit_size,
-            dataset_hash,
+            manifest.manifest_hash,
+            segment_name,
+            split.plan_hash if split is not None else None,
             ordered,
             [t.exit for t in trades],
         )
     )
+    notes = [
+        "research_only",
+        "no_live_execution",
+        "not_the_production_exit_rules",
+        "legacy_time_delay_exit_unchanged",
+        "tp_selection_and_sizing_are_open_quant_decisions",
+        f"concurrency={policy.concurrency}",
+    ]
+    if not manifest.statistical_evidence_eligible:
+        notes.append("synthetic_data_not_statistical_evidence")
+    if segment is None:
+        notes.append("unsplit_run_not_valid_out_of_sample")
+    if policy.concurrency == "allow_overlap":
+        notes.append("overlapping_positions_may_stack_exposure")
     return EdgeExitRun(
         run_id=run_id,
         exit_policy=policy,
         cost_model=cost_model,
         unit_size=unit_size,
-        dataset_hash=dataset_hash,
+        manifest_hash=manifest.manifest_hash,
+        statistical_evidence_eligible=manifest.statistical_evidence_eligible,
+        segment=segment_name,
+        split_plan_hash=split.plan_hash if split is not None else None,
+        holdout_access=access,
         trades=tuple(trades),
         unresolved=tuple(unresolved),
         ambiguous_count=sum(1 for t in trades if t.exit.ambiguous),
-        notes=(
-            "research_only",
-            "no_live_execution",
-            "not_the_production_exit_rules",
-            "legacy_time_delay_exit_unchanged",
-            "tp_selection_and_sizing_are_open_quant_decisions",
-        ),
+        skipped_overlap_count=sum(1 for u in unresolved if u.status == "skipped_overlap"),
+        notes=tuple(notes),
     )

@@ -48,7 +48,19 @@ def test_clean_dataset_builds_verifies_and_is_deterministic() -> None:
 def test_synthetic_data_is_never_statistical_evidence() -> None:
     m = build_edge_manifest(flat_bars(5), prov(), max_latency=LATENCY)
     assert not m.statistical_evidence_eligible
-    real = build_edge_manifest(flat_bars(5), prov("real_market"), max_latency=LATENCY)
+    real_events = tuple(
+        replace(
+            e,
+            source="adapter-feed",
+            identity_key=f"feed:{i}",
+            source_event_id=f"feed:{i}",
+        )
+        for i, e in enumerate(flat_bars(5))
+    )
+    real_prov = replace(
+        prov("real_market"), source="adapter-feed", capability_profile_ref="profile:abc"
+    )
+    real = build_edge_manifest(real_events, real_prov, max_latency=LATENCY)
     assert real.statistical_evidence_eligible
 
 

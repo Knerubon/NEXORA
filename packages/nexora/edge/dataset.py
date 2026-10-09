@@ -25,6 +25,7 @@ BLOCKING_CODES = frozenset(
         "duplicate",
         "out_of_order",
         "non_positive_price",
+        "non_finite_value",
         "crossed_quote",
         "timestamp_anomaly",
         "stale",
@@ -108,9 +109,14 @@ def audit_events(
         seen.add(e.identity_key)
         if e.is_out_of_order:
             note("out_of_order", index)
-        if not e.price.is_finite() or e.price <= 0:
+        numeric = (e.price, e.bid, e.ask, e.last, e.open_price, e.high, e.low, e.close)
+        finite = all(v.is_finite() for v in numeric if v is not None)
+        if not finite:
+            # NaN/inf must be counted, never compared: Decimal ordering on NaN raises.
+            note("non_finite_value", index)
+        elif e.price <= 0:
             note("non_positive_price", index)
-        if e.bid is not None and e.ask is not None:
+        if finite and e.bid is not None and e.ask is not None:
             if e.bid > e.ask:
                 note("crossed_quote", index)
             else:
@@ -126,7 +132,8 @@ def audit_events(
                 note("missing_sequence", index)
             if expected_gap is not None and e.event_time - previous.event_time > expected_gap:
                 note("gap", index)
-        previous = e
+        if aware:  # a naive timestamp can't be ordered against its neighbours
+            previous = e
     return QualityReport(
         total=len(events),
         counts=tuple(sorted(counts.items())),
@@ -151,9 +158,25 @@ class EdgeDatasetManifest:
 
     @property
     def statistical_evidence_eligible(self) -> bool:
-        """Only authorized real-market data can support a statistical claim. Synthetic
-        fixtures are engineering inputs and never are."""
+        """Necessary, not sufficient, for a statistical claim: the data must be declared
+        real-market AND pass the attestation checks in `build_edge_manifest`. The class is
+        still a declaration; a reviewer must confirm the source. Synthetic fixtures are
+        engineering inputs and never eligible."""
         return self.provenance.data_class == "real_market"
+
+
+def _check_real_market_attestation(
+    events: Sequence[NormalizedPriceEvent], provenance: Provenance
+) -> None:
+    """Defence in depth against mislabelling. It cannot prove data is real; it rejects the
+    obvious cases: no adapter-supplied capability reference, or synthetic markers in the
+    provenance source or in any event's source / identity."""
+    if not (provenance.capability_profile_ref or "").strip():
+        raise EdgeDatasetError("real_market_requires_capability_ref")
+    markers = [provenance.source, *(e.source for e in events)]
+    markers += [e.identity_key for e in events] + [e.source_event_id for e in events]
+    if any("synthetic" in m.lower() or "fixture" in m.lower() for m in markers):
+        raise EdgeDatasetError("synthetic_marker_in_real_market_data")
 
 
 def build_edge_manifest(
@@ -169,6 +192,8 @@ def build_edge_manifest(
         raise EdgeDatasetError("empty_dataset")
     if provenance.timezone != "UTC":
         raise EdgeDatasetError("non_utc_timezone")
+    if provenance.data_class == "real_market":
+        _check_real_market_attestation(events, provenance)
     unknown_accepted = accepted_issues - BLOCKING_CODES
     if unknown_accepted:
         raise EdgeDatasetError("unknown_accepted_issue", tuple(sorted(unknown_accepted)))

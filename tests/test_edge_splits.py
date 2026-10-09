@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from nexora.edge import (
+    HoldoutAccessLog,
     HoldoutLocked,
     HoldoutUnlock,
     SplitError,
@@ -38,7 +39,9 @@ def test_segments_are_disjoint_ordered_and_cover_the_range() -> None:
     p = plan()
     train = select_segment(p, ITEMS, TIMES, "train")
     val = select_segment(p, ITEMS, TIMES, "validation")
-    hold = select_segment(p, ITEMS, TIMES, "holdout", unlock=unlock(p))
+    hold = select_segment(
+        p, ITEMS, TIMES, "holdout", unlock=unlock(p), access_log=HoldoutAccessLog()
+    )
     assert (train[0], train[-1]) == (0, 59)
     assert (val[0], val[-1]) == (60, 79)
     assert (hold[0], hold[-1]) == (80, 99)
@@ -56,7 +59,9 @@ def test_purge_gap_items_belong_to_no_segment() -> None:
     p = plan(purge=timedelta(days=5))
     train = select_segment(p, ITEMS, TIMES, "train")
     val = select_segment(p, ITEMS, TIMES, "validation")
-    hold = select_segment(p, ITEMS, TIMES, "holdout", unlock=unlock(p))
+    hold = select_segment(
+        p, ITEMS, TIMES, "holdout", unlock=unlock(p), access_log=HoldoutAccessLog()
+    )
     used = {*train, *val, *hold}
     assert {60, 61, 62, 63, 64}.isdisjoint(used)
     assert {80, 81, 82, 83, 84}.isdisjoint(used)
@@ -140,7 +145,7 @@ def test_length_mismatch_rejected() -> None:
 
 def test_walk_forward_windows_are_chronological_and_test_after_train() -> None:
     ws = walk_forward_windows(
-        day(0), day(80), train=timedelta(days=20), test=timedelta(days=10), purge=timedelta(days=2)
+        plan(), train=timedelta(days=20), test=timedelta(days=10), purge=timedelta(days=2)
     )
     assert [w.index for w in ws] == list(range(len(ws)))
     for w in ws:
@@ -154,9 +159,7 @@ def test_walk_forward_windows_are_chronological_and_test_after_train() -> None:
 
 def test_walk_forward_never_reaches_the_holdout() -> None:
     p = plan()
-    ws = walk_forward_windows(
-        p.start, p.validation_end, train=timedelta(days=30), test=timedelta(days=10)
-    )
+    ws = walk_forward_windows(p, train=timedelta(days=30), test=timedelta(days=10))
     assert max(w.test_end for w in ws) <= p.validation_end
     hold_low, _ = p.bounds("holdout")
     assert all(w.test_end <= hold_low for w in ws)
@@ -164,34 +167,37 @@ def test_walk_forward_never_reaches_the_holdout() -> None:
 
 def test_anchored_windows_share_the_start() -> None:
     ws = walk_forward_windows(
-        day(0), day(80), train=timedelta(days=20), test=timedelta(days=10), anchored=True
+        plan(), train=timedelta(days=20), test=timedelta(days=10), anchored=True
     )
     assert {w.train_start for w in ws} == {day(0)}
     assert ws[-1].train_end > ws[0].train_end
 
 
 def test_rolling_windows_keep_a_fixed_train_length() -> None:
-    ws = walk_forward_windows(day(0), day(80), train=timedelta(days=20), test=timedelta(days=10))
+    ws = walk_forward_windows(plan(), train=timedelta(days=20), test=timedelta(days=10))
     assert {w.train_end - w.train_start for w in ws} == {timedelta(days=20)}
 
 
 def test_walk_forward_rejects_overlapping_test_step_and_short_range() -> None:
     with pytest.raises(SplitError):
         walk_forward_windows(
-            day(0),
-            day(80),
+            plan(),
             train=timedelta(days=20),
             test=timedelta(days=10),
             step=timedelta(days=5),
         )
     with pytest.raises(SplitError):
-        walk_forward_windows(day(0), day(10), train=timedelta(days=20), test=timedelta(days=10))
+        walk_forward_windows(
+            SplitPlan(day(0), day(5), day(10), day(20)),
+            train=timedelta(days=20),
+            test=timedelta(days=10),
+        )
     with pytest.raises(SplitError):
-        walk_forward_windows(day(0), day(80), train=timedelta(0), test=timedelta(days=10))
+        walk_forward_windows(plan(), train=timedelta(0), test=timedelta(days=10))
 
 
 def test_walk_forward_is_deterministic() -> None:
     train, test = timedelta(days=20), timedelta(days=10)
-    assert walk_forward_windows(day(0), day(80), train=train, test=test) == walk_forward_windows(
-        day(0), day(80), train=train, test=test
+    assert walk_forward_windows(plan(), train=train, test=test) == walk_forward_windows(
+        plan(), train=train, test=test
     )

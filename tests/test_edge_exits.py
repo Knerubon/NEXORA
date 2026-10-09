@@ -30,14 +30,14 @@ from nexora.market_data.models import NormalizedPriceEvent
 from nexora.signals import ResearchSignal
 from nexora.signals.models import SignalDecision, SignalTarget
 
-from tests.edge_fixtures import BAR, T0, make_bar
+from tests.edge_fixtures import BAR, T0, make_bar, synthetic_manifest
 
 D = Decimal
 DECISION = T0 + BAR  # bar 0 closes here; bar 1 is the first bar that can be entered
 
 LONG = TradePlan("s-long", "long", DECISION, stop_price=D("98"), target_price=D("104"))
 SHORT = TradePlan("s-short", "short", DECISION, stop_price=D("102"), target_price=D("96"))
-POLICY = ExitPolicy(version="t1")
+POLICY = ExitPolicy(version="t1", concurrency="allow_overlap")
 ZERO_COSTS = CostModel("t", "XXX", KNOWN_ZERO, KNOWN_ZERO, KNOWN_ZERO, KNOWN_ZERO)
 
 
@@ -86,7 +86,7 @@ def test_short_mirror_target_and_stop() -> None:
 
 def test_time_stop_exits_at_close_after_n_bars() -> None:
     bars = bars_with(ENTRY, ("100.5", "101", "100", "100.8"), ("100.8", "101", "100", "100.2"))
-    r = sim(LONG, bars, ExitPolicy("t", max_hold_bars=2))
+    r = sim(LONG, bars, ExitPolicy("t", "allow_overlap", max_hold_bars=2))
     assert (r.exit_reason, r.exit_price, r.bars_held) == ("time", D("100.8"), 2)
 
 
@@ -121,7 +121,7 @@ def test_target_first_policy_is_available_but_still_flagged() -> None:
     r = sim(
         LONG,
         bars_with(ENTRY, ("100", "105", "97", "100")),
-        ExitPolicy("t", ambiguity="target_first"),
+        ExitPolicy("t", "allow_overlap", ambiguity="target_first"),
     )
     assert r.exit_reason == "target" and r.exit_price == D("104") and r.ambiguous
     assert r.assumptions == ("same_bar_stop_and_target_order_unknown:target_first",)
@@ -185,7 +185,7 @@ def test_result_is_independent_of_truncating_after_exit() -> None:
 
 def test_entry_never_precedes_decision_plus_delay() -> None:
     bars = tuple(quiet(i) for i in range(10))
-    r = sim(LONG, bars, ExitPolicy("t", entry_delay=timedelta(minutes=12)))
+    r = sim(LONG, bars, ExitPolicy("t", "allow_overlap", entry_delay=timedelta(minutes=12)))
     assert r.entry_time is not None
     assert r.entry_time >= DECISION + timedelta(minutes=12)
     assert r.entry_time == T0 + BAR * 4  # first bar open at/after 5m + 12m = 17m -> 20m
@@ -230,9 +230,9 @@ def test_invalid_plan_prices_rejected() -> None:
 
 def test_policy_validation() -> None:
     with pytest.raises(ExitInputError):
-        ExitPolicy("t", max_hold_bars=0)
+        ExitPolicy("t", "allow_overlap", max_hold_bars=0)
     with pytest.raises(ExitInputError):
-        ExitPolicy("t", entry_delay=timedelta(seconds=-1))
+        ExitPolicy("t", "allow_overlap", entry_delay=timedelta(seconds=-1))
 
 
 # ---- extreme numerics -----------------------------------------------------------------
@@ -319,15 +319,17 @@ def test_unclosed_trade_cannot_be_costed() -> None:
 def _run(
     plans: tuple[TradePlan, ...],
     bars: tuple[NormalizedPriceEvent, ...],
-    dataset_hash: str = "h" * 64,
+    policy: ExitPolicy = POLICY,
 ) -> EdgeExitRun:
+    manifest, manifest_hash = synthetic_manifest(bars)
     return run_exit_mode(
         plans,
         bars,
-        policy=POLICY,
+        manifest=manifest,
+        expected_manifest_hash=manifest_hash,
+        policy=policy,
         cost_model=ZERO_COSTS,
         unit_size=D("1"),
-        dataset_hash=dataset_hash,
     )
 
 
@@ -337,7 +339,8 @@ def test_run_is_deterministic_and_input_order_independent() -> None:
     a = _run((LONG, p2), bars)
     b = _run((p2, LONG), bars)
     assert a == b and a.run_id == b.run_id
-    assert a.run_id != _run((LONG, p2), bars, dataset_hash="z" * 64).run_id
+    other = bars_with(ENTRY, ("100.5", "104.5", "100", "104"), ("104", "104", "97", "99"))
+    assert a.run_id != _run((LONG, p2), other).run_id  # different data -> different identity
 
 
 def test_run_separates_closed_from_unresolved_and_counts_ambiguity() -> None:
@@ -347,19 +350,24 @@ def test_run_separates_closed_from_unresolved_and_counts_ambiguity() -> None:
     assert len(run.trades) == 1 and run.ambiguous_count == 1
     assert [u.status for u in run.unresolved] == ["no_entry"]
     assert "not_the_production_exit_rules" in run.notes
+    assert "synthetic_data_not_statistical_evidence" in run.notes
+    assert not run.statistical_evidence_eligible
 
 
 def test_run_rejects_duplicate_ids_and_bad_unit_size() -> None:
     with pytest.raises(ExitInputError, match="duplicate_signal_id"):
         _run((LONG, LONG), bars_with(ENTRY))
+    bars = bars_with(ENTRY)
+    manifest, manifest_hash = synthetic_manifest(bars)
     with pytest.raises(ExitInputError, match="invalid_unit_size"):
         run_exit_mode(
             (LONG,),
-            bars_with(ENTRY),
+            bars,
+            manifest=manifest,
+            expected_manifest_hash=manifest_hash,
             policy=POLICY,
             cost_model=ZERO_COSTS,
             unit_size=D("0"),
-            dataset_hash="h",
         )
 
 

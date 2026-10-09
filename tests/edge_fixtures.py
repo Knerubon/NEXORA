@@ -9,6 +9,11 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+from nexora.edge.dataset import (
+    EdgeDatasetManifest,
+    Provenance,
+    build_edge_manifest,
+)
 from nexora.market_data.models import NormalizedPriceEvent
 
 T0 = datetime(2026, 1, 5, 0, 0, tzinfo=UTC)
@@ -56,3 +61,21 @@ def make_bar(
 
 def flat_bars(count: int, price: str = "100") -> tuple[NormalizedPriceEvent, ...]:
     return tuple(make_bar(i, price, price, price, price) for i in range(count))
+
+
+def synthetic_manifest(
+    events: tuple[NormalizedPriceEvent, ...],
+) -> tuple[EdgeDatasetManifest, str]:
+    """Manifest + its hash for synthetic events (bars: allow bar length + 30s latency)."""
+    manifest = build_edge_manifest(
+        events,
+        Provenance(
+            data_class="synthetic_fixture",
+            source="synthetic-test",
+            retrieved_at=T0,
+            timezone="UTC",
+            tool_version="edge-test",
+        ),
+        max_latency=BAR + timedelta(seconds=30),
+    )
+    return manifest, manifest.manifest_hash

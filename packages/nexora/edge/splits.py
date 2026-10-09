@@ -24,8 +24,8 @@ class SplitError(ValueError):
 
 
 class HoldoutLocked(SplitError):
-    def __init__(self) -> None:
-        super().__init__("holdout_locked")
+    def __init__(self, code: str = "holdout_locked") -> None:
+        super().__init__(code)
 
 
 def _utc(value: datetime) -> None:
@@ -79,11 +79,49 @@ class SplitPlan:
 
 @dataclass(frozen=True, slots=True)
 class HoldoutUnlock:
-    """Explicit, auditable permission to read the holdout for the plan with this hash."""
+    """Explicit permission to read the holdout for the plan with this hash.
+
+    This is a declaration, not a credential: the library cannot prove who wrote it. Its
+    protection is that every use must be recorded in a `HoldoutAccessLog`, so a read is
+    never silent and a repeat read of the same holdout is visible to reviewers."""
 
     plan_hash: str
     authorized_by: str
     reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class HoldoutAccess:
+    sequence: int
+    plan_hash: str
+    authorized_by: str
+    reason: str
+    selected: int
+    # True when this plan's holdout had already been read once before.
+    repeat: bool
+
+
+class HoldoutAccessLog:
+    """Append-only record of holdout reads. Persist `entries` with the validation report."""
+
+    def __init__(self) -> None:
+        self._entries: list[HoldoutAccess] = []
+
+    @property
+    def entries(self) -> tuple[HoldoutAccess, ...]:
+        return tuple(self._entries)
+
+    def record(self, unlock: HoldoutUnlock, selected: int) -> HoldoutAccess:
+        entry = HoldoutAccess(
+            sequence=len(self._entries) + 1,
+            plan_hash=unlock.plan_hash,
+            authorized_by=unlock.authorized_by,
+            reason=unlock.reason,
+            selected=selected,
+            repeat=any(e.plan_hash == unlock.plan_hash for e in self._entries),
+        )
+        self._entries.append(entry)
+        return entry
 
 
 def select_segment[T](
@@ -93,21 +131,34 @@ def select_segment[T](
     segment: Segment,
     *,
     unlock: HoldoutUnlock | None = None,
+    access_log: HoldoutAccessLog | None = None,
 ) -> tuple[T, ...]:
-    """Items whose timestamp lies in the segment. `times` aligns with `items`."""
+    """Items whose timestamp lies in the segment. `times` aligns with `items`.
+
+    Reading the holdout needs an unlock for this exact plan AND an access log; the read is
+    recorded before the data is returned."""
     if len(items) != len(times):
         raise SplitError("length_mismatch")
-    if segment == "holdout" and (
-        unlock is None
-        or unlock.plan_hash != plan.plan_hash
-        or not unlock.authorized_by.strip()
-        or not unlock.reason.strip()
-    ):
-        raise HoldoutLocked
+    if segment == "holdout":
+        if (
+            unlock is None
+            or unlock.plan_hash != plan.plan_hash
+            or not unlock.authorized_by.strip()
+            or not unlock.reason.strip()
+        ):
+            raise HoldoutLocked
+        if access_log is None:
+            raise HoldoutLocked("holdout_access_log_required")
     low, high = plan.bounds(segment)
     for moment in times:
         _utc(moment)
-    return tuple(item for item, moment in zip(items, times, strict=True) if low <= moment < high)
+    selected = tuple(
+        item for item, moment in zip(items, times, strict=True) if low <= moment < high
+    )
+    if segment == "holdout":
+        assert unlock is not None and access_log is not None
+        access_log.record(unlock, len(selected))
+    return selected
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,8 +171,7 @@ class WalkForwardWindow:
 
 
 def walk_forward_windows(
-    start: datetime,
-    end: datetime,
+    plan: SplitPlan,
     *,
     train: timedelta,
     test: timedelta,
@@ -129,11 +179,12 @@ def walk_forward_windows(
     purge: timedelta = timedelta(0),
     anchored: bool = False,
 ) -> tuple[WalkForwardWindow, ...]:
-    """Chronological windows. Each test window starts after its train window plus purge,
-    and test windows never overlap one another. `end` must be the end of the *non-holdout*
-    range; pass `plan.validation_end` so walk-forward cannot reach the holdout."""
-    _utc(start)
-    _utc(end)
+    """Chronological windows over the plan's NON-holdout range [plan.start, validation_end).
+
+    The range comes from the plan, never from the caller, so walk-forward cannot reach the
+    holdout. Each test window starts after its train window plus purge, and test windows
+    never overlap one another."""
+    start, end = plan.start, plan.validation_end
     if train <= timedelta(0) or test <= timedelta(0) or purge < timedelta(0):
         raise SplitError("invalid_window_lengths")
     stride = step if step is not None else test
