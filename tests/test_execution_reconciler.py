@@ -27,8 +27,11 @@ from nexora.execution.reconciliation import (
 )
 from nexora.position.models import PositionRecord, ProtectionLevels
 
+from tests.execution_resolver_fixtures import identity_resolver
+
 NOW = datetime(2026, 10, 3, tzinfo=UTC)
 INSTR = "instrument:test"
+RESOLVER = identity_resolver(INSTR)
 
 
 def _local(
@@ -91,6 +94,7 @@ def _classify(
         local_positions=local,
         broker_snapshot=snap,
         observed_at=NOW,
+        instrument_resolver=RESOLVER,
         **kwargs,  # type: ignore[arg-type]
     )
 

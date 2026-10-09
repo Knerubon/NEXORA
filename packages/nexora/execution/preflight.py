@@ -19,6 +19,12 @@ Deliberately NOT decided here (ADR gaps; every one fails closed, see the task re
   numeric content is undecided. Risk-reducing kinds deny ``preflight_policy_undecided``
   (OPEN-11). OPEN denies ``preflight_policy_evaluation_unavailable``. Consequently
   ``allowed`` is currently unreachable from ``evaluate``; this is intentional.
+* OPEN-8 residual (PR-7, Rin-authorized NARROW scope): a REDUCE is additionally denied
+  with ``preflight_reduce_residual_volume_invalid`` unless ``0 < reduce < position`` and
+  the residual ``position - reduce`` is ``>= volume_min`` and on the volume step grid
+  (``volume_max`` bounds the ORDER quantity, not the residual position). A missing or
+  invalid ``position_quantity`` for a REDUCE uses the same reason. This is one more
+  deny gate; it never grants anything.
 * No freshness bound exists (OPEN-1). The bound is injected by the caller; none supplied
   or an invalid one denies with ``preflight_capabilities_freshness_bound_missing``.
 
@@ -27,9 +33,10 @@ return ``allowed=True`` (every path ends in at least one deny reason, see above)
 must not be used as, or treated as, an authorization to execute. There is no allow path
 and no OPEN-1/OPEN-11 resolution here.
 
-Reason-code vocabulary: the ten ``preflight_*`` codes below are the APPROVED V1
-diagnostic vocabulary (Rin, 2026-10-05); this approval does NOT resolve any OPEN policy
-item (OPEN-1, OPEN-11 etc.). The deviations from ADR-035 s3.5 (raw ``evaluated_at`` and
+Reason-code vocabulary: the ten ``preflight_*`` codes below plus the single PR-7 residual
+code are the APPROVED diagnostic vocabulary (Rin, 2026-10-05; residual code Rin, PR-7);
+this approval does NOT resolve any OPEN policy item (OPEN-1, OPEN-11 etc.).
+The deviations from ADR-035 s3.5 (raw ``evaluated_at`` and
 ``capabilities_observed_at: datetime | None`` on a deny; caller-injected
 ``max_capabilities_age``) are approved ONLY for this current deny-only / incomplete
 Preflight V1, not as a general contract change.
@@ -40,7 +47,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from nexora.autonomous.broker_capabilities import BrokerCapabilities, validate_volume
+from nexora.autonomous.broker_capabilities import (
+    BrokerCapabilities,
+    validate_residual_volume,
+    validate_volume,
+)
 from nexora.autonomous_contracts import TradeIntentKind, is_risk_reducing
 from nexora.execution.models import ExecutionRequest
 
@@ -55,6 +66,8 @@ REASON_FRESHNESS_BOUND_MISSING = "preflight_capabilities_freshness_bound_missing
 REASON_CAPABILITIES_STALE = "preflight_capabilities_stale"
 REASON_STOPS_FREEZE_UNAVAILABLE = "preflight_stops_freeze_check_unavailable"
 REASON_POLICY_EVALUATION_UNAVAILABLE = "preflight_policy_evaluation_unavailable"
+# PR-7 (Rin, OPEN-8 residual): the ONE additional reason; a deny gate only, never an allow.
+REASON_REDUCE_RESIDUAL_VOLUME_INVALID = "preflight_reduce_residual_volume_invalid"
 
 _QUANTITY_KINDS = (TradeIntentKind.OPEN, TradeIntentKind.REDUCE, TradeIntentKind.CLOSE)
 
@@ -118,11 +131,14 @@ class ExecutionPreflight:
         *,
         now: datetime,
         max_capabilities_age: timedelta | None = None,
+        position_quantity: object = None,
     ) -> PreflightDecision:
         """DENY-ONLY in V1 (never returns an allowed decision). ``market_refs`` is
         accepted for the ADR-035 s3.5 signature but unused: its shape is undefined (ADR gap).
         ``max_capabilities_age`` is the APPROVED freshness bound supplied by the caller;
-        ``None`` fails closed.
+        ``None`` fails closed. ``position_quantity`` (additive, keyword) is the already
+        resolved local position quantity; it is consulted only for a REDUCE (OPEN-8
+        residual rule) and is never defaulted.
         """
 
         del market_refs
@@ -153,6 +169,9 @@ class ExecutionPreflight:
                     else:
                         if volume_reason is not None:
                             add(volume_reason)
+            if request.action is TradeIntentKind.REDUCE and request.quantity is not None:
+                if validate_residual_volume(capabilities, position_quantity, request.quantity):
+                    add(REASON_REDUCE_RESIDUAL_VOLUME_INVALID)
             if not _is_aware(capabilities.observed_at):
                 add(REASON_CLOCK_REQUIRES_TIMEZONE)
             for code in _freshness_reasons(capabilities, now, max_capabilities_age):

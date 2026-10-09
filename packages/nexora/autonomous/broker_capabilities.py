@@ -273,3 +273,158 @@ def validate_volume(capabilities: BrokerCapabilities, quantity: Decimal) -> str 
         return None
     except Exception:
         return REASON_VOLUME_STEP_MISMATCH
+
+
+# --------------------------------------------------------------------------- residual (OPEN-8)
+#
+# Exact signed-sum machinery over ``(coefficient, exponent)`` pairs. There is NO numeric cap,
+# threshold or timeout: a term pair is only ever aligned (``10**gap``) when the gap is bounded
+# by the operands' own digit counts, and a term whose exponent gap is larger is handled by a
+# mathematical dominance / valuation argument instead of being materialised.
+
+
+def _floor_log10(value: int) -> int:
+    """Exact ``floor(log10(value))`` for a positive integer (no int->str conversion)."""
+
+    estimate = ((value.bit_length() - 1) * 301029995663981) // 10**15
+    power = 10**estimate
+    while power * 10 <= value:
+        power *= 10
+        estimate += 1
+    return estimate
+
+
+def _decimal_terms(*signed: tuple[int, Decimal]) -> list[tuple[int, int]]:
+    terms: list[tuple[int, int]] = []
+    for sign, value in signed:
+        coefficient, exponent = _signed_coefficient(value)
+        if coefficient != 0:
+            terms.append((sign * coefficient, exponent))
+    return terms
+
+
+def _aligned_sum(terms: list[tuple[int, int]]) -> tuple[int, int]:
+    """Exact sum of terms whose exponent gaps are bounded by their digit counts."""
+
+    lowest = min(exponent for _, exponent in terms)
+    return sum(c * 10 ** (e - lowest) for c, e in terms), lowest
+
+
+def _sign_of_terms(terms: list[tuple[int, int]]) -> int:
+    """Exact sign of ``sum(c * 10**e)``. Cost scales with operand sizes, never with an
+    exponent gap: the top term(s) (adjusted exponent within 1 of the maximum) are summed
+    exactly (their gaps are bounded by operand digit counts); a single term within 1 of the
+    top dominates every term at least 2 orders lower (at most two others) and decides the
+    sign."""
+
+    work = [(c, e) for c, e in terms if c != 0]
+    while True:
+        if not work:
+            return 0
+        if len(work) == 1:
+            return 1 if work[0][0] > 0 else -1
+        adjusted = [e + _floor_log10(abs(c)) for c, e in work]
+        top = max(adjusted)
+        near = [t for t, a in zip(work, adjusted, strict=True) if a >= top - 1]
+        far = [t for t, a in zip(work, adjusted, strict=True) if a < top - 1]
+        if len(near) == 1 and far:
+            return 1 if near[0][0] > 0 else -1  # |far| < 2 * 10**(top - 1) <= 10**top
+        total, lowest = _aligned_sum(near)
+        if not far:
+            return 0 if total == 0 else (1 if total > 0 else -1)
+        work = ([(total, lowest)] if total != 0 else []) + far
+
+
+def _terms_on_step_grid(terms: list[tuple[int, int]], step: Decimal) -> bool:
+    """Exact test that ``sum(c * 10**e)`` is an integer multiple of ``step`` (any finite
+    Decimals, any exponents, independent of the decimal context). Generalises
+    ``_on_step_grid`` to several terms with the same valuation argument: terms at equal
+    exponent are merged; the lowest term ``y`` absorbs the next one while the gap is at most
+    ``bit_length(|y|)`` (bounded by operand size); once every remaining gap exceeds that, all
+    other terms are divisible by ``10**gap`` whose 2- and 5-adic valuations exceed those of
+    ``y``, so ``v2``/``v5`` of the sum are those of ``y`` and the remainder modulo the
+    coprime part ``m`` of the step is formed with ``pow(10, gap, m)`` (no ``10**gap``)."""
+
+    cs, es = _signed_coefficient(step)
+    if cs == 0:
+        return False
+    merged: dict[int, int] = {}
+    for c, e in terms:
+        merged[e] = merged.get(e, 0) + c
+    work = sorted((e, c) for e, c in merged.items() if c != 0)
+    while work:
+        e0, c0 = work[0]
+        if len(work) == 1 or work[1][0] - e0 > abs(c0).bit_length():
+            break
+        gap = work[1][0] - e0
+        c0 += work[1][1] * 10**gap
+        rest = work[2:]
+        work = ([(e0, c0)] if c0 != 0 else []) + rest
+    if not work:
+        return True  # the sum is exactly zero
+    e0, c0 = work[0]
+    a2 = _two_adic_valuation(cs)
+    a5, m = _strip_prime(abs(cs) >> a2, 5)
+    remainder = c0 + sum(c * pow(10, e - e0, m) for e, c in work[1:])
+    if remainder % m != 0:
+        return False
+    return _divisible_by_prime_power(c0, 2, a2 + es - e0) and _divisible_by_prime_power(
+        c0, 5, a5 + es - e0
+    )
+
+
+def validate_residual_volume(
+    capabilities: BrokerCapabilities, position_quantity: object, reduce_quantity: object
+) -> str | None:
+    """OPEN-8 residual rule for a REDUCE (ADR-035 s4.5 / s11 OPEN-8; no exemption, so a
+    non-conforming residual is blocked). Pure and TOTAL (never raises).
+
+    The residual ``r = position_quantity - reduce_quantity`` is valid iff ``r > 0``,
+    ``r >= volume_min`` and ``(r - anchor) / volume_step`` is an integer (anchor =
+    ``volume_step_anchor`` if declared, else ``volume_min``). ``volume_max`` bounds an
+    ORDER quantity, not a position, so it is deliberately NOT applied to the residual
+    (the requested order quantity is validated separately by ``validate_volume``).
+
+    Exact: no float, rounding, capping or adjustment, and NO numeric threshold. ``r`` is
+    never materialised: the sign checks and the step test run on the signed terms
+    ``position``, ``-reduce`` (``-min`` / ``-anchor``) with the exponent-gap-independent
+    algorithms above. Every Decimal operand (position, reduce, ``volume_min``,
+    ``volume_step``, the anchor) must be EXACTLY ``Decimal`` (subclasses, which could lie
+    about comparisons, are rejected). Returns a volume reason code
+    (``volume_below_min`` / ``volume_not_multiple_of_step``) or ``None`` when valid;
+    wrong types, non-finite or non-positive values, ``reduce >= position`` and any
+    unexpected failure are rejected fail-closed.
+    """
+
+    try:
+        if type(capabilities) is not BrokerCapabilities:
+            return REASON_VOLUME_STEP_MISMATCH
+        anchor_value = capabilities.volume_step_anchor
+        anchor = anchor_value if anchor_value is not None else capabilities.volume_min
+        operands = (
+            position_quantity,
+            reduce_quantity,
+            capabilities.volume_min,
+            capabilities.volume_step,
+            anchor,
+        )
+        for value in operands:
+            if type(value) is not Decimal or not value.is_finite():
+                return REASON_VOLUME_STEP_MISMATCH
+        assert type(position_quantity) is Decimal and type(reduce_quantity) is Decimal
+        if position_quantity <= 0 or reduce_quantity <= 0:
+            return REASON_VOLUME_STEP_MISMATCH
+        volume_min, step = capabilities.volume_min, capabilities.volume_step
+        if _sign_of_terms(_decimal_terms((1, position_quantity), (-1, reduce_quantity))) <= 0:
+            return REASON_VOLUME_BELOW_MIN
+        floor_terms = _decimal_terms(
+            (1, position_quantity), (-1, reduce_quantity), (-1, volume_min)
+        )
+        if _sign_of_terms(floor_terms) < 0:
+            return REASON_VOLUME_BELOW_MIN
+        grid = _decimal_terms((1, position_quantity), (-1, reduce_quantity), (-1, anchor))
+        if not _terms_on_step_grid(grid, step):
+            return REASON_VOLUME_STEP_MISMATCH
+        return None
+    except Exception:
+        return REASON_VOLUME_STEP_MISMATCH
