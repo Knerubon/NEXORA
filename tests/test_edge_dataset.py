@@ -45,9 +45,9 @@ def test_clean_dataset_builds_verifies_and_is_deterministic() -> None:
     verify_edge_dataset(a, events, expected_manifest_hash=a.manifest_hash)
 
 
-def test_synthetic_data_is_never_statistical_evidence() -> None:
-    m = build_edge_manifest(flat_bars(5), prov(), max_latency=LATENCY)
-    assert not m.statistical_evidence_eligible
+def test_no_label_makes_a_dataset_statistical_evidence() -> None:
+    synthetic = build_edge_manifest(flat_bars(5), prov(), max_latency=LATENCY)
+    assert not synthetic.statistical_evidence_eligible and not synthetic.declared_real_market
     real_events = tuple(
         replace(
             e,
@@ -61,7 +61,9 @@ def test_synthetic_data_is_never_statistical_evidence() -> None:
         prov("real_market"), source="adapter-feed", capability_profile_ref="profile:abc"
     )
     real = build_edge_manifest(real_events, real_prov, max_latency=LATENCY)
-    assert real.statistical_evidence_eligible
+    # The label is recorded, but it can never make the data eligible (nexora.edge.evidence).
+    assert real.declared_real_market
+    assert not real.statistical_evidence_eligible
 
 
 def test_provenance_change_changes_manifest_hash() -> None:

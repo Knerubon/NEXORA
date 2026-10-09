@@ -65,6 +65,8 @@ def flat_bars(count: int, price: str = "100") -> tuple[NormalizedPriceEvent, ...
 
 def synthetic_manifest(
     events: tuple[NormalizedPriceEvent, ...],
+    *,
+    max_latency: timedelta = BAR + timedelta(seconds=30),
 ) -> tuple[EdgeDatasetManifest, str]:
     """Manifest + its hash for synthetic events (bars: allow bar length + 30s latency)."""
     manifest = build_edge_manifest(
@@ -76,6 +78,6 @@ def synthetic_manifest(
             timezone="UTC",
             tool_version="edge-test",
         ),
-        max_latency=BAR + timedelta(seconds=30),
+        max_latency=max_latency,
     )
     return manifest, manifest.manifest_hash

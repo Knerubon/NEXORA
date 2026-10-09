@@ -41,8 +41,8 @@ D = Decimal
 LAT = BAR + timedelta(seconds=30)
 DECISION = T0 + BAR
 ZERO = CostModel("t", "XXX", KNOWN_ZERO, KNOWN_ZERO, KNOWN_ZERO, KNOWN_ZERO)
-ONE = ExitPolicy("h1", "one_position")
-OVERLAP = ExitPolicy("h1", "allow_overlap")
+ONE = ExitPolicy("h1", "one_position", BAR)
+OVERLAP = ExitPolicy("h1", "allow_overlap", BAR)
 PLAN = TradePlan("a", "long", DECISION, D("98"), D("104"))
 ENTRY = ("100", "101", "99.5", "100.5")
 
@@ -278,17 +278,14 @@ def test_f4_real_market_requires_an_adapter_capability_reference() -> None:
         build_edge_manifest(real_events(), blank, max_latency=LAT)
 
 
-def test_f4_properly_attested_real_market_is_eligible_and_flows_into_the_run() -> None:
+def test_f4_attested_real_market_label_still_yields_no_statistical_eligibility() -> None:
     prov = Provenance("real_market", "adapter-feed", T0, "UTC", "v", capability_profile_ref="p:1")
-    events = real_events()
-    manifest = build_edge_manifest(events, prov, max_latency=LAT)
-    assert manifest.statistical_evidence_eligible
-    # The run carries the eligibility of the data it was bound to.
     bars = tuple(
         replace(b, source="adapter-feed", identity_key=f"feed:{i}", source_event_id=f"feed:{i}")
         for i, b in enumerate(bars_after_quiet(ENTRY, ("100.5", "104.5", "100", "104")))
     )
     manifest = build_edge_manifest(bars, prov, max_latency=LAT)
+    assert manifest.declared_real_market
     result = run_exit_mode(
         (PLAN,),
         bars,
@@ -298,8 +295,10 @@ def test_f4_properly_attested_real_market_is_eligible_and_flows_into_the_run() -
         cost_model=ZERO,
         unit_size=D("1"),
     )
-    assert result.statistical_evidence_eligible
-    assert "synthetic_data_not_statistical_evidence" not in result.notes
+    # Integrity is verified, but nothing independent vouches for provenance or authorization.
+    assert result.gates.dataset_integrity_verified
+    assert not result.statistical_evidence_eligible
+    assert "statistical_evidence_fail_closed" in result.notes
 
 
 def test_f4_holdout_reads_are_logged_and_repeats_are_flagged() -> None:
@@ -453,7 +452,7 @@ def test_f8_time_stop_and_gap_exits_are_exact() -> None:
     held = simulate_exit(
         PLAN,
         bars_after_quiet(ENTRY, ("100.5", "101", "100", "100.8")),
-        ExitPolicy("t", "allow_overlap", max_hold_bars=2),
+        ExitPolicy("t", "allow_overlap", BAR, max_hold_bars=2),
     )
     gap = simulate_exit(PLAN, bars_after_quiet(ENTRY, ("96", "97", "95", "96.5")), OVERLAP)
     assert held.exit_reason == "time" and not held.exit_time_upper_bound

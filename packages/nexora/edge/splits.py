@@ -2,7 +2,11 @@
 
 Splits are defined by absolute UTC boundaries, never by shuffling. An optional purge gap
 keeps a label horizon from straddling a boundary. The holdout is locked: reading it needs
-an explicit unlock bound to the exact plan hash.
+an unlock bound to the exact plan hash AND an access log, and every read is recorded.
+
+Neither the unlock nor the log is proof of authority: both are caller-supplied objects. They
+make a holdout read deliberate and visible; they do not authorize a statistical claim (see
+`nexora.edge.evidence`).
 """
 
 from __future__ import annotations
@@ -10,11 +14,14 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Literal
+from typing import Literal, cast
 
 from nexora.artifacts import canonical_hash
 
 Segment = Literal["train", "validation", "holdout"]
+# Closed vocabulary. Anything else is rejected, never mapped to a segment by fall-through.
+SEGMENTS: tuple[str, ...] = ("train", "validation", "holdout")
+_MICROSECOND = timedelta(microseconds=1)
 
 
 class SplitError(ValueError):
@@ -28,9 +35,26 @@ class HoldoutLocked(SplitError):
         super().__init__(code)
 
 
-def _utc(value: datetime) -> None:
+def validate_segment(segment: object) -> Segment:
+    """Exact, case-sensitive match against the closed vocabulary. A `str` subclass (which
+    could override `==`) and every other type are rejected."""
+    if type(segment) is not str or segment not in SEGMENTS:
+        raise SplitError("invalid_segment")
+    return cast(Segment, segment)
+
+
+def _aware(value: object) -> datetime:
+    if not isinstance(value, datetime):
+        raise SplitError("invalid_split_input")
     if value.tzinfo is None or value.utcoffset() is None:
         raise SplitError("timezone_required")
+    return value
+
+
+def _duration(value: object) -> timedelta:
+    if not isinstance(value, timedelta):
+        raise SplitError("invalid_split_input")
+    return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,8 +70,8 @@ class SplitPlan:
 
     def __post_init__(self) -> None:
         for value in (self.start, self.train_end, self.validation_end, self.end):
-            _utc(value)
-        if self.purge < timedelta(0):
+            _aware(value)
+        if _duration(self.purge) < timedelta(0):
             raise SplitError("negative_purge")
         if not (
             self.start < self.train_end
@@ -58,32 +82,33 @@ class SplitPlan:
 
     @property
     def plan_hash(self) -> str:
-        # timedelta is not canonically serializable; hash the purge as whole seconds.
+        # timedelta is not canonically serializable; hash the purge in whole microseconds so
+        # two different purges can never collide.
         return canonical_hash(
             (
                 self.start,
                 self.train_end,
                 self.validation_end,
                 self.end,
-                int(self.purge.total_seconds()),
+                self.purge // _MICROSECOND,
             )
         )
 
-    def bounds(self, segment: Segment) -> tuple[datetime, datetime]:
-        if segment == "train":
+    def bounds(self, segment: str) -> tuple[datetime, datetime]:
+        name = validate_segment(segment)
+        if name == "train":
             return self.start, self.train_end
-        if segment == "validation":
+        if name == "validation":
             return self.train_end + self.purge, self.validation_end
         return self.validation_end + self.purge, self.end
 
 
 @dataclass(frozen=True, slots=True)
 class HoldoutUnlock:
-    """Explicit permission to read the holdout for the plan with this hash.
+    """A caller's DECLARATION that the holdout of the plan with this hash may be read.
 
-    This is a declaration, not a credential: the library cannot prove who wrote it. Its
-    protection is that every use must be recorded in a `HoldoutAccessLog`, so a read is
-    never silent and a repeat read of the same holdout is visible to reviewers."""
+    It is not a credential: the library cannot prove who wrote it. Its only effect is that a
+    holdout read must be explicit and must be recorded in a `HoldoutAccessLog`."""
 
     plan_hash: str
     authorized_by: str
@@ -99,10 +124,14 @@ class HoldoutAccess:
     selected: int
     # True when this plan's holdout had already been read once before.
     repeat: bool
+    # Always False: the authorization came from a caller-supplied object and was never
+    # verified by anything independent of the caller.
+    authorization_verified: bool = False
 
 
 class HoldoutAccessLog:
-    """Append-only record of holdout reads. Persist `entries` with the validation report."""
+    """In-memory record of holdout reads. Not tamper-evident and not authoritative; persist
+    `entries` with the report and let a reviewer judge them."""
 
     def __init__(self) -> None:
         self._entries: list[HoldoutAccess] = []
@@ -119,43 +148,95 @@ class HoldoutAccessLog:
             reason=unlock.reason,
             selected=selected,
             repeat=any(e.plan_hash == unlock.plan_hash for e in self._entries),
+            authorization_verified=False,
         )
         self._entries.append(entry)
         return entry
+
+
+def _check_access(
+    plan: SplitPlan,
+    segment: Segment,
+    unlock: HoldoutUnlock | None,
+    access_log: HoldoutAccessLog | None,
+) -> None:
+    """The single gate for every code path that can read holdout data."""
+    if segment != "holdout":
+        return
+    if (
+        unlock is None
+        or unlock.plan_hash != plan.plan_hash
+        or not unlock.authorized_by.strip()
+        or not unlock.reason.strip()
+    ):
+        raise HoldoutLocked
+    if access_log is None:
+        raise HoldoutLocked("holdout_access_log_required")
 
 
 def select_segment[T](
     plan: SplitPlan,
     items: Sequence[T],
     times: Sequence[datetime],
-    segment: Segment,
+    segment: str,
     *,
     unlock: HoldoutUnlock | None = None,
     access_log: HoldoutAccessLog | None = None,
 ) -> tuple[T, ...]:
-    """Items whose timestamp lies in the segment. `times` aligns with `items`.
+    """Point-in-time items whose timestamp lies in the segment. `times` aligns with `items`.
 
-    Reading the holdout needs an unlock for this exact plan AND an access log; the read is
-    recorded before the data is returned."""
-    if len(items) != len(times):
+    For items that span an interval (bars) use `select_completed_segment`: an item selected
+    here by its start alone may finish after the segment ends."""
+    name = validate_segment(segment)
+    _check_access(plan, name, unlock, access_log)
+    stored = tuple(items)
+    stamps = tuple(times)
+    if len(stored) != len(stamps):
         raise SplitError("length_mismatch")
-    if segment == "holdout":
-        if (
-            unlock is None
-            or unlock.plan_hash != plan.plan_hash
-            or not unlock.authorized_by.strip()
-            or not unlock.reason.strip()
-        ):
-            raise HoldoutLocked
-        if access_log is None:
-            raise HoldoutLocked("holdout_access_log_required")
-    low, high = plan.bounds(segment)
-    for moment in times:
-        _utc(moment)
+    low, high = plan.bounds(name)
+    for moment in stamps:
+        _aware(moment)
     selected = tuple(
-        item for item, moment in zip(items, times, strict=True) if low <= moment < high
+        item for item, moment in zip(stored, stamps, strict=True) if low <= moment < high
     )
-    if segment == "holdout":
+    if name == "holdout":
+        assert unlock is not None and access_log is not None
+        access_log.record(unlock, len(selected))
+    return selected
+
+
+def select_completed_segment[T](
+    plan: SplitPlan,
+    items: Sequence[T],
+    starts: Sequence[datetime],
+    ends: Sequence[datetime],
+    segment: str,
+    *,
+    unlock: HoldoutUnlock | None = None,
+    access_log: HoldoutAccessLog | None = None,
+) -> tuple[T, ...]:
+    """Items whose whole interval [start, end] lies inside the segment.
+
+    An item that starts in one segment but is only complete (or only available) after the
+    segment ends belongs to NO segment, exactly like a purged item. This keeps information
+    that arrived after a boundary out of the earlier segment."""
+    name = validate_segment(segment)
+    _check_access(plan, name, unlock, access_log)
+    stored = tuple(items)
+    opens = tuple(starts)
+    closes = tuple(ends)
+    if not len(stored) == len(opens) == len(closes):
+        raise SplitError("length_mismatch")
+    low, high = plan.bounds(name)
+    for first, last in zip(opens, closes, strict=True):
+        if _aware(first) > _aware(last):
+            raise SplitError("invalid_interval")
+    selected = tuple(
+        item
+        for item, first, last in zip(stored, opens, closes, strict=True)
+        if low <= first and last <= high
+    )
+    if name == "holdout":
         assert unlock is not None and access_log is not None
         access_log.record(unlock, len(selected))
     return selected
@@ -184,7 +265,14 @@ def walk_forward_windows(
     The range comes from the plan, never from the caller, so walk-forward cannot reach the
     holdout. Each test window starts after its train window plus purge, and test windows
     never overlap one another."""
+    if not isinstance(plan, SplitPlan):
+        raise SplitError("invalid_split_input")
     start, end = plan.start, plan.validation_end
+    _duration(train)
+    _duration(test)
+    _duration(purge)
+    if step is not None:
+        _duration(step)
     if train <= timedelta(0) or test <= timedelta(0) or purge < timedelta(0):
         raise SplitError("invalid_window_lengths")
     stride = step if step is not None else test

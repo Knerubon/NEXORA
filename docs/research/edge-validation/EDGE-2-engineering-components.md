@@ -84,6 +84,30 @@ the checks reject obvious mislabelling and make every use visible, but only a re
 the data source and the authority. `HoldoutAccessLog` is in memory; persist `entries` with the
 report. The synthetic-marker check is a string heuristic.
 
+## Hardening Round 2 (PR #79)
+
+| Finding | Resolution |
+|---|---|
+| P0 holdout segment bypass | `SEGMENTS` is a closed vocabulary; `validate_segment` accepts only an exact `str` in it. Every entry point (`bounds`, `select_segment`, `select_completed_segment`, `run_exit_mode`) validates first; "Holdout", "oos", "", padded or non-str values raise `invalid_segment` and read nothing. |
+| P0 dataset policy not re-applied | `apply_dataset_policy` is the single policy used by build AND `verify_edge_dataset` (blocking issues, acceptable/absent accepted issues, UTC, durations, real_market attestation, sorted accepted state, status match, report match). Forged manifests that used to verify now fail closed. |
+| P0 evidence authorization | `evidence.py` separates integrity / provenance / holdout authorization / eligibility. Provenance and authorization are constant False (no independent mechanism exists, none invented); eligibility is therefore always False. Labels, adapter refs, `HoldoutUnlock` and the in-memory log are declarations only (`authorization_verified=False`). |
+| P1 sub-second purge hash | plan and policy hashes use integer microseconds. |
+| P1 straddling bars | `select_completed_segment`: an item belongs to a segment only if its whole [open, available] interval does. |
+| P1 malformed SplitPlan | type validation raises `SplitError`. |
+| P1 OHLC / quote validity | `invalid_ohlc` and non-finite/non-positive quotes block datasets and runs; `bar_received_before_close`. |
+| P1 side / action | `invalid_side`, `signal_action_side_mismatch`, `signal_not_actionable`. |
+| P1 one-shot iterators | inputs are materialised once. |
+| P1 feed-latency concurrency | `ExitPolicy.bar_interval` (required); holding/overlap/swap use bar close, not `received_at`. |
+
+API changes: `ExitPolicy(version, concurrency, bar_interval, ...)`; manifest durations are
+`*_us`; `EdgeExitRun.gates` replaces the boolean eligibility; `run_exit_mode` raises
+`conflicting_same_time_signals` under `one_position`.
+
+Still open and NOT decided here (Quant): same-time BUY/SELL tie-break (the run fails closed),
+open trades at a segment boundary (excluded and flagged), swap convention, target-touch fill
+assumption, overlapping-exposure semantics. `select_segment`'s own validation is redundant with
+`bounds()` by design (defence in depth).
+
 ## Data-quality note
 
 `max_latency` bounds `received_at - event_time`. For bars `event_time` is the bar open, so allow
@@ -103,5 +127,5 @@ the bar length plus a tolerance.
 ## Tests (all synthetic; see `tests/edge_fixtures.py`)
 
 `tests/test_edge_dataset.py`, `test_edge_splits.py`, `test_edge_costs.py`, `test_edge_exits.py`,
-`test_edge_hardening.py` cover deterministic replay, look-ahead prevention, holdout isolation, walk-forward boundaries,
+`test_edge_hardening.py`, `test_edge_hardening_r2.py` cover deterministic replay, look-ahead prevention, holdout isolation, walk-forward boundaries,
 cost accounting, invalid / missing data and extreme numerics.

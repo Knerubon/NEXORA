@@ -25,13 +25,14 @@ from typing import Literal
 from nexora.artifacts import canonical_hash
 from nexora.edge.costs import CostBreakdown, CostModel, compute_costs
 from nexora.edge.dataset import EdgeDatasetManifest, verify_edge_dataset
+from nexora.edge.evidence import EvidenceGates, evaluate_gates
 from nexora.edge.splits import (
     HoldoutAccess,
     HoldoutAccessLog,
     HoldoutUnlock,
-    Segment,
     SplitPlan,
-    select_segment,
+    select_completed_segment,
+    validate_segment,
 )
 from nexora.market_data.models import NormalizedPriceEvent
 from nexora.signals import ResearchSignal
@@ -60,24 +61,34 @@ class ExitInputError(ValueError):
 class ExitPolicy:
     version: str
     concurrency: Concurrency
+    # Length of one bar. Declared by the caller (no default): the bar CLOSE is event_time +
+    # bar_interval. Feed latency (received_at) says when data became available, not when the
+    # bar ended, and must never be used as the holding or concurrency clock.
+    bar_interval: timedelta
     ambiguity: AmbiguityPolicy = "stop_first"
     # Close at the bar close after this many bars (entry bar counts as 1). None = no time stop.
     max_hold_bars: int | None = None
     entry_delay: timedelta = timedelta(0)
 
     def __post_init__(self) -> None:
+        if self.concurrency not in ("one_position", "allow_overlap"):
+            raise ExitInputError("invalid_concurrency")
+        if not isinstance(self.bar_interval, timedelta) or self.bar_interval <= timedelta(0):
+            raise ExitInputError("invalid_bar_interval")
         if self.max_hold_bars is not None and self.max_hold_bars < 1:
             raise ExitInputError("invalid_max_hold_bars")
         if self.entry_delay < timedelta(0):
             raise ExitInputError("negative_entry_delay")
 
-    def hash_payload(self) -> tuple[str, str, str, int | None, int]:
+    def hash_payload(self) -> tuple[str, str, int, str, int | None, int]:
+        # Whole microseconds: sub-second differences must change the run identity.
         return (
             self.version,
             self.concurrency,
+            self.bar_interval // timedelta(microseconds=1),
             self.ambiguity,
             self.max_hold_bars,
-            int(self.entry_delay.total_seconds()),
+            self.entry_delay // timedelta(microseconds=1),
         )
 
 
@@ -97,6 +108,12 @@ def plan_from_signal(signal: ResearchSignal, *, target_name: Literal["TP1", "TP2
     decision = signal.decision
     if decision is None or decision.invalidation_price is None:
         raise ExitInputError("signal_missing_invalidation")
+    # The signal's side and its decision's action must agree; WAIT is not a trade.
+    if decision.action == "WAIT":
+        raise ExitInputError("signal_not_actionable")
+    expected_side = {"BUY": "long", "SELL": "short"}.get(decision.action)
+    if expected_side is None or signal.side != expected_side:
+        raise ExitInputError("signal_action_side_mismatch")
     targets = {t.name: t.price for t in decision.targets}
     if target_name not in targets:
         raise ExitInputError("signal_missing_target")
@@ -141,7 +158,7 @@ class ExitResult:
         return move if self.side == "long" else -move
 
 
-def _validate_bars(bars: Sequence[NormalizedPriceEvent]) -> None:
+def _validate_bars(bars: Sequence[NormalizedPriceEvent], interval: timedelta) -> None:
     previous: datetime | None = None
     for bar in bars:
         if bar.kind != "bar" or None in (bar.open_price, bar.high, bar.low, bar.close):
@@ -155,18 +172,27 @@ def _validate_bars(bars: Sequence[NormalizedPriceEvent]) -> None:
             or bar.low > min(bar.open_price, bar.close, bar.high)
         ):
             raise ExitInputError("invalid_ohlc")
+        # A quote must be a real price. A CROSSED quote (bid > ask) is tolerated and only makes
+        # that trade's spread unavailable; a non-finite or non-positive one is corrupt data.
+        for quote in (bar.bid, bar.ask):
+            if quote is not None and (not quote.is_finite() or quote <= 0):
+                raise ExitInputError("invalid_quote")
         if bar.event_time.tzinfo is None or bar.received_at.tzinfo is None:
             raise ExitInputError("timezone_required")
+        if bar.received_at < bar.event_time + interval:
+            raise ExitInputError("bar_received_before_close")
         if previous is not None and bar.event_time <= previous:
             raise ExitInputError("bars_not_strictly_increasing")
         previous = bar.event_time
 
 
 def _check_plan(plan: TradePlan) -> None:
+    if plan.side not in ("long", "short"):
+        raise ExitInputError("invalid_side")
     for price in (plan.stop_price, plan.target_price):
-        if not price.is_finite() or price <= 0:
+        if not isinstance(price, Decimal) or not price.is_finite() or price <= 0:
             raise ExitInputError("invalid_plan_price")
-    if plan.decision_time.tzinfo is None:
+    if not isinstance(plan.decision_time, datetime) or plan.decision_time.tzinfo is None:
         raise ExitInputError("timezone_required")
 
 
@@ -175,7 +201,7 @@ def simulate_exit(
 ) -> ExitResult:
     """Resolve one trade plan against completed bars. Pure and deterministic."""
     _check_plan(plan)
-    _validate_bars(bars)
+    _validate_bars(bars, policy.bar_interval)
     long = plan.side == "long"
     sign = 1 if long else -1
     target_time = plan.decision_time + policy.entry_delay
@@ -233,7 +259,7 @@ def simulate_exit(
             status="closed",
             entry_time=entry_bar.event_time,
             entry_price=entry,
-            exit_time=bar.event_time if at_open else bar.received_at,
+            exit_time=bar.event_time if at_open else bar.event_time + policy.bar_interval,
             exit_price=price,
             exit_reason=reason,
             bars_held=index - entry_index + 1,
@@ -366,7 +392,8 @@ class EdgeExitRun:
     unit_size: Decimal
     # Bound to the verified dataset: see `verify_edge_dataset`.
     manifest_hash: str
-    statistical_evidence_eligible: bool
+    # Four separate facts, never interchangeable (see `nexora.edge.evidence`).
+    gates: EvidenceGates
     segment: str  # "unsplit" or the evaluated segment name
     split_plan_hash: str | None
     holdout_access: HoldoutAccess | None
@@ -375,6 +402,10 @@ class EdgeExitRun:
     ambiguous_count: int
     skipped_overlap_count: int
     notes: tuple[str, ...]
+
+    @property
+    def statistical_evidence_eligible(self) -> bool:
+        return self.gates.statistical_evidence_eligible
 
 
 def run_exit_mode(
@@ -387,37 +418,51 @@ def run_exit_mode(
     cost_model: CostModel,
     unit_size: Decimal,
     split: SplitPlan | None = None,
-    segment: Segment | None = None,
+    segment: str | None = None,
     unlock: HoldoutUnlock | None = None,
     access_log: HoldoutAccessLog | None = None,
 ) -> EdgeExitRun:
     """Deterministic ledger for the SL/TP exit mode.
 
     `events` must be the complete dataset described by `manifest`; it is re-verified here
-    (hashes, integrity, quality) so a run id can never name data it was not computed on.
-    With `split` + `segment` only that segment's completed bars are used (the holdout needs
-    an unlock and an access log); every plan must decide inside the segment. Without them
-    the run is labelled `unsplit` and is not valid out-of-sample evidence."""
-    if not unit_size.is_finite() or unit_size <= 0:
-        raise ExitInputError("invalid_unit_size")
+    (hashes, integrity and the full acceptance policy) so a run id can never name data it was
+    not computed on. With `split` + `segment` only bars that are COMPLETE and AVAILABLE inside
+    that segment are used (the holdout needs an unlock and an access log); every plan must
+    decide inside the segment. Without them the run is labelled `unsplit` and is not valid
+    out-of-sample evidence.
+
+    The result's `gates` keep integrity, provenance, holdout authorization and eligibility
+    apart; the last three are False because no independent mechanism exists for them."""
     if (split is None) != (segment is None):
         raise ExitInputError("split_and_segment_must_be_given_together")
+    if segment is not None:
+        validate_segment(segment)  # closed vocabulary, checked before anything else
+    if not unit_size.is_finite() or unit_size <= 0:
+        raise ExitInputError("invalid_unit_size")
+    plan_list = tuple(plans)  # a one-shot iterator must not be consumed more than once
     dataset = tuple(events)
     try:
         verify_edge_dataset(manifest, dataset, expected_manifest_hash=expected_manifest_hash)
     except ValueError as exc:
         raise ExitInputError(f"dataset_verification_failed:{exc}") from exc
-    ids = [p.signal_id for p in plans]
+    ids = [p.signal_id for p in plan_list]
     if len(set(ids)) != len(ids):
         raise ExitInputError("duplicate_signal_id")
+    if policy.concurrency == "one_position":
+        stamps = [p.decision_time for p in plan_list]
+        if len(set(stamps)) != len(stamps):
+            # Which of several same-time signals trades first (BUY vs SELL, or different
+            # levels) is an open Quant decision. Fail closed instead of guessing by signal id.
+            raise ExitInputError("conflicting_same_time_signals")
 
     access: HoldoutAccess | None = None
     if split is not None and segment is not None:
         low, high = split.bounds(segment)
-        chosen = select_segment(
+        bars = select_completed_segment(
             split,
             dataset,
             [e.event_time for e in dataset],
+            [e.received_at for e in dataset],
             segment,
             unlock=unlock,
             access_log=access_log,
@@ -425,14 +470,12 @@ def run_exit_mode(
         if segment == "holdout":
             assert access_log is not None
             access = access_log.entries[-1]
-        # A bar that completes after the segment ends is not part of the segment.
-        bars = tuple(b for b in chosen if b.received_at <= high)
-        if any(not low <= p.decision_time < high for p in plans):
+        if any(not low <= p.decision_time < high for p in plan_list):
             raise ExitInputError("plan_outside_segment")
     else:
         bars = dataset
 
-    ordered = sorted(plans, key=lambda p: (p.decision_time, p.signal_id))
+    ordered = sorted(plan_list, key=lambda p: (p.decision_time, p.signal_id))
     trades: list[EdgeTrade] = []
     unresolved: list[ExitResult] = []
     busy_until: datetime | None = None
@@ -455,7 +498,7 @@ def run_exit_mode(
                 )
                 continue
             if outcome.status == "closed":
-                busy_until = outcome.exit_time
+                busy_until = outcome.exit_time  # bar close, never the (later) feed arrival time
             else:
                 blocked = True  # never closed inside the data: nothing later can be entered
         if outcome.status == "closed":
@@ -464,6 +507,7 @@ def run_exit_mode(
             unresolved.append(outcome)
 
     segment_name = segment if segment is not None else "unsplit"
+    gates = evaluate_gates(dataset_integrity_verified=True)  # verify_edge_dataset passed above
     run_id = "edge-exit-run:" + canonical_hash(
         (
             policy.hash_payload(),
@@ -483,8 +527,11 @@ def run_exit_mode(
         "legacy_time_delay_exit_unchanged",
         "tp_selection_and_sizing_are_open_quant_decisions",
         f"concurrency={policy.concurrency}",
+        "statistical_evidence_fail_closed",
+        *(f"blocker={b}" for b in gates.blockers),
+        "open_trades_at_segment_end_are_excluded_quant_decision_open",
     ]
-    if not manifest.statistical_evidence_eligible:
+    if not manifest.declared_real_market:
         notes.append("synthetic_data_not_statistical_evidence")
     if segment is None:
         notes.append("unsplit_run_not_valid_out_of_sample")
@@ -496,7 +543,7 @@ def run_exit_mode(
         cost_model=cost_model,
         unit_size=unit_size,
         manifest_hash=manifest.manifest_hash,
-        statistical_evidence_eligible=manifest.statistical_evidence_eligible,
+        gates=gates,
         segment=segment_name,
         split_plan_hash=split.plan_hash if split is not None else None,
         holdout_access=access,

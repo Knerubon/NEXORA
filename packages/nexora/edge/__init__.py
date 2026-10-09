@@ -25,6 +25,7 @@ from nexora.edge.dataset import (
     build_edge_manifest,
     verify_edge_dataset,
 )
+from nexora.edge.evidence import EvidenceGates, evaluate_gates
 from nexora.edge.exits import (
     EdgeExitRun,
     EdgeTrade,
@@ -38,6 +39,7 @@ from nexora.edge.exits import (
     to_edge_trade,
 )
 from nexora.edge.splits import (
+    SEGMENTS,
     HoldoutAccess,
     HoldoutAccessLog,
     HoldoutLocked,
@@ -45,12 +47,15 @@ from nexora.edge.splits import (
     SplitError,
     SplitPlan,
     WalkForwardWindow,
+    select_completed_segment,
     select_segment,
+    validate_segment,
     walk_forward_windows,
 )
 
 __all__ = [
     "KNOWN_ZERO",
+    "SEGMENTS",
     "UNAVAILABLE",
     "UNKNOWN",
     "CostBreakdown",
@@ -61,6 +66,7 @@ __all__ = [
     "EdgeDatasetManifest",
     "EdgeExitRun",
     "EdgeTrade",
+    "EvidenceGates",
     "ExitInputError",
     "ExitPolicy",
     "ExitResult",
@@ -77,11 +83,14 @@ __all__ = [
     "audit_events",
     "build_edge_manifest",
     "compute_costs",
+    "evaluate_gates",
     "plan_from_signal",
     "run_exit_mode",
+    "select_completed_segment",
     "select_segment",
     "simulate_exit",
     "to_edge_trade",
+    "validate_segment",
     "verify_edge_dataset",
     "walk_forward_windows",
 ]

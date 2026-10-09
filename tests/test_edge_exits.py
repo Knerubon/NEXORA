@@ -37,7 +37,7 @@ DECISION = T0 + BAR  # bar 0 closes here; bar 1 is the first bar that can be ent
 
 LONG = TradePlan("s-long", "long", DECISION, stop_price=D("98"), target_price=D("104"))
 SHORT = TradePlan("s-short", "short", DECISION, stop_price=D("102"), target_price=D("96"))
-POLICY = ExitPolicy(version="t1", concurrency="allow_overlap")
+POLICY = ExitPolicy(version="t1", concurrency="allow_overlap", bar_interval=BAR)
 ZERO_COSTS = CostModel("t", "XXX", KNOWN_ZERO, KNOWN_ZERO, KNOWN_ZERO, KNOWN_ZERO)
 
 
@@ -86,7 +86,7 @@ def test_short_mirror_target_and_stop() -> None:
 
 def test_time_stop_exits_at_close_after_n_bars() -> None:
     bars = bars_with(ENTRY, ("100.5", "101", "100", "100.8"), ("100.8", "101", "100", "100.2"))
-    r = sim(LONG, bars, ExitPolicy("t", "allow_overlap", max_hold_bars=2))
+    r = sim(LONG, bars, ExitPolicy("t", "allow_overlap", BAR, max_hold_bars=2))
     assert (r.exit_reason, r.exit_price, r.bars_held) == ("time", D("100.8"), 2)
 
 
@@ -121,7 +121,7 @@ def test_target_first_policy_is_available_but_still_flagged() -> None:
     r = sim(
         LONG,
         bars_with(ENTRY, ("100", "105", "97", "100")),
-        ExitPolicy("t", "allow_overlap", ambiguity="target_first"),
+        ExitPolicy("t", "allow_overlap", BAR, ambiguity="target_first"),
     )
     assert r.exit_reason == "target" and r.exit_price == D("104") and r.ambiguous
     assert r.assumptions == ("same_bar_stop_and_target_order_unknown:target_first",)
@@ -185,7 +185,7 @@ def test_result_is_independent_of_truncating_after_exit() -> None:
 
 def test_entry_never_precedes_decision_plus_delay() -> None:
     bars = tuple(quiet(i) for i in range(10))
-    r = sim(LONG, bars, ExitPolicy("t", "allow_overlap", entry_delay=timedelta(minutes=12)))
+    r = sim(LONG, bars, ExitPolicy("t", "allow_overlap", BAR, entry_delay=timedelta(minutes=12)))
     assert r.entry_time is not None
     assert r.entry_time >= DECISION + timedelta(minutes=12)
     assert r.entry_time == T0 + BAR * 4  # first bar open at/after 5m + 12m = 17m -> 20m
@@ -230,9 +230,9 @@ def test_invalid_plan_prices_rejected() -> None:
 
 def test_policy_validation() -> None:
     with pytest.raises(ExitInputError):
-        ExitPolicy("t", "allow_overlap", max_hold_bars=0)
+        ExitPolicy("t", "allow_overlap", BAR, max_hold_bars=0)
     with pytest.raises(ExitInputError):
-        ExitPolicy("t", "allow_overlap", entry_delay=timedelta(seconds=-1))
+        ExitPolicy("t", "allow_overlap", BAR, entry_delay=timedelta(seconds=-1))
 
 
 # ---- extreme numerics -----------------------------------------------------------------
