@@ -137,8 +137,19 @@ def _zigzag_stream() -> list[tuple[PnfTransition, tuple[ConfirmedPivot, ...]]]:
 # t8 is itself a local low once t9 bounces back up) and remains available through t10 and t11 --
 # this is what makes t10 a genuine H1 same-transition-chaining test, not a contrived one.
 LIFECYCLE_PRICES = [
-    "110", "100", "115", "105", "101.5", "110", "103.0", "102.9", "103.2", "102.0",
-    "90", "95", "100",
+    "110",
+    "100",
+    "115",
+    "105",
+    "101.5",
+    "110",
+    "103.0",
+    "102.9",
+    "103.2",
+    "102.0",
+    "90",
+    "95",
+    "100",
 ]
 
 
@@ -355,8 +366,12 @@ def test_bullish_retest_entry() -> None:
     anchor_b = _anchor("low", "101.5", 5, "tr-5")
     engine = TrendlineEngine(SYMBOL)
     engine._active_bullish = _line(
-        "bullish_support", anchor_a, anchor_b,
-        state="broken", break_column=8, break_transition_id="tr-8"
+        "bullish_support",
+        anchor_a,
+        anchor_b,
+        state="broken",
+        break_column=8,
+        break_transition_id="tr-8",
     )
     # projected@9 = 103.5; price=103.2 -> distance=-0.3, |distance| < box(1.0)
     snap = _step(engine, _t(1, 9, "103.2"), _structure(()))
@@ -373,8 +388,12 @@ def test_bearish_retest_entry() -> None:
     anchor_b = _anchor("high", "108.0", 4, "tr-4")
     engine = TrendlineEngine(SYMBOL)
     engine._active_bearish = _line(
-        "bearish_resistance", anchor_a, anchor_b,
-        state="broken", break_column=8, break_transition_id="tr-8"
+        "bearish_resistance",
+        anchor_a,
+        anchor_b,
+        state="broken",
+        break_column=8,
+        break_transition_id="tr-8",
     )
     # projected@9 = 103.0; price=103.4 -> distance=+0.4, |distance| < box(1.0)
     snap = _step(engine, _t(1, 9, "103.4"), _structure(()))
@@ -391,8 +410,13 @@ def test_bullish_retest_held() -> None:
     anchor_b = _anchor("low", "101.5", 5, "tr-5")
     engine = TrendlineEngine(SYMBOL)
     engine._active_bullish = _line(
-        "bullish_support", anchor_a, anchor_b, state="retesting", break_column=8,
-        break_transition_id="tr-8", retest_column=9,
+        "bullish_support",
+        anchor_a,
+        anchor_b,
+        state="retesting",
+        break_column=8,
+        break_transition_id="tr-8",
+        retest_column=9,
     )
     # projected@10 = 104.0; price=102.0 -> distance=-2.0 <= -box(1.0)
     snap = _step(engine, _t(1, 10, "102.0"), _structure(()))
@@ -411,8 +435,13 @@ def test_bullish_retest_failed() -> None:
     anchor_b = _anchor("low", "101.5", 5, "tr-5")
     engine = TrendlineEngine(SYMBOL)
     engine._active_bullish = _line(
-        "bullish_support", anchor_a, anchor_b, state="retesting", break_column=8,
-        break_transition_id="tr-8", retest_column=9,
+        "bullish_support",
+        anchor_a,
+        anchor_b,
+        state="retesting",
+        break_column=8,
+        break_transition_id="tr-8",
+        retest_column=9,
     )
     # projected@10 = 104.0; price=105.5 -> distance=+1.5 >= box(1.0)
     snap = _step(engine, _t(1, 10, "105.5"), _structure(()))
@@ -429,8 +458,13 @@ def test_bearish_retest_held() -> None:
     anchor_b = _anchor("high", "108.0", 4, "tr-4")
     engine = TrendlineEngine(SYMBOL)
     engine._active_bearish = _line(
-        "bearish_resistance", anchor_a, anchor_b, state="retesting", break_column=8,
-        break_transition_id="tr-8", retest_column=9,
+        "bearish_resistance",
+        anchor_a,
+        anchor_b,
+        state="retesting",
+        break_column=8,
+        break_transition_id="tr-8",
+        retest_column=9,
     )
     # projected@10 = 102.0; price=104.0 -> distance=+2.0 >= box(1.0)
     snap = _step(engine, _t(1, 10, "104.0"), _structure(()))
@@ -447,8 +481,13 @@ def test_bearish_retest_failed() -> None:
     anchor_b = _anchor("high", "108.0", 4, "tr-4")
     engine = TrendlineEngine(SYMBOL)
     engine._active_bearish = _line(
-        "bearish_resistance", anchor_a, anchor_b, state="retesting", break_column=8,
-        break_transition_id="tr-8", retest_column=9,
+        "bearish_resistance",
+        anchor_a,
+        anchor_b,
+        state="retesting",
+        break_column=8,
+        break_transition_id="tr-8",
+        retest_column=9,
     )
     # projected@10 = 102.0; price=100.0 -> distance=-2.0 <= -box(1.0)
     snap = _step(engine, _t(1, 10, "100.0"), _structure(()))
@@ -465,8 +504,15 @@ def test_sticky_retest_outcome_survives_further_transitions() -> None:
     anchor_b = _anchor("low", "101.5", 5, "tr-5")
     engine = TrendlineEngine(SYMBOL)
     engine._active_bullish = _line(
-        "bullish_support", anchor_a, anchor_b, state="retest_held", retest_outcome="held",
-        break_column=8, break_transition_id="tr-8", retest_column=9, retest_resolved_column=10,
+        "bullish_support",
+        anchor_a,
+        anchor_b,
+        state="retest_held",
+        retest_outcome="held",
+        break_column=8,
+        break_transition_id="tr-8",
+        retest_column=9,
+        retest_resolved_column=10,
         retest_resolved_sequence=0,
     )
     snap = _step(engine, _t(1, 11, "999.0"), _structure(()))
@@ -486,8 +532,12 @@ def test_broken_replaced_without_retest_preserves_none_outcome() -> None:
     anchor_b = _anchor("low", "101.5", 5, "tr-5")
     engine = TrendlineEngine(SYMBOL)
     engine._active_bullish = _line(
-        "bullish_support", anchor_a, anchor_b,
-        state="broken", break_column=8, break_transition_id="tr-8"
+        "bullish_support",
+        anchor_a,
+        anchor_b,
+        state="broken",
+        break_column=8,
+        break_transition_id="tr-8",
     )
     engine._lows = [
         _anchor("low", "105.0", 9, "tr-9"),
@@ -518,8 +568,15 @@ def test_retest_held_replaced_preserves_held_outcome() -> None:
     anchor_b = _anchor("low", "101.5", 5, "tr-5")
     engine = TrendlineEngine(SYMBOL)
     engine._active_bullish = _line(
-        "bullish_support", anchor_a, anchor_b, state="retest_held", retest_outcome="held",
-        break_column=8, break_transition_id="tr-8", retest_column=9, retest_resolved_column=10,
+        "bullish_support",
+        anchor_a,
+        anchor_b,
+        state="retest_held",
+        retest_outcome="held",
+        break_column=8,
+        break_transition_id="tr-8",
+        retest_column=9,
+        retest_resolved_column=10,
         retest_resolved_sequence=0,  # resolved "before" this engine's own tracked history (H1-safe)
     )
     engine._lows = [
@@ -543,8 +600,15 @@ def test_retest_failed_replaced_preserves_failed_outcome() -> None:
     anchor_b = _anchor("low", "101.5", 5, "tr-5")
     engine = TrendlineEngine(SYMBOL)
     engine._active_bullish = _line(
-        "bullish_support", anchor_a, anchor_b, state="retest_failed", retest_outcome="failed",
-        break_column=8, break_transition_id="tr-8", retest_column=9, retest_resolved_column=10,
+        "bullish_support",
+        anchor_a,
+        anchor_b,
+        state="retest_failed",
+        retest_outcome="failed",
+        break_column=8,
+        break_transition_id="tr-8",
+        retest_column=9,
+        retest_resolved_column=10,
         retest_resolved_sequence=0,
     )
     engine._lows = [
@@ -568,8 +632,13 @@ def test_h1_retest_resolution_and_replacement_do_not_share_a_transition() -> Non
     anchor_b = _anchor("low", "101.5", 5, "tr-5")
     engine = TrendlineEngine(SYMBOL)
     engine._active_bullish = _line(
-        "bullish_support", anchor_a, anchor_b, state="retesting",
-        break_column=8, break_transition_id="tr-8", retest_column=9,
+        "bullish_support",
+        anchor_a,
+        anchor_b,
+        state="retesting",
+        break_column=8,
+        break_transition_id="tr-8",
+        retest_column=9,
     )
     # A fresh valid anchor pair is already available (structurally identical to the "a new
     # Structure pivot forms a replacement candidate" scenario flagged in the review's H1).
@@ -705,9 +774,24 @@ def test_prefix_invariance_across_break_and_retest_resolution_boundaries() -> No
     assert future_resolved_line.anchor_a == resolved_line.anchor_a
     assert future_resolved_line.anchor_b == resolved_line.anchor_b
     assert future_resolved_line.slope_price_per_column == resolved_line.slope_price_per_column
-    # Appending t11 (replacement), t12, t13 to the full run must not retroactively touch
-    # anything recorded at or before the retest-resolution boundary -- already proven by the
-    # snapshot-list equality above; this is the same guarantee stated field-by-field.
+
+    # Retroactivity: t11 replaced the line, and t12/t13 were appended after that. The archived
+    # copy in the final history must still carry exactly what was recorded at each boundary --
+    # the replacement may only stamp state/replaced_by_line_id, never rewrite recorded facts.
+    archived = full_snapshots[-1].history[0]
+    assert archived.state == "replaced"
+    for recorded in (broken_line, resolved_line):
+        assert archived.line_id == recorded.line_id
+        assert archived.anchor_a == recorded.anchor_a
+        assert archived.anchor_b == recorded.anchor_b
+        assert archived.slope_price_per_column == recorded.slope_price_per_column
+        assert archived.touch_columns == recorded.touch_columns
+        assert archived.break_column == recorded.break_column
+        assert archived.break_transition_id == recorded.break_transition_id
+    assert archived.retest_column == resolved_line.retest_column
+    assert archived.retest_resolved_column == resolved_line.retest_resolved_column
+    assert archived.retest_resolved_sequence == resolved_line.retest_resolved_sequence
+    assert archived.retest_outcome == resolved_line.retest_outcome
 
 
 # --- 28. future pivot cannot rewrite historical line ----------------------------------------------
@@ -780,8 +864,12 @@ def test_history_retains_every_replaced_line_without_pruning() -> None:
     anchor_b = _anchor("low", "101.5", 5, "tr-5")
     engine = TrendlineEngine(SYMBOL)
     engine._active_bullish = _line(
-        "bullish_support", anchor_a, anchor_b,
-        state="broken", break_column=8, break_transition_id="tr-8"
+        "bullish_support",
+        anchor_a,
+        anchor_b,
+        state="broken",
+        break_column=8,
+        break_transition_id="tr-8",
     )
     engine._lows = [anchor_a, anchor_b]
     engine._known_pivot_count = 10_000  # anchors are injected directly; bypass real pivot ingestion
@@ -812,8 +900,12 @@ def test_equal_column_id_guard_is_a_safe_no_op_and_does_not_corrupt_active_line(
     anchor_b = _anchor("low", "101.5", 5, "tr-5")
     engine = TrendlineEngine(SYMBOL)
     engine._active_bullish = _line(
-        "bullish_support", anchor_a, anchor_b,
-        state="broken", break_column=8, break_transition_id="tr-8"
+        "bullish_support",
+        anchor_a,
+        anchor_b,
+        state="broken",
+        break_column=8,
+        break_transition_id="tr-8",
     )
     # Two pathological same-kind anchors sharing column_id=9 -- cannot occur from real
     # StructureEngine pivots (verified in review), but must not crash the slope division
@@ -834,6 +926,73 @@ def test_equal_column_id_guard_is_a_safe_no_op_and_does_not_corrupt_active_line(
     assert snap.active_bullish.anchor_a.price == Decimal("100.0")
     assert snap.active_bullish.anchor_b.price == Decimal("101.5")
     assert snap.history == ()  # no line formed or replaced from the equal-column pair
+
+
+def _equal_column_pool() -> list[TrendlineAnchor]:
+    return [
+        _anchor("low", "100.0", 2, "tr-2"),
+        _anchor("low", "101.5", 5, "tr-5"),
+        _anchor("low", "90.0", 9, "tr-9a"),
+        _anchor("low", "95.0", 9, "tr-9b"),
+    ]
+
+
+def test_equal_column_id_pair_forms_no_line_when_none_exists() -> None:
+    # Formation path (no current line): without the guard this is where the slope division
+    # by (column_b - column_a) == 0 would actually be reached.
+    engine = TrendlineEngine(SYMBOL)
+    engine._lows = _equal_column_pool()[2:]
+    engine._known_pivot_count = 10_000
+
+    snap = _step(engine, _t(1, 12, "50.0"), _structure(()))
+
+    assert snap.active_bullish is None
+    assert snap.history == ()
+
+
+def test_equal_column_id_pair_leaves_valid_active_line_untouched() -> None:
+    pool = _equal_column_pool()
+    engine = TrendlineEngine(SYMBOL)
+    engine._active_bullish = _line("bullish_support", pool[0], pool[1])
+    engine._lows = pool
+    engine._known_pivot_count = 10_000
+
+    # projected@12 = 101.5 + 0.5 * 7 = 105.0; price 110 is neither a touch nor a break.
+    snap = _step(engine, _t(1, 12, "110.0"), _structure(()))
+
+    assert snap.active_bullish is not None
+    assert snap.active_bullish.state == "active"
+    assert snap.active_bullish.anchor_a == pool[0]
+    assert snap.active_bullish.anchor_b == pool[1]
+    assert snap.active_bullish.slope_price_per_column == Decimal("0.5")
+    assert snap.history == ()
+
+
+# --- Same-transition precedence: break + replacement (ADR-020 Decision 8, characterization) -----
+
+
+def test_break_and_replacement_may_share_a_transition_per_adr_020_decision_8() -> None:
+    # ADR-020 freezes ONLY retest-resolution/replacement as forbidden on one transition. A
+    # break is deliberately unrestricted: t8 breaks the line AND confirms t7 as a higher low
+    # (102.6 > 101.5), so the replacement pair is already available at the break transition.
+    # This pins that documented behavior; it is NOT an endorsement -- see the PR 28 findings.
+    prices = ["110", "100", "115", "105", "101.5", "110", "102.6", "102.8", "103.5"]
+    engine = TrendlineEngine(SYMBOL)
+    snapshots = [_step(engine, t, _structure(p)) for t, p in _pivot_stream(prices)]
+
+    before_break = snapshots[6]  # t7: touch
+    at_break = snapshots[7]  # t8: break transition
+    assert before_break.active_bullish is not None
+    assert before_break.active_bullish.state == "active"
+    assert before_break.active_bullish.anchor_b.price == Decimal("101.5")
+
+    assert at_break.active_bullish is not None
+    assert at_break.active_bullish.state == "active"  # already the NEW line
+    assert at_break.active_bullish.anchor_b.price == Decimal("102.6")
+    assert len(at_break.history) == 1
+    assert at_break.history[0].state == "replaced"
+    assert at_break.history[0].break_column == 8  # the break is only visible via history
+    assert at_break.history[0].retest_outcome == "none"
 
 
 # --- M3. full lifecycle via real StructureEngine-style ingestion, including the H1 guard --------

@@ -134,6 +134,20 @@ This ordering is enforced using the engine's own monotonic transition-processing
 
 This rule applies **only** to the `retesting → retest_held`/`retest_failed → replaced` path. It does not change or restrict the already-frozen `active → broken → replaced` path: Decision 8's "replacement need not wait for a retest to resolve" continues to mean a `broken` line may be replaced immediately, including on the very same transition that broke it — that composition was already an intended reading of Decision 8 and remains unchanged. Only a resolution and a replacement are forbidden from sharing a transition.
 
+**Same-transition precedence table** (what may share transition N with a replacement; verified by mutation testing — removing the guard fails the listed tests):
+
+| Event on the current line at transition N | Replacement allowed on the same transition N? | Snapshot N shows as current | Pinned by test |
+|---|---|---|---|
+| none (no current line), valid latest pair | n/a — line forms | new `active` line | `test_bullish_low_to_higher_low_forms_line` |
+| `active` touch | no — `active` is not replaceable | `active` (+ touch) | `test_touch_at_distance_zero` |
+| `active → broken` (break) | **yes** (Decision 8, unchanged) | the **new** `active` line; `broken` visible only in `history` | `test_break_and_replacement_may_share_a_transition_per_adr_020_decision_8` |
+| `broken → retesting` (retest entry) | no — `retesting` is not replaceable | `retesting` | `test_bullish_retest_entry` |
+| `retesting → retest_held` / `retest_failed` | **no — frozen as forbidden (H1)** | `retest_held` / `retest_failed`, `retest_outcome` set | `test_h1_retest_resolution_and_replacement_do_not_share_a_transition`, `test_full_lifecycle_via_real_ingestion_with_h1_same_transition_guard` |
+| `retest_held` / `retest_failed`, at a **later** transition (`sequence > retest_resolved_sequence`), new pair available | yes | `replaced` archived to `history`; new `active` | same two tests (N+1 half) |
+| latest pair has equal `column_id` | ignored (guard) — never reaches slope division | unchanged | `test_equal_column_id_*` |
+
+Open observation (not changed here — outside the H1 decision): the `active → broken` row means a break and its replacement can share a transition, so the `broken` state is then observable only through `history`, the same consumer-visibility trade-off H1 removes for retest resolution. Decision 8 states this composition is intended; whether `broken` should also persist for one snapshot is left as an explicit architect decision.
+
 **Why:** `RETEST_HELD`/`RETEST_FAILED` must be observable as deterministic current state for at least the snapshot of the transition that produced it. Downstream consumers (Entry Readiness, Experience observation, frontend rendering, AI structured input, future research consumers) must not be required to inspect `history` to discover that a retest resolution occurred.
 
 ## Decision 9 — State model
