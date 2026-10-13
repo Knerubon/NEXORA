@@ -98,9 +98,10 @@ consumer surfaced only in this revision), the precise problem restatement, exhau
 option, and C rejected outright) with exact compatibility/consumer impact, cross-cutting
 implications (TTL/freshness, idempotency namespacing limits, account/reservation shared-budget
 hazard, replay scope, stop-size/unit policy, PaperSimulator and PositionRecord provenance
-dependencies), and a QUANT DECISION REQUIRED section listing seven open questions. No option is
-selected and no option is claimed to be free of ADR-governed impact. Wave 2 adds the
-decision-to-intent binding requirement (proposal section 4.7) and an eighth question.
+dependencies), and a QUANT DECISION REQUIRED section listing eight open questions (seven at
+`fdc832e`). No option is selected and no option is claimed to be free of ADR-governed impact.
+Wave 2 adds the decision-to-intent binding requirement (proposal section 4.7) and the eighth
+question.
 
 ## Decision gates / ขั้นตอน
 
@@ -108,8 +109,9 @@ decision-to-intent binding requirement (proposal section 4.7) and an eighth ques
    required/non-Optional today (confirmed, section 1 of the proposal) — do not assume from ADR
    text alone, verify against `packages/nexora/risk/models.py`.
 2. Confirm `NewTradeAuthority.evaluate_manual()` reads only `risk_decision.action` — true; its
-   signature is unchanged under Option A, but a decision-to-intent binding check is still
-   required (proposal section 4.7, question 8). Do **not** generalize this into "the gap is isolated upstream
+   signature is unchanged under Option A only if the decision-to-intent binding check required
+   by proposal section 4.7 lives in the pipeline (question 8); an authority-level binding changes
+   it under Option A as well. Do **not** generalize this into "the gap is isolated upstream
    under every option": for Option B it is not (a new sibling decision type requires widening or
    adding to `evaluate_manual()`'s already-frozen signature, itself an ADR-governed change). This
    narrower, corrected claim replaces the overstated version from the prior revision.

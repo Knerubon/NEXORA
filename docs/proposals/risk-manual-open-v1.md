@@ -90,7 +90,11 @@ instead compares the migrations honestly.
     `_cache_decision()` and before `self._proposals[...]` is written (`risk/engine.py:57-61`), so
     the same `proposal_id` can later be resubmitted with different contents and is evaluated as
     new, with no `proposal_identity_conflict`. Rejects produced after validation (kill switch,
-    currency, quality, price, stop distance, sizing, exposure, loss, drawdown) are cached. The
+    currency, quality, price, stop distance, sizing, exposure, loss, drawdown) are cached. Separately, `invalid_requested_size` is *raised* at
+    `risk/engine.py:79` after `_account_id` is pinned, `_proposals[...]` is written and the trading
+    day/equity peak are updated (`:60-65`), but before any decision is cached: the side effects
+    persist with no cached decision, so a retry under the same `proposal_id` is evaluated again
+    rather than hitting `proposal_identity_conflict`. The
     discipline is reusable in shape, but this uncached-reject behaviour is a policy property a
     manual path would inherit, not a settled guarantee (section 4.2, question 4).
   - `RiskEngine._account_id` pins the instance to the first account seen; a second account raises
@@ -278,9 +282,11 @@ still a required `str`, and — per the corrected framing above — its current 
   here. **This option is removed from the comparison table below** — it is not carried forward as
   a candidate requiring further sign-off.
 
-**Compatibility, corrected:** `RiskProposal`, `RiskEngine.evaluate()`, and
-`NewTradeAuthority.evaluate_manual()` keep their exact current Python signatures under both A1 and
-A2 — no existing function signature changes. That is **narrower** than "zero compatibility
+**Compatibility, corrected:** `RiskProposal` and `RiskEngine.evaluate()` keep their exact current
+Python signatures under both A1 and A2. `NewTradeAuthority.evaluate_manual()` and
+`authorize_trade_intent()` keep theirs **only if question 8 places the decision-to-intent binding
+in the pipeline**; an authority-level or guard-level binding changes a frozen or governed
+contract under A1/A2 as well (section 4.7). That is **narrower** than "zero compatibility
 impact": A1 changes a frozen type's *enforced semantic meaning* without changing its *signature*;
 A2 changes the type's *shape* (one additive field) without changing its *signature*. Both still
 require ADR-governed sign-off (AGENTS.md section 3) before implementation; neither is a loophole
@@ -308,8 +314,8 @@ dismissed merely because a migration touches a frozen signature):**
 | | Option A (A1 or A2) | Option B |
 |---|---|---|
 | `RiskDecision` shape/semantics | Changed (A1: meaning; A2: shape) | Unchanged — new sibling type carries no `signal_id` at all, structurally impossible to fabricate |
-| `NewTradeAuthority.evaluate_manual()` signature | Signature unchanged, but a decision-to-intent binding check is still required (section 4.7) | Must change — widen to accept `RiskDecision \| ManualOpenRiskDecision`, or add a second authority method; either requires amending a contract ADR-034 section 3/9 already froze |
-| `authorize_trade_intent()` dispatch | Unchanged | Must change — needs to route a `ManualOpenRiskDecision` to the (possibly new) authority entry point |
+| `NewTradeAuthority.evaluate_manual()` signature | Unchanged only if the binding check (section 4.7, question 8) lives in the pipeline; an authority-level binding widens this ADR-034 s3/s9 frozen signature too | Must change — widen to accept `RiskDecision \| ManualOpenRiskDecision`, or add a second authority method; either requires amending a contract ADR-034 section 3/9 already froze |
+| `authorize_trade_intent()` dispatch | Unchanged only if the binding lives in the pipeline; an authority-level binding changes this call as well | Must change — needs to route a `ManualOpenRiskDecision` to the (possibly new) authority entry point |
 | `PaperSimulator` consumer gap (section 1) | Still unresolved either way — out of scope for this proposal regardless of option | Still unresolved either way |
 | Governance path | ADR-015/ADR-034 amendment for the Risk-layer type | ADR-034 amendment for the Authority-layer frozen signature, in addition to a Risk-layer ADR for the new sibling type |
 | Decision ↔ manual request binding (section 4.7) | No field identifies the manual request; binding limited to symbol/side/account/size/expiry unless a field is added | `manual_request_id` is in the type; a binding check is still required |
@@ -451,7 +457,13 @@ order: at minimum `symbol`, `side`, `account_id`, requested/resolved quantity ve
 where the decision type can carry one. The binding point (authority, execution guard or
 pipeline) and whether the same binding is also added to the signal-derived OPEN path, which has
 the same authority-level gap outside `PaperSimulator`, are Architect decisions recorded as
-question 8. This overlaps ADR-035 OPEN-17 (origin of the OPEN quantity, section 11), which must
+question 8. Each candidate binding point has a contract cost under every option:
+`evaluate_manual(config, health, risk_decision)` receives no intent, quantity or evaluation time
+(`autonomous/authority.py:164-169`), so an authority-level binding widens the ADR-034 s3/s9
+frozen signature and the `authorize_trade_intent()` call; `evaluate_execution_guard()` receives no
+`RiskDecision` (`execution/pipeline.py:880-894`), so a guard-level binding changes the ADR-035
+s3.4 guard contract; only a pipeline-level check leaves both unchanged. The A-vs-B comparison in
+section 3 therefore depends on the answer to question 8. This overlaps ADR-035 OPEN-17 (origin of the OPEN quantity, section 11), which must
 be decided consistently with it.
 
 ## 5. QUANT DECISION REQUIRED
@@ -477,7 +489,9 @@ decided or defaulted by this proposal (AGENTS.md section 9):
    than relying on each call site independently avoiding collision (section 4.2)? And must a
    manual proposal's `_validate()`-equivalent rejects be cached, so a `manual_request_id` cannot
    be re-evaluated with different contents after a validation reject, or is an uncached retry
-   the intended behaviour (section 4.2, Wave 2 F3)?
+   the intended behaviour (section 4.2, Wave 2 F3)? The same applies to a raised input error
+   after validation (`invalid_requested_size`, `risk/engine.py:79`), which leaves the account pin
+   and recorded proposal in place without a cached decision.
 5. **Must manual-derived and signal-derived Risk proposals share one `RiskEngine` instance (and
    therefore one reservation/exposure/daily-loss/drawdown budget), or is a separate-instance model
    with explicit cross-instance reconciliation required** (section 4.3's double-budget-consumption
@@ -528,3 +542,9 @@ decided or defaulted by this proposal (AGENTS.md section 9):
 | F4: wrong cross-reference (question 7 for the unit question) | MINOR | Corrected to question 6 |
 | F5: `ManualOrigin` location | INFO | Corrected to `packages/nexora/autonomous_contracts.py` |
 | F6: A2 repo-wide fixture check still open | INFO | Unchanged; remains an open verification item for whoever evaluates A2 |
+
+Follow-up from the separate-session delta re-review at `6b4d8e9`: N1 (MINOR) Option A's
+"`evaluate_manual()`/dispatch unchanged" made conditional on question 8 placing the binding in
+the pipeline, with the contract cost of each binding point added to section 4.7; N2 (INFO) the
+`invalid_requested_size` raise side effects stated in section 1 and question 4; N3 (INFO) task
+file question count corrected.
