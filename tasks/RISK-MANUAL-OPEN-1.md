@@ -1,10 +1,10 @@
 ---
 task: "RISK-MANUAL-OPEN-1"
 status: "blocked"
-depends_on: ["tasks/P11-risk-engine.md", "docs/decisions/ADR-033-autonomous-trading-contracts-v1.md", "docs/decisions/ADR-034-execution-contracts-v1.md"]
+depends_on: ["tasks/P11-risk-engine.md", "docs/decisions/ADR-033-autonomous-trading-contracts-v1.md", "docs/decisions/ADR-034-execution-contracts-v1.md", "docs/decisions/ADR-035-execution-integration-safety-amendment.md"]
 agents: ["agents/architect/AGENT.md", "agents/quant/AGENT.md", "agents/developer/AGENT.md", "agents/reviewer/AGENT.md", "agents/security/AGENT.md"]
 skills: []
-docs: ["docs/requirements.md", "docs/architecture.md", "docs/decisions/ADR-015-risk-engine-policy.md", "docs/decisions/ADR-033-autonomous-trading-contracts-v1.md", "docs/decisions/ADR-034-execution-contracts-v1.md", "docs/development.md"]
+docs: ["docs/requirements.md", "docs/architecture.md", "docs/decisions/ADR-015-risk-engine-policy.md", "docs/decisions/ADR-033-autonomous-trading-contracts-v1.md", "docs/decisions/ADR-034-execution-contracts-v1.md", "docs/decisions/ADR-035-execution-integration-safety-amendment.md", "docs/development.md"]
 translation_needed: false
 ---
 
@@ -15,7 +15,7 @@ decisions are explicitly not made by this role per AGENTS.md section 1 ("Quant s
 formula/threshold decisions")
 worktree: D:\NEXORA\NEXORA-RISK-MANUAL-OPEN
 branch: claude/risk-manual-open-design-v1
-base_sha: d9ac44537c785490a5d2b37b503ff34cffdce269
+base_sha: d9ac44537c785490a5d2b37b503ff34cffdce269 (original); updated with origin/main 36c90c59e2aa4f0d221c9c468a8379c5f57cbb87 in Wave 2 (merge, no rebase)
 
 ## เป้าหมาย / traceability
 
@@ -36,6 +36,12 @@ instruction, the integration findings override readiness at that HEAD — no pol
 for the corrected content below. This section intentionally keeps both outcomes visible rather than
 replacing the record.
 
+**Wave 2 (2026-10-13):** an independent Agent D review at HEAD
+`fdc832e7741a90b71e5e76afd3eed9932687318f` reported F1 MAJOR (manual `RiskDecision` not bound to
+the manual intent), F2-F4 MINOR (stale against main; uncached `_validate()` rejects; wrong
+question cross-reference) and F5/F6 INFO. This revision addresses them (proposal section 7). No
+policy approval exists for this revision; an independent delta review is required.
+
 ## Entry gate / context
 
 Read [AGENTS.md](../AGENTS.md) first. Context manifest for this task, with reasons:
@@ -51,6 +57,9 @@ Read [AGENTS.md](../AGENTS.md) first. Context manifest for this task, with reaso
 - [ADR-034](../docs/decisions/ADR-034-execution-contracts-v1.md) sections 1/2/3/9/11 — the exact
   open question this task answers the input to (`ManualOrigin`, `evaluate_manual()`,
   `RiskReductionDecision` precedent, the execution safety invariant table).
+- [ADR-035](../docs/decisions/ADR-035-execution-integration-safety-amendment.md) sections 0/10/11
+  — PROPOSED on current main; records Track E (this task, PR #51) as BLOCKED and independent, and
+  opens OPEN-17 (origin of the OPEN quantity), which overlaps proposal question 6 and section 4.7.
 - [P11 task](P11-risk-engine.md) — existing Risk Engine task/decision record this proposal
   extends.
 - [MANUAL-EXEC-1](MANUAL-EXEC-1-manual-execution-ui.md) — UI-side task that first surfaced this
@@ -61,19 +70,20 @@ Read [AGENTS.md](../AGENTS.md) first. Context manifest for this task, with reaso
 - Inspected code (read-only): `packages/nexora/risk/{models,engine,repository,replay,fixtures}.py`,
   `packages/nexora/autonomous/{authority,risk_migration}.py`,
   `packages/nexora/autonomous_contracts.py`, `packages/nexora/execution/{models,idempotency,
-  reconciliation}.py`, `packages/nexora/position/models.py`, `packages/nexora/paper/session.py`.
+  reconciliation,pipeline}.py`, `packages/nexora/position/models.py`, `packages/nexora/paper/session.py`.
   Reason: identify every `RiskDecision`/`RiskProposal` consumer, the exact fields each one reads,
   and every frozen-contract boundary a proposed option would touch.
 
 Dependency evidence checked, not assumed: P11 is `status: in_review` (self-review complete,
 independent review pending; security review pending before P12) — its `RiskProposal`/`RiskDecision`
 /`RiskEngine` implementation exists and is runnable on this baseline (confirmed by direct file
-inspection, not by the roadmap). ADR-033 and ADR-034 both carry `Status: PROPOSED` headers; per the
-Wave 1 coordination board, ADR-033's approval is recorded via the MANUAL-EXEC-1 governance update
-(Rin verdict, PR #44) despite the stale header, and ADR-034's ratification is an open question the
-Orchestrator has already raised with the owner — this task does not resolve either header
-discrepancy and does not treat ADR-034 as ratified for anything beyond reading its already-merged
-code and its own explicitly-recorded open question (section 1).
+inspection, not by the roadmap). **Refreshed against `origin/main` `36c90c5` (Wave 2, F2):**
+ADR-034 now reads `Status: accepted — Execution Contract Freeze V1 FROZEN` (contract shapes and
+boundaries; PR #50), so any option that changes its section 1/3/9 contracts is an ADR amendment.
+ADR-033 still carries `Status: PROPOSED`; per the Wave 1 coordination board its approval is
+recorded via the MANUAL-EXEC-1 governance update (Rin verdict, PR #44) despite the header — this
+task does not resolve that discrepancy. ADR-035 (PROPOSED) leaves Track E untouched and BLOCKED
+(sections 0 and 10) and does not choose A1, A2 or B.
 
 ## Scope / deliverables
 
@@ -89,7 +99,8 @@ option, and C rejected outright) with exact compatibility/consumer impact, cross
 implications (TTL/freshness, idempotency namespacing limits, account/reservation shared-budget
 hazard, replay scope, stop-size/unit policy, PaperSimulator and PositionRecord provenance
 dependencies), and a QUANT DECISION REQUIRED section listing seven open questions. No option is
-selected and no option is claimed to be free of ADR-governed impact.
+selected and no option is claimed to be free of ADR-governed impact. Wave 2 adds the
+decision-to-intent binding requirement (proposal section 4.7) and an eighth question.
 
 ## Decision gates / ขั้นตอน
 
@@ -115,7 +126,7 @@ selected and no option is claimed to be free of ADR-governed impact.
    flagged as out-of-scope dependencies, the latter for Track F, neither solved here).
 5. **QUANT DECISION REQUIRED (see proposal section 5) — do not proceed past this gate.** No
    implementation, no ADR amendment, and no `status: ready` transition for any follow-on task may
-   happen until Architect/Quant answer the seven questions in the proposal. This task's own status
+   happen until Architect/Quant answer the eight questions in the proposal. This task's own status
    stays `blocked` until that happens.
 
 ## Acceptance / validation
@@ -146,12 +157,15 @@ selected and no option is claimed to be free of ADR-governed impact.
   assumed reusable from the signal path's formula — per integration review MINOR finding.
 - [x] `PaperSimulator` consumer gap and `PositionRecord` provenance dependency both flagged as
   out-of-scope, not silently assumed solved.
-- [ ] Architect/Quant decision on the seven QUANT DECISION REQUIRED questions (blocked —
+- [x] Wave 2: decision-to-intent binding gap (F1) documented with evidence and an open question
+  (proposal section 4.7, question 8); proposal refreshed against `origin/main` `36c90c5` (F2);
+  uncached `_validate()` rejects stated (F3); cross-reference (F4) and `ManualOrigin` location
+  (F5) corrected.
+- [ ] Architect/Quant decision on the eight QUANT DECISION REQUIRED questions (blocked —
   human/Quant action, not resolvable by this task).
-- [ ] Independent **delta** review of this revision at the new HEAD (the prior independent
-  document-level approval was recorded at HEAD `6f8436a`, before these corrections; it is retained
-  as history in the "เป้าหมาย / traceability" section above, not claimed as still current — a
-  fresh delta review against this HEAD is pending).
+- [ ] Independent **delta** review of the Wave 2 revision at its new HEAD. The Agent D review at
+  `fdc832e` (changes requested) and the earlier document-level approval at `6f8436a` are history
+  (see "เป้าหมาย / traceability" above) and do not cover this revision.
 - [ ] Root Definition of Done — blocked on the two items above plus human merge evidence.
 
 Docs-only validation performed (AGENTS.md section 14, docs-only row): links/context paths,
@@ -221,7 +235,14 @@ still-valid for the corrected content).
 - Review: self-review complete at this HEAD; independent delta review pending (AGENTS.md section
   12 step 7 — not claimed as separately reviewed; the prior independent approval at HEAD `6f8436a`
   is retained as history, not reasserted as covering this content).
-- Blockers: **QUANT DECISION REQUIRED** — see proposal section 5 (seven questions). This task
+- Wave 2 corrective delta (2026-10-13, owning cloud session; branch updated by merging
+  `origin/main` `36c90c5`, no rebase or force-push): F1-F5 from the independent Agent D review at
+  `fdc832e` addressed; see proposal section 7 for the per-finding table. Changed files unchanged:
+  `docs/proposals/risk-manual-open-v1.md`, `tasks/RISK-MANUAL-OPEN-1.md`. Docs-only checks
+  (links/context paths, frontmatter paths, `git diff --check`) re-run; see PR for output.
+  Application tests not_run by this session (docs-only diff; CI runs on push). Self-review only;
+  independent delta review pending.
+- Blockers: **QUANT DECISION REQUIRED** — see proposal section 5 (eight questions). This task
   cannot leave `blocked` until Architect/Quant answer them, and no implementation task should be
   opened against this topic before that happens. Additionally unresolved: the `PaperSimulator`
   consumer gap and the `PositionRecord` provenance gap (proposal section 4.6), both out of this

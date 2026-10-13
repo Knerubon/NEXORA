@@ -4,12 +4,17 @@ Status: DRAFT PROPOSAL, revised after Orchestrator integration review (changes r
 previously reviewed HEAD `6f8436af7c02e569098bef35fbe7ccd7131ab553`) — Architect/Quant decision
 required; not an ADR, not frozen, not implemented. This revision corrects two MAJOR findings and
 three MINOR findings from that review; no policy approval exists for this revision either.
+Wave 2 revision (2026-10-13): further corrected per the independent Agent D review at HEAD
+`fdc832e7741a90b71e5e76afd3eed9932687318f` (F1 MAJOR, F2-F4 MINOR, F5 INFO; see section 7) and
+refreshed against `origin/main` `36c90c59e2aa4f0d221c9c468a8379c5f57cbb87`. Still no policy
+approval and no option selected.
 Author: Claude E (ARCHITECT/INTEGRATOR design role, per AGENTS.md section 1), acting in a
 design-only capacity for this proposal — no code authored, no self-approval claimed
-Date: 2026-10-03
+Date: 2026-10-03 (Wave 2 revision 2026-10-13)
 Related: [ADR-015](../decisions/ADR-015-risk-engine-policy.md),
 [ADR-033](../decisions/ADR-033-autonomous-trading-contracts-v1.md) sections 10/12/15,
-[ADR-034](../decisions/ADR-034-execution-contracts-v1.md) sections 1/2/9/11,
+[ADR-034](../decisions/ADR-034-execution-contracts-v1.md) sections 1/2/3/9/11,
+[ADR-035](../decisions/ADR-035-execution-integration-safety-amendment.md) sections 0/10/11 (OPEN-17),
 [P11 task](../../tasks/P11-risk-engine.md), [MANUAL-EXEC-1](../../tasks/MANUAL-EXEC-1-manual-execution-ui.md)
 Task: [RISK-MANUAL-OPEN-1](../../tasks/RISK-MANUAL-OPEN-1.md)
 
@@ -57,7 +62,7 @@ instead compares the migrations honestly.
     `max_drawdown`) is denominated in. No contract-size or unit-conversion step exists in this
     engine at all today. **This formula must not be copied into a manual-order path without an
     explicit Quant decision on monetary unit/contract-size/conversion for manual `stop_distance`
-    input** (see section 5, question 7) — a manual-order UI could plausibly let an operator enter
+    input** (see section 5, question 6) — a manual-order UI could plausibly let an operator enter
     a stop distance in a different unit than whatever upstream guarantee keeps signal-derived
     `stop_distance` consistent today, and nothing in `RiskEngine` would catch a unit mismatch.
   - **Reject vs. raise — the two code paths are structurally different and must not be
@@ -78,7 +83,16 @@ instead compares the migrations honestly.
     inventing a new one.
   - Idempotency/replay cache keys on `proposal.proposal_id` (caller-supplied), comparing full
     dataclass equality (`self._proposals[proposal.proposal_id] != proposal`) to detect
-    identity conflicts — this discipline is proposal-shape-agnostic and already reusable.
+    identity conflicts. **Corrected (Wave 2, F3):** only decisions that pass `_validate()` are
+    recorded. A `_validate()` reject (`missing_identity`, `account_mismatch`, `invalid_signal`,
+    `symbol_mismatch`, `invalid_account_or_size`, `invalid_exposure`, `invalid_price`,
+    `stale_or_future_input`, `out_of_order_day`) returns `self._reject(...)` **without**
+    `_cache_decision()` and before `self._proposals[...]` is written (`risk/engine.py:57-61`), so
+    the same `proposal_id` can later be resubmitted with different contents and is evaluated as
+    new, with no `proposal_identity_conflict`. Rejects produced after validation (kill switch,
+    currency, quality, price, stop distance, sizing, exposure, loss, drawdown) are cached. The
+    discipline is reusable in shape, but this uncached-reject behaviour is a policy property a
+    manual path would inherit, not a settled guarantee (section 4.2, question 4).
   - `RiskEngine._account_id` pins the instance to the first account seen; a second account raises
     `account_mismatch`... **correction:** re-checked directly — `account_mismatch` is a
     `_validate()` *return* value, not a raise (see reject-vs-raise note above); it produces a
@@ -90,10 +104,12 @@ instead compares the migrations honestly.
   3/9, already implemented and frozen): takes `config`, `health`, `risk_decision: RiskDecision` —
   no `entry_readiness` parameter, by design (`ManualOrigin` never claims one). It reads only
   `risk_decision.action`. It does **not** read `.signal_id` — the authority layer itself has no
-  opinion on how `signal_id` was populated. This remains true and unchanged by this revision: the
-  *authority* method needs no code change for Option A (sections 2/3). It is a separate, explicit
-  claim — corrected in section 2 — that this makes the *overall* gap "upstream-only, authority
-  needs zero change under any option"; that broader claim was overstated and is withdrawn below.
+  opinion on how `signal_id` was populated. **Corrected (Wave 2, F1):** it also reads no other
+  `RiskDecision` field, so nothing on the manual path binds the decision to the order it
+  approves (section 4.7). Under Option A its *signature* can stay unchanged, but that does not
+  mean the manual path needs no authority/guard/pipeline change: a binding check is still
+  required somewhere (section 4.7). The broader prior claim that "authority needs zero change
+  under any option" remains withdrawn (section 2).
 - **`packages/nexora/paper/simulator.py::PaperSimulator.apply_decision()` — a consumer this
   revision did not previously surface with enough weight.** Its signature requires `decision:
   RiskDecision` **and a separate, mandatory `signal: ResearchSignal` parameter** (line ~75-80). It
@@ -117,7 +133,8 @@ instead compares the migrations honestly.
   **alongside** the existing `RiskProposal`/`RiskDecision`/`RiskEngine.evaluate()` without changing
   any of their current shape or behavior. `RiskReductionDecision` is a **new type with no
   `signal_id` field at all** — not a widened `RiskDecision`.
-- `packages/nexora/execution/idempotency.py`: `ManualOrigin.manual_request_id` is already named,
+- `packages/nexora/autonomous_contracts.py` (`ManualOrigin`, defined at line ~105; consumed by
+  `packages/nexora/execution/idempotency.py`): `ManualOrigin.manual_request_id` is already named,
   in ADR-034 section 1, as "stable identity: dedup/idempotency/journal/replay anchor" and is reused
   verbatim as `origin_ref` in `build_execution_request()`. It is the natural identity anchor for a
   manual Risk proposal too, if one is introduced — not a new identity concept. **It is not,
@@ -134,8 +151,10 @@ instead compares the migrations honestly.
 ## 2. Problem restated precisely (corrected)
 
 `NewTradeAuthority.evaluate_manual()` is already implemented correctly for its own narrow job: it
-asks only for *an* `allow` `RiskDecision`, with no opinion on provenance, and needs no code change
-under Option A. **That is a true, narrow claim about one function.** The previous revision
+asks only for *an* `allow` `RiskDecision`, with no opinion on provenance, and its signature needs
+no change under Option A. **That is a true, narrow claim about one function's signature.** It is
+not a claim that the manual path is safe as wired: `evaluate_manual()` checks only
+`risk_decision.action == "allow"`, so any `allow` decision satisfies it (section 4.7, Wave 2 F1). The previous revision
 over-extended it into "the gap is entirely upstream... authority needs zero change under any
 option" — that broader claim is false and is withdrawn here, per the integration review (MAJOR 2).
 It is false specifically for **Option B** (section 3): if the manual path's output is a *new*
@@ -265,7 +284,11 @@ A2 — no existing function signature changes. That is **narrower** than "zero c
 impact": A1 changes a frozen type's *enforced semantic meaning* without changing its *signature*;
 A2 changes the type's *shape* (one additive field) without changing its *signature*. Both still
 require ADR-governed sign-off (AGENTS.md section 3) before implementation; neither is a loophole
-that avoids that requirement.
+that avoids that requirement. Unchanged signatures also do not remove the decision-to-intent
+binding work in section 4.7: under A1 and A2 a manual `RiskDecision` has no field carrying
+`manual_request_id` at all (A1 additionally leaves `signal_id == ""`), so the binding check must
+compare symbol/side/account/size/expiry and cannot tie the decision to one specific manual
+request unless a field is added.
 
 ### Option B — sibling decision type `ManualOpenRiskDecision` (no `signal_id` field at all), mirroring `RiskReductionDecision`
 
@@ -285,10 +308,11 @@ dismissed merely because a migration touches a frozen signature):**
 | | Option A (A1 or A2) | Option B |
 |---|---|---|
 | `RiskDecision` shape/semantics | Changed (A1: meaning; A2: shape) | Unchanged — new sibling type carries no `signal_id` at all, structurally impossible to fabricate |
-| `NewTradeAuthority.evaluate_manual()` signature | Unchanged | Must change — widen to accept `RiskDecision \| ManualOpenRiskDecision`, or add a second authority method; either requires amending a contract ADR-034 section 3/9 already froze |
+| `NewTradeAuthority.evaluate_manual()` signature | Signature unchanged, but a decision-to-intent binding check is still required (section 4.7) | Must change — widen to accept `RiskDecision \| ManualOpenRiskDecision`, or add a second authority method; either requires amending a contract ADR-034 section 3/9 already froze |
 | `authorize_trade_intent()` dispatch | Unchanged | Must change — needs to route a `ManualOpenRiskDecision` to the (possibly new) authority entry point |
 | `PaperSimulator` consumer gap (section 1) | Still unresolved either way — out of scope for this proposal regardless of option | Still unresolved either way |
 | Governance path | ADR-015/ADR-034 amendment for the Risk-layer type | ADR-034 amendment for the Authority-layer frozen signature, in addition to a Risk-layer ADR for the new sibling type |
+| Decision ↔ manual request binding (section 4.7) | No field identifies the manual request; binding limited to symbol/side/account/size/expiry unless a field is added | `manual_request_id` is in the type; a binding check is still required |
 | Type-safety against fabrication | Depends on audit discipline (A1: empty-string convention; A2: discriminator field) | Structurally guaranteed — no `signal_id` field exists to misuse, same guarantee `RiskReductionDecision` already has |
 
 Both options require an explicit ADR-governed decision before implementation; neither is
@@ -320,8 +344,14 @@ panel before clicking BUY warrant a distinct TTL policy field? Not decided here.
 ### 4.2 Idempotency / proposal identity — namespacing is not a complete guarantee by itself
 
 `RiskEngine._evaluate()`'s existing idempotency discipline (cache on `proposal.proposal_id`,
-reject on identity conflict if a non-identical proposal reuses the same id) is proposal-shape
--agnostic and reusable without change. `ManualOrigin.manual_request_id` is the natural identity
+raise `proposal_identity_conflict` if a non-identical proposal reuses the id of a cached decision)
+is proposal-shape-agnostic in form. **Corrected (Wave 2, F3):** it is not complete as a
+guarantee. `_validate()` rejects are neither cached nor recorded (section 1), so after, for
+example, a `stale_or_future_input` reject, a manual retry under the same
+`manual-open:{manual_request_id}` id with changed contents is evaluated as a new proposal.
+Whether that is the intended operator-retry behaviour for Manual OPEN, or whether manual
+validation rejects must be cached so a request id cannot be re-evaluated with different
+contents, is a policy choice added to question 4, not assumed here. `ManualOrigin.manual_request_id` is the natural identity
 anchor for a manual proposal's `proposal_id`. **Corrected (per MINOR finding):** the prior
 revision's recommendation to namespace it (e.g. `f"manual-open:{manual_request_id}"`, mirroring
 `replay.py`'s `f"replay-{index}:{signal.signal_id}"`) only prevents id-space collisions **if every
@@ -390,6 +420,40 @@ Both are recorded here only so a future Architect decision on sections 3's optio
 accidentally assume either downstream gap is already closed — approving a Risk-layer option does
 **not**, by itself, make a manual OPEN executable end-to-end.
 
+### 4.7 Decision-to-intent binding on the manual path (Wave 2, F1 MAJOR)
+
+Verified on `origin/main` `36c90c5`:
+
+- `NewTradeAuthority.evaluate_manual()` (`packages/nexora/autonomous/authority.py`, the
+  `if risk_decision.action != "allow"` check) reads only `risk_decision.action`.
+- `authorize_trade_intent()` forwards whatever `RiskDecision` the caller passes to
+  `evaluate_manual()` for a `ManualOrigin` OPEN intent.
+- `ExecutionPipeline._step2b_authority` (`packages/nexora/execution/pipeline.py`) passes
+  `inputs.risk_decision` straight through; `_step3_guard` calls `evaluate_execution_guard()`
+  without the decision. No pipeline, guard or authority code compares a `RiskDecision`'s
+  `symbol`, `side`, `account_id`, `approved_size`, `expires_at` or proposal identity with the
+  `TradeIntent`, `ManualOrigin` or the resolved order quantity.
+- The only place this binding exists today is `PaperSimulator.apply_decision()`
+  (`packages/nexora/paper/simulator.py:90-102`), on the signal path, which a manual order cannot
+  use (section 4.6).
+
+**Failure mode:** any `allow` `RiskDecision` (one issued for another symbol or side, one already
+expired, or one approved for a smaller size than the order) satisfies Manual OPEN authority. Risk
+approval would then be necessary but not specific to the order it approves, which is a
+verdict-reuse path around Risk Guard. Today this is latent, not live: Manual OPEN cannot reach
+transmission (ADR-035 section 10 keeps Track E blocked; `ExecutionPreflight` is DENY-only;
+production composition keeps `transmission=None`).
+
+**Requirement every option must meet before implementation (not a selection between options):**
+the design must state where, and against which fields, a manual `RiskDecision` is bound to the
+order: at minimum `symbol`, `side`, `account_id`, requested/resolved quantity versus
+`approved_size`, and `expires_at` versus the evaluation time, plus a manual-request identity
+where the decision type can carry one. The binding point (authority, execution guard or
+pipeline) and whether the same binding is also added to the signal-derived OPEN path, which has
+the same authority-level gap outside `PaperSimulator`, are Architect decisions recorded as
+question 8. This overlaps ADR-035 OPEN-17 (origin of the OPEN quantity, section 11), which must
+be decided consistently with it.
+
 ## 5. QUANT DECISION REQUIRED
 
 The following must be decided by Quant/Architect before any implementation proceeds. None are
@@ -410,14 +474,18 @@ decided or defaulted by this proposal (AGENTS.md section 9):
    Risk-evaluation call?
 4. **What exact `proposal_id` format/namespace convention applies across every current and future
    Risk-layer proposal-identity source**, so namespacing actually guarantees disjointness rather
-   than relying on each call site independently avoiding collision (section 4.2)?
+   than relying on each call site independently avoiding collision (section 4.2)? And must a
+   manual proposal's `_validate()`-equivalent rejects be cached, so a `manual_request_id` cannot
+   be re-evaluated with different contents after a validation reject, or is an uncached retry
+   the intended behaviour (section 4.2, Wave 2 F3)?
 5. **Must manual-derived and signal-derived Risk proposals share one `RiskEngine` instance (and
    therefore one reservation/exposure/daily-loss/drawdown budget), or is a separate-instance model
    with explicit cross-instance reconciliation required** (section 4.3's double-budget-consumption
    hazard)?
 6. **What monetary unit, contract-size, and conversion policy applies to a manual order's
    `stop_distance`/size before `reserved_risk = stop_distance * size` (or its manual-path
-   equivalent) is computed** (section 4.5)?
+   equivalent) is computed** (section 4.5)? This must be consistent with ADR-035 OPEN-17 (origin
+   of the OPEN quantity), which is still open on `origin/main` `36c90c5`.
 7. **Does the chosen Risk-layer option require an ADR amendment to ADR-015 and/or ADR-034, or can
    it proceed as a recorded architecture-review extension under existing ADR-015 acceptance** —
    given AGENTS.md section 3's rule that frozen contracts/formulas change only via ADR update?
@@ -425,7 +493,14 @@ decided or defaulted by this proposal (AGENTS.md section 9):
    enforced meaning or the shape or a frozen signature of an ADR-governed contract, so this
    revision's working assumption is that **all** of them need at least a recorded architecture
    review, and probably an ADR amendment — not that any of them is exempt. This is still an
-   Architect call.
+   Architect call. Governance state on `origin/main` `36c90c5`: ADR-034 is **accepted / FROZEN**
+   (contract shapes and boundaries), so an amendment to its section 1/3/9 contracts is an ADR
+   change, not a review note; ADR-035 is PROPOSED and records Track E (this proposal) as BLOCKED
+   and independent (ADR-035 sections 0 and 10).
+8. **Where is a manual `RiskDecision` bound to the order it approves (authority, execution guard
+   or pipeline), against which fields, and does the same binding apply to the signal-derived
+   OPEN path** (section 4.7, Wave 2 F1)? No option in section 3 may be implemented until this is
+   answered.
 
 ## 6. What this proposal explicitly does not do
 
@@ -439,3 +514,16 @@ decided or defaulted by this proposal (AGENTS.md section 9):
   ADR-governed migration at some layer (section 3's honest framing).
 - Does not resolve the `PaperSimulator` consumer gap or the `PositionRecord` provenance gap
   (section 4.6) — both flagged as dependencies for future work, not addressed here.
+- Does not choose where the decision-to-intent binding of section 4.7 lives; it records the
+  requirement and the open question (question 8).
+
+## 7. Revision record — Wave 2 (independent review findings at `fdc832e`)
+
+| Finding | Severity | Resolution in this revision |
+|---|---|---|
+| F1: manual `RiskDecision` not bound to the manual intent; "evaluate_manual() unchanged" overstated | MAJOR | Section 4.7 added with evidence and failure mode; section 1/2 wording and the Option A row of the comparison table corrected; question 8 added. No option selected |
+| F2: stale against current main (ADR-034 accepted, ADR-035 added, OPEN-17) | MINOR | Branch updated with `origin/main` `36c90c5`; ADR-035 referenced; ADR-034 status stated as accepted/FROZEN (question 7); OPEN-17 linked from question 6 and section 4.7; task file context refreshed |
+| F3: uncached `_validate()` rejects not stated | MINOR | Stated in section 1 and section 4.2; added to question 4 |
+| F4: wrong cross-reference (question 7 for the unit question) | MINOR | Corrected to question 6 |
+| F5: `ManualOrigin` location | INFO | Corrected to `packages/nexora/autonomous_contracts.py` |
+| F6: A2 repo-wide fixture check still open | INFO | Unchanged; remains an open verification item for whoever evaluates A2 |
