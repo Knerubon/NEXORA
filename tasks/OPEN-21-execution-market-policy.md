@@ -26,6 +26,11 @@ decision); the unblock condition is in the metadata above.
 - It is tracked **separately** from OPEN-1/2/3/5/11/14/19/20 (which are also required before Paper/Demo).
 - It does **not block PR-7** (narrow scope; production stays DENY-ONLY).
 
+Note (not part of the decision record): the authoritative BEFORE-PAPER-DEMO gate list is ADR-035 s8, which names OPEN-1, OPEN-2,
+OPEN-5, OPEN-7, OPEN-11, OPEN-19 and OPEN-20. The parenthetical above is kept as recorded; it neither adds nor removes any s8 gate
+(OPEN-3 and OPEN-14 are not s8 BEFORE-PAPER-DEMO items, and OPEN-7 remains one). Rin to confirm the wording at merge time. PR-7
+has since merged (#74, 2026-10-09), so the PR-7 bullet is historical.
+
 ## Why this item exists
 The decision packet found that these numeric policy checks block every preflight ALLOW yet have **no OPEN id** in ADR-035 s11. ADR-035
 s3.5 declares the policy checks (session, spread via `spread_policy_ref`, slippage via `price_constraint`/policy, margin via
@@ -37,6 +42,9 @@ policy content itself.
 Current behavior (`packages/nexora/execution/preflight.py`, documented in `tasks/PR6-execution-preflight.md`, ADR gap 3):
 - OPEN kind: denied `preflight_policy_evaluation_unavailable` (ADR silent on OPEN policy evaluation).
 - REDUCE / CLOSE / MODIFY_PROTECTION: denied `preflight_policy_undecided` (OPEN-11).
+- REDUCE additionally passes the PR-7 residual deny gate (`validate_residual_volume`, OPEN-8): a missing/invalid
+  `position_quantity` or residual denies `preflight_reduce_residual_volume_invalid`; a valid REDUCE still ends
+  `preflight_policy_undecided`.
 - Net effect: `ExecutionPreflight.evaluate` can never ALLOW; production is DENY-ONLY and non-operational.
 
 ## What OPEN-21 must define (Quant-owned numeric content; Rin/Architect approval)
@@ -51,7 +59,8 @@ Current behavior (`packages/nexora/execution/preflight.py`, documented in `tasks
 7. Policy versioning, config reference, and evidence: the policy reference/version recorded in the PreflightDecision evidence so every
    decision is traceable (AGENTS.md s0: data/config/version references).
 8. Failure semantics: fail closed (missing/stale/malformed policy, inputs or evaluation error => deny with an approved reason code; any
-   new reason code needs Rin approval because the preflight vocabulary is pinned at ten `preflight_*` codes).
+   new reason code needs Rin approval because the preflight vocabulary is pinned at eleven `preflight_*` codes: the ten V1 codes
+   plus the PR-7 residual code `preflight_reduce_residual_volume_invalid`).
 9. Determinism / replay: evaluation is a pure function of request, capabilities, market refs, policy and injected `now`; no wall clock,
    randomness or I/O.
 10. Where it is evaluated and its inputs: in `ExecutionPreflight.evaluate` (ADR-035 s3.5, step 4 of s3.1/3.2), before the claim, creating
@@ -73,7 +82,10 @@ Current behavior (`packages/nexora/execution/preflight.py`, documented in `tasks
 - [ ] `market_refs` contract frozen (AGENTS.md s3 contract governance) before dependent implementation.
 - [ ] Fail-closed and determinism rules stated; policy ref/version appears in decision evidence.
 - [ ] Any new reason codes approved by Rin; contract and preflight vocabulary tests updated in the implementing PR.
-- [ ] Only then may an implementation PR add a preflight ALLOW path, with negative/boundary/replay tests.
+- [ ] Closing OPEN-21 is **necessary, not sufficient** for a preflight ALLOW path. An implementation PR may add one only once
+      every other prerequisite is also met, including at least: OPEN-1 and OPEN-11 decided; a capability health source defined
+      (PR-6 ADR gap 2); the `market_refs` contract frozen (PR-6 ADR gap 1); the applicable ADR-035 s8 gates; and the AGENTS.md s0
+      Phase 1 limits (research/paper only). Such a PR needs negative/boundary/replay tests.
 
 ## Dependencies and ownership
 - Quant: formulas and thresholds (AGENTS.md s1). Architect/Rin: approval; Architect: `market_refs` and policy-ref resolution contract.
@@ -83,3 +95,6 @@ Current behavior (`packages/nexora/execution/preflight.py`, documented in `tasks
 
 ## Execution record
 - 2026-10-05: tracking item created (docs-only; self-review; independent review pending). No application tests run or claimed.
+- 2026-10-13: review fixes (docs-only): reason-code count ten -> eleven and PR-7 residual gate added to current behavior; note
+  pointing to ADR-035 s8 as the authoritative BEFORE-PAPER-DEMO gate list (Rin decision text unchanged); ALLOW acceptance criterion
+  marked necessary-not-sufficient with PR-6 gap 2. No values chosen, no ADR edited. Independent re-review pending.
