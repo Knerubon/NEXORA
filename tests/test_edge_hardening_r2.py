@@ -38,7 +38,6 @@ from nexora.edge import (
     run_exit_mode,
     select_completed_segment,
     select_segment,
-    simulate_exit,
     validate_segment,
     verify_edge_dataset,
     walk_forward_windows,
@@ -48,11 +47,11 @@ from nexora.market_data.models import NormalizedPriceEvent
 from nexora.signals import ResearchSignal
 from nexora.signals.models import SignalDecision, SignalTarget
 
-from tests.edge_fixtures import BAR, T0, flat_bars, make_bar, synthetic_manifest
+from tests.edge_fixtures import BAR, T0, flat_bars, make_bar, sim, synthetic_manifest
 
 D = Decimal
 LAT = BAR + timedelta(seconds=30)
-ZERO = CostModel("t", "XXX", KNOWN_ZERO, KNOWN_ZERO, KNOWN_ZERO, KNOWN_ZERO)
+ZERO = CostModel("t", "SYNTH-UNIT", KNOWN_ZERO, KNOWN_ZERO, KNOWN_ZERO, KNOWN_ZERO)
 ONE = ExitPolicy("r2", "one_position", BAR)
 OVERLAP = ExitPolicy("r2", "allow_overlap", BAR)
 ENTRY = ("100", "101", "99.5", "100.5")
@@ -74,6 +73,14 @@ def bars_after_quiet(*specs: tuple[str, str, str, str]) -> tuple[NormalizedPrice
     return tuple(out)
 
 
+def registered(kwargs: dict[str, Any]) -> SplitPlan | None:
+    """Register the split only for runs that actually evaluate a segment or window."""
+    if "segment" in kwargs or "walk_forward" in kwargs:
+        split_plan: SplitPlan | None = kwargs.get("split")
+        return split_plan
+    return None
+
+
 def run(
     plans: Any,
     bars: tuple[NormalizedPriceEvent, ...],
@@ -82,7 +89,9 @@ def run(
     max_latency: timedelta = LAT,
     **kwargs: Any,
 ) -> Any:
-    manifest, digest = synthetic_manifest(bars, max_latency=max_latency)
+    manifest, digest = synthetic_manifest(
+        bars, max_latency=max_latency, split_plan=registered(kwargs)
+    )
     return run_exit_mode(
         plans,
         bars,
@@ -180,7 +189,15 @@ def test_p0_exactly_the_three_names_are_valid_and_holdout_stays_locked() -> None
 
 
 def prov_real() -> Provenance:
-    return Provenance("real_market", "adapter-feed", T0, "UTC", "v", capability_profile_ref="p:1")
+    return Provenance(
+        "real_market",
+        "adapter-feed",
+        T0,
+        "UTC",
+        "v",
+        capability_profile_ref="p:1",
+        ohlc_basis="bid",
+    )
 
 
 def forge(
@@ -374,8 +391,8 @@ def test_p0_real_market_label_adapter_ref_unlock_and_log_cannot_make_a_run_eligi
         replace(b, source="adapter-feed", identity_key=f"feed:{i}", source_event_id=f"feed:{i}")
         for i, b in enumerate(bars30())
     )
-    manifest = build_edge_manifest(bars, prov_real(), max_latency=LAT)
     p = split()
+    manifest = build_edge_manifest(bars, prov_real(), max_latency=LAT, split_plan=p)
     log = HoldoutAccessLog()
     plan = TradePlan("h", "long", T0 + BAR * 21, D("98"), D("104"))
     result = run_exit_mode(
@@ -548,20 +565,20 @@ def test_p1_non_finite_or_non_positive_quotes_are_rejected_by_the_exit_mode(
     bar: NormalizedPriceEvent,
 ) -> None:
     with pytest.raises(ExitInputError, match="invalid_quote"):
-        simulate_exit(PLAN, (make_bar(0, "100", "100", "100", "100"), bar), OVERLAP)
+        sim(PLAN, (make_bar(0, "100", "100", "100", "100"), bar), OVERLAP)
 
 
 def test_p1_ohlc_inconsistency_and_incomplete_bars_are_rejected_by_the_exit_mode() -> None:
     with pytest.raises(ExitInputError, match="invalid_ohlc"):
-        simulate_exit(PLAN, bars_after_quiet(("100", "99", "98", "99")), OVERLAP)
+        sim(PLAN, bars_after_quiet(("100", "99", "98", "99")), OVERLAP)
     early = replace(make_bar(1, *ENTRY), received_at=T0 + BAR)  # arrives before it closes
     with pytest.raises(ExitInputError, match="bar_received_before_close"):
-        simulate_exit(PLAN, (make_bar(0, "100", "100", "100", "100"), early), OVERLAP)
+        sim(PLAN, (make_bar(0, "100", "100", "100", "100"), early), OVERLAP)
 
 
 def test_p1_a_crossed_quote_is_still_tolerated_as_unavailable_spread() -> None:
     crossed = make_bar(1, "100", "104.5", "100", "104", bid="101", ask="100")
-    result = simulate_exit(PLAN, (make_bar(0, "100", "100", "100", "100"), crossed), OVERLAP)
+    result = sim(PLAN, (make_bar(0, "100", "100", "100", "100"), crossed), OVERLAP)
     assert result.status == "closed" and result.entry_spread is None
 
 
@@ -569,7 +586,7 @@ def test_p1_a_crossed_quote_is_still_tolerated_as_unavailable_spread() -> None:
 def test_p1_invalid_trade_plan_side_is_rejected_not_silently_treated_as_short(side: Any) -> None:
     plan = replace(PLAN, side=side)
     with pytest.raises(ExitInputError, match="invalid_side"):
-        simulate_exit(plan, bars_after_quiet(ENTRY), OVERLAP)
+        sim(plan, bars_after_quiet(ENTRY), OVERLAP)
 
 
 def make_signal(action: str, side: str) -> ResearchSignal:
@@ -675,7 +692,7 @@ def test_p1_holding_time_and_swap_use_the_bar_close_not_the_arrival_time() -> No
         make_bar(2, "100.5", "104.5", "100", "104", latency=late),
     )
     model = CostModel(
-        "t", "XXX", KNOWN_ZERO, KNOWN_ZERO, KNOWN_ZERO, CostComponent("known", D("86400"))
+        "t", "SYNTH-UNIT", KNOWN_ZERO, KNOWN_ZERO, KNOWN_ZERO, CostComponent("known", D("86400"))
     )
     manifest, digest = synthetic_manifest(bars, max_latency=BAR + late + timedelta(seconds=30))
     result = run_exit_mode(
@@ -694,11 +711,15 @@ def test_p1_holding_time_and_swap_use_the_bar_close_not_the_arrival_time() -> No
 def test_p1_same_time_signals_fail_closed_under_one_position_not_by_signal_id() -> None:
     bars = bars_after_quiet(ENTRY, ("100.5", "104.5", "100", "104"))
     buy = TradePlan("a-buy", "long", T0 + BAR, D("98"), D("104"))
-    sell = TradePlan("b-sell", "short", T0 + BAR, D("102"), D("96"))
+    other = TradePlan("b-buy", "long", T0 + BAR, D("99"), D("103"))
     with pytest.raises(ExitInputError, match="conflicting_same_time_signals"):
-        run([buy, sell], bars, ONE)
+        run([buy, other], bars, ONE)
+    # A BUY and a SELL can no longer share one run: one OHLC basis fills only one exit side.
+    sell = TradePlan("b-sell", "short", T0 + BAR, D("102"), D("96"))
+    with pytest.raises(ExitInputError, match="ohlc_basis_bid_cannot_fill_short_exits"):
+        run([buy, sell], bars, OVERLAP)
     # Independent booking involves no tie-break, so it is allowed and says so.
-    both = run([buy, sell], bars, OVERLAP)
+    both = run([buy, other], bars, OVERLAP)
     assert len(both.trades) == 2 and both.skipped_overlap_count == 0
     assert "overlapping_positions_may_stack_exposure" in both.notes
 

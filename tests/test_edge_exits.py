@@ -23,7 +23,6 @@ from nexora.edge import (
     TradePlan,
     plan_from_signal,
     run_exit_mode,
-    simulate_exit,
     to_edge_trade,
 )
 from nexora.market_data.models import NormalizedPriceEvent
@@ -31,6 +30,7 @@ from nexora.signals import ResearchSignal
 from nexora.signals.models import SignalDecision, SignalTarget
 
 from tests.edge_fixtures import BAR, T0, make_bar, synthetic_manifest
+from tests.edge_fixtures import sim as sim_on_exit_side
 
 D = Decimal
 DECISION = T0 + BAR  # bar 0 closes here; bar 1 is the first bar that can be entered
@@ -38,7 +38,7 @@ DECISION = T0 + BAR  # bar 0 closes here; bar 1 is the first bar that can be ent
 LONG = TradePlan("s-long", "long", DECISION, stop_price=D("98"), target_price=D("104"))
 SHORT = TradePlan("s-short", "short", DECISION, stop_price=D("102"), target_price=D("96"))
 POLICY = ExitPolicy(version="t1", concurrency="allow_overlap", bar_interval=BAR)
-ZERO_COSTS = CostModel("t", "XXX", KNOWN_ZERO, KNOWN_ZERO, KNOWN_ZERO, KNOWN_ZERO)
+ZERO_COSTS = CostModel("t", "SYNTH-UNIT", KNOWN_ZERO, KNOWN_ZERO, KNOWN_ZERO, KNOWN_ZERO)
 
 
 def quiet(i: int, price: str = "100") -> NormalizedPriceEvent:
@@ -55,7 +55,7 @@ def bars_with(*specs: tuple[str, str, str, str]) -> tuple[NormalizedPriceEvent, 
 def sim(
     plan: TradePlan, bars: tuple[NormalizedPriceEvent, ...], policy: ExitPolicy = POLICY
 ) -> ExitResult:
-    return simulate_exit(plan, bars, policy)
+    return sim_on_exit_side(plan, bars, policy)
 
 
 ENTRY = ("100", "101", "99.5", "100.5")
@@ -267,7 +267,7 @@ def test_r_multiple_is_exact_decimal() -> None:
 def test_edge_trade_applies_known_costs() -> None:
     r = sim(LONG, bars_with(ENTRY, ("100.5", "104.5", "100", "104")))
     model = CostModel(
-        "t", "XXX", CostComponent("known", D("0.5")), KNOWN_ZERO, KNOWN_ZERO, KNOWN_ZERO
+        "t", "SYNTH-UNIT", CostComponent("known", D("0.5")), KNOWN_ZERO, KNOWN_ZERO, KNOWN_ZERO
     )
     t = to_edge_trade(r, model, unit_size=D("2"))
     assert t.gross_pnl == D("8") and t.costs.known_total == D("1")
@@ -276,7 +276,7 @@ def test_edge_trade_applies_known_costs() -> None:
 
 def test_unknown_cost_makes_net_a_bound_not_a_result() -> None:
     r = sim(LONG, bars_with(ENTRY, ("100.5", "104.5", "100", "104")))
-    model = CostModel("t", "XXX", KNOWN_ZERO, UNKNOWN, KNOWN_ZERO, KNOWN_ZERO)
+    model = CostModel("t", "SYNTH-UNIT", KNOWN_ZERO, UNKNOWN, KNOWN_ZERO, KNOWN_ZERO)
     t = to_edge_trade(r, model, unit_size=D("1"))
     assert not t.net_complete and t.costs.unknown == ("commission",)
     assert t.net_pnl_known_costs == t.gross_pnl
@@ -298,7 +298,7 @@ def test_spread_is_taken_from_the_entry_bar_quote_only_if_present() -> None:
         quoted[2],
     )
     model = CostModel(
-        "t", "XXX", UNKNOWN, KNOWN_ZERO, KNOWN_ZERO, KNOWN_ZERO, spread_from_quotes=True
+        "t", "SYNTH-UNIT", UNKNOWN, KNOWN_ZERO, KNOWN_ZERO, KNOWN_ZERO, spread_from_quotes=True
     )
     t = to_edge_trade(sim(LONG, quoted), model, unit_size=D("1"))
     assert t.costs.complete and t.costs.known_total == D("0.2")
@@ -335,7 +335,8 @@ def _run(
 
 def test_run_is_deterministic_and_input_order_independent() -> None:
     bars = bars_with(ENTRY, ("100.5", "104.5", "100", "104"), ("104", "104", "97", "98"))
-    p2 = replace(SHORT, decision_time=DECISION + BAR, signal_id="s-short")
+    # Both long: one dataset has one OHLC basis, which fills only one side's exits.
+    p2 = replace(LONG, decision_time=DECISION + BAR, signal_id="s-long-2")
     a = _run((LONG, p2), bars)
     b = _run((p2, LONG), bars)
     assert a == b and a.run_id == b.run_id

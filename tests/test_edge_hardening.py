@@ -29,18 +29,17 @@ from nexora.edge import (
     build_edge_manifest,
     run_exit_mode,
     select_segment,
-    simulate_exit,
     to_edge_trade,
     walk_forward_windows,
 )
 from nexora.market_data.models import NormalizedPriceEvent
 
-from tests.edge_fixtures import BAR, T0, flat_bars, make_bar, synthetic_manifest
+from tests.edge_fixtures import BAR, T0, flat_bars, make_bar, sim, synthetic_manifest
 
 D = Decimal
 LAT = BAR + timedelta(seconds=30)
 DECISION = T0 + BAR
-ZERO = CostModel("t", "XXX", KNOWN_ZERO, KNOWN_ZERO, KNOWN_ZERO, KNOWN_ZERO)
+ZERO = CostModel("t", "SYNTH-UNIT", KNOWN_ZERO, KNOWN_ZERO, KNOWN_ZERO, KNOWN_ZERO)
 ONE = ExitPolicy("h1", "one_position", BAR)
 OVERLAP = ExitPolicy("h1", "allow_overlap", BAR)
 PLAN = TradePlan("a", "long", DECISION, D("98"), D("104"))
@@ -53,13 +52,21 @@ def bars_after_quiet(*specs: tuple[str, str, str, str]) -> tuple[NormalizedPrice
     return tuple(out)
 
 
+def registered(kwargs: dict[str, Any]) -> SplitPlan | None:
+    """Register the split only for runs that actually evaluate a segment or window."""
+    if "segment" in kwargs or "walk_forward" in kwargs:
+        split_plan: SplitPlan | None = kwargs.get("split")
+        return split_plan
+    return None
+
+
 def run(
     plans: tuple[TradePlan, ...],
     bars: tuple[NormalizedPriceEvent, ...],
     policy: ExitPolicy,
     **kwargs: Any,
 ) -> Any:
-    manifest, digest = synthetic_manifest(bars)
+    manifest, digest = synthetic_manifest(bars, split_plan=registered(kwargs))
     return run_exit_mode(
         plans,
         bars,
@@ -261,7 +268,15 @@ def real_events(count: int = 5) -> tuple[NormalizedPriceEvent, ...]:
 
 
 def test_f4_synthetic_events_cannot_be_labelled_real_market() -> None:
-    prov = Provenance("real_market", "adapter-feed", T0, "UTC", "v", capability_profile_ref="p:1")
+    prov = Provenance(
+        "real_market",
+        "adapter-feed",
+        T0,
+        "UTC",
+        "v",
+        capability_profile_ref="p:1",
+        ohlc_basis="bid",
+    )
     with pytest.raises(EdgeDatasetError, match="synthetic_marker_in_real_market_data"):
         build_edge_manifest(flat_bars(5), prov, max_latency=LAT)  # source "synthetic-test"
     labelled = replace(prov, source="synthetic-generator")
@@ -279,7 +294,15 @@ def test_f4_real_market_requires_an_adapter_capability_reference() -> None:
 
 
 def test_f4_attested_real_market_label_still_yields_no_statistical_eligibility() -> None:
-    prov = Provenance("real_market", "adapter-feed", T0, "UTC", "v", capability_profile_ref="p:1")
+    prov = Provenance(
+        "real_market",
+        "adapter-feed",
+        T0,
+        "UTC",
+        "v",
+        capability_profile_ref="p:1",
+        ohlc_basis="bid",
+    )
     bars = tuple(
         replace(b, source="adapter-feed", identity_key=f"feed:{i}", source_event_id=f"feed:{i}")
         for i, b in enumerate(bars_after_quiet(ENTRY, ("100.5", "104.5", "100", "104")))
@@ -394,7 +417,7 @@ def test_f5_policy_choice_changes_run_identity() -> None:
 
 def test_f6_long_bar_opening_beyond_target_then_through_stop_is_a_target_not_ambiguous() -> None:
     bars = bars_after_quiet(ENTRY, ("106", "107", "97", "100"))
-    r = simulate_exit(PLAN, bars, OVERLAP)
+    r = sim(PLAN, bars, OVERLAP)
     assert (r.exit_reason, r.exit_price) == ("target", D("104"))
     assert not r.ambiguous and r.alternative_exit_prices == ()
     assert r.exit_time == bars[2].event_time  # resolved at the open, not the bar close
@@ -404,12 +427,12 @@ def test_f6_long_bar_opening_beyond_target_then_through_stop_is_a_target_not_amb
 def test_f6_short_mirror() -> None:
     short = TradePlan("s", "short", DECISION, D("102"), D("96"))
     bars = bars_after_quiet(ENTRY, ("94", "103", "93", "100"))
-    r = simulate_exit(short, bars, OVERLAP)
+    r = sim(short, bars, OVERLAP)
     assert (r.exit_reason, r.exit_price) == ("target", D("96")) and not r.ambiguous
 
 
 def test_f6_a_genuinely_ambiguous_bar_is_still_ambiguous() -> None:
-    r = simulate_exit(PLAN, bars_after_quiet(ENTRY, ("100", "105", "97", "100")), OVERLAP)
+    r = sim(PLAN, bars_after_quiet(ENTRY, ("100", "105", "97", "100")), OVERLAP)
     assert r.ambiguous and r.exit_reason == "stop"
 
 
@@ -421,7 +444,7 @@ def test_f7_crossed_entry_quote_makes_spread_unavailable_without_aborting() -> N
         make_bar(0, "100", "100", "100", "100"),
         make_bar(1, "100", "104.5", "100", "104", bid="101", ask="100"),
     )
-    r = simulate_exit(PLAN, bars, OVERLAP)
+    r = sim(PLAN, bars, OVERLAP)
     assert r.status == "closed" and r.entry_spread is None
     assert "entry_quote_invalid_spread_unavailable" in r.assumptions
     model = CostModel(
@@ -436,31 +459,31 @@ def test_f7_valid_quote_still_gives_the_spread() -> None:
         make_bar(0, "100", "100", "100", "100"),
         make_bar(1, "100", "104.5", "100", "104", bid="99.9", ask="100.1"),
     )
-    assert simulate_exit(PLAN, bars, OVERLAP).entry_spread == D("0.2")
+    assert sim(PLAN, bars, OVERLAP).entry_spread == D("0.2")
 
 
 # ---- F8: holding time ----------------------------------------------------------------
 
 
 def test_f8_intrabar_fills_are_flagged_as_an_upper_bound_on_exit_time() -> None:
-    stop = simulate_exit(PLAN, bars_after_quiet(ENTRY, ("100", "100.5", "97.5", "98")), OVERLAP)
-    target = simulate_exit(PLAN, bars_after_quiet(ENTRY, ("100.5", "104.5", "100", "104")), OVERLAP)
+    stop = sim(PLAN, bars_after_quiet(ENTRY, ("100", "100.5", "97.5", "98")), OVERLAP)
+    target = sim(PLAN, bars_after_quiet(ENTRY, ("100.5", "104.5", "100", "104")), OVERLAP)
     assert stop.exit_time_upper_bound and target.exit_time_upper_bound
 
 
 def test_f8_time_stop_and_gap_exits_are_exact() -> None:
-    held = simulate_exit(
+    held = sim(
         PLAN,
         bars_after_quiet(ENTRY, ("100.5", "101", "100", "100.8")),
         ExitPolicy("t", "allow_overlap", BAR, max_hold_bars=2),
     )
-    gap = simulate_exit(PLAN, bars_after_quiet(ENTRY, ("96", "97", "95", "96.5")), OVERLAP)
+    gap = sim(PLAN, bars_after_quiet(ENTRY, ("96", "97", "95", "96.5")), OVERLAP)
     assert held.exit_reason == "time" and not held.exit_time_upper_bound
     assert gap.exit_reason == "stop_gap" and not gap.exit_time_upper_bound
     assert gap.exit_time == T0 + BAR * 2
 
 
 def test_f8_utc_zone_is_preserved() -> None:
-    r = simulate_exit(PLAN, bars_after_quiet(ENTRY, ("100.5", "104.5", "100", "104")), OVERLAP)
+    r = sim(PLAN, bars_after_quiet(ENTRY, ("100.5", "104.5", "100", "104")), OVERLAP)
     assert r.exit_time is not None and r.exit_time.tzinfo is not None
     assert r.exit_time.astimezone(UTC) == r.exit_time

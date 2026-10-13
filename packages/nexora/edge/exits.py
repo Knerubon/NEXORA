@@ -12,6 +12,11 @@ Bar semantics (assumptions recorded in every result):
 * When one bar's range touches both the stop and the target and no tick data orders them,
   the outcome is AMBIGUOUS. The configured policy resolves it (conservative default:
   stop first) and the result keeps both alternatives for sensitivity analysis.
+* Stops and targets are evaluated on the side of the book that would fill the EXIT: a long
+  exits by selling at the bid, a short by buying at the ask. Bars built from the other side
+  (or from mid/last) would fire short stops late and short targets early, so such runs are
+  refused rather than approximated. How to model the missing side (shift by an observed
+  spread, or a second bid/ask OHLC series) is an open Quant decision.
 """
 
 from __future__ import annotations
@@ -24,15 +29,22 @@ from typing import Literal
 
 from nexora.artifacts import canonical_hash
 from nexora.edge.costs import CostBreakdown, CostModel, compute_costs
-from nexora.edge.dataset import EdgeDatasetManifest, verify_edge_dataset
+from nexora.edge.dataset import (
+    EdgeDatasetError,
+    EdgeDatasetManifest,
+    check_split_covers,
+    verify_edge_dataset,
+)
 from nexora.edge.evidence import EvidenceGates, evaluate_gates
 from nexora.edge.splits import (
     HoldoutAccess,
     HoldoutAccessLog,
     HoldoutUnlock,
     SplitPlan,
+    WalkForwardWindow,
     select_completed_segment,
     validate_segment,
+    window_bounds,
 )
 from nexora.market_data.models import NormalizedPriceEvent
 from nexora.signals import ResearchSignal
@@ -49,6 +61,8 @@ ExitStatus = Literal[
 Concurrency = Literal["one_position", "allow_overlap"]
 
 AMBIGUITY_ASSUMPTION = "same_bar_stop_and_target_order_unknown"
+# The quote side whose prices fill each position's exit (stop, target, time stop).
+EXIT_SIDE_BASIS: dict[str, str] = {"long": "bid", "short": "ask"}
 
 
 class ExitInputError(ValueError):
@@ -183,7 +197,19 @@ def _validate_bars(bars: Sequence[NormalizedPriceEvent], interval: timedelta) ->
             raise ExitInputError("bar_received_before_close")
         if previous is not None and bar.event_time <= previous:
             raise ExitInputError("bars_not_strictly_increasing")
+        if previous is not None and bar.event_time - previous < interval:
+            # A bar opening before the previous one closed: the bar-close clock would be false.
+            raise ExitInputError("bars_overlap_interval")
         previous = bar.event_time
+
+
+def _check_basis(side: str, ohlc_basis: object) -> None:
+    if ohlc_basis is None:
+        raise ExitInputError("ohlc_basis_undeclared")
+    if ohlc_basis not in ("bid", "ask", "mid", "last"):
+        raise ExitInputError("invalid_ohlc_basis")
+    if ohlc_basis != EXIT_SIDE_BASIS[side]:
+        raise ExitInputError(f"ohlc_basis_{ohlc_basis}_cannot_fill_{side}_exits")
 
 
 def _check_plan(plan: TradePlan) -> None:
@@ -197,10 +223,19 @@ def _check_plan(plan: TradePlan) -> None:
 
 
 def simulate_exit(
-    plan: TradePlan, bars: Sequence[NormalizedPriceEvent], policy: ExitPolicy
+    plan: TradePlan,
+    bars: Sequence[NormalizedPriceEvent],
+    policy: ExitPolicy,
+    *,
+    ohlc_basis: object,
 ) -> ExitResult:
-    """Resolve one trade plan against completed bars. Pure and deterministic."""
+    """Resolve one trade plan against completed bars. Pure and deterministic.
+
+    `ohlc_basis` is the quote side the bars were built from (see `Provenance.ohlc_basis`). It
+    must be the side that fills this plan's exit (`EXIT_SIDE_BASIS`), otherwise the plan is
+    refused: trigger timing on the wrong side is systematically optimistic for one side."""
     _check_plan(plan)
+    _check_basis(plan.side, ohlc_basis)
     _validate_bars(bars, policy.bar_interval)
     long = plan.side == "long"
     sign = 1 if long else -1
@@ -401,6 +436,9 @@ class EdgeExitRun:
     unresolved: tuple[ExitResult, ...]
     ambiguous_count: int
     skipped_overlap_count: int
+    # Entered but never closed inside the data. They are NOT in `trades`, so any statistic over
+    # `trades` is biased toward fast exits and must be reported next to this count.
+    open_at_end_count: int
     notes: tuple[str, ...]
 
     @property
@@ -421,6 +459,7 @@ def run_exit_mode(
     segment: str | None = None,
     unlock: HoldoutUnlock | None = None,
     access_log: HoldoutAccessLog | None = None,
+    walk_forward: tuple[WalkForwardWindow, str] | None = None,
 ) -> EdgeExitRun:
     """Deterministic ledger for the SL/TP exit mode.
 
@@ -428,12 +467,22 @@ def run_exit_mode(
     (hashes, integrity and the full acceptance policy) so a run id can never name data it was
     not computed on. With `split` + `segment` only bars that are COMPLETE and AVAILABLE inside
     that segment are used (the holdout needs an unlock and an access log); every plan must
-    decide inside the segment. Without them the run is labelled `unsplit` and is not valid
-    out-of-sample evidence.
+    decide inside the segment. `split` + `walk_forward=(window, "train" | "test")` does the
+    same for one walk-forward window, which never reaches the holdout. Without a split the
+    run is labelled `unsplit` and is not valid out-of-sample evidence.
+
+    The split must be the plan pre-registered in the manifest (`split_plan_hash`); a dataset
+    with a registered plan can never be run unsplit, and one without can never be split, so
+    the holdout cannot be read by omitting the split or by substituting a different plan.
+
+    The bars' declared `Provenance.ohlc_basis` must be the exit side of every plan, and
+    `cost_model.currency` must equal the dataset's price `units` (gross PnL is in price units).
 
     The result's `gates` keep integrity, provenance, holdout authorization and eligibility
     apart; the last three are False because no independent mechanism exists for them."""
-    if (split is None) != (segment is None):
+    if segment is not None and walk_forward is not None:
+        raise ExitInputError("segment_and_walk_forward_are_exclusive")
+    if (split is None) != (segment is None and walk_forward is None):
         raise ExitInputError("split_and_segment_must_be_given_together")
     if segment is not None:
         validate_segment(segment)  # closed vocabulary, checked before anything else
@@ -445,6 +494,27 @@ def run_exit_mode(
         verify_edge_dataset(manifest, dataset, expected_manifest_hash=expected_manifest_hash)
     except ValueError as exc:
         raise ExitInputError(f"dataset_verification_failed:{exc}") from exc
+    # Pre-registration: the run's split must be exactly the one fixed in the verified manifest.
+    registered = manifest.split_plan_hash
+    if split is None and registered is not None:
+        raise ExitInputError("registered_split_requires_split_run")
+    if split is not None:
+        if registered is None:
+            raise ExitInputError("split_not_registered_in_manifest")
+        if split.plan_hash != registered:
+            raise ExitInputError("split_plan_hash_mismatch")
+        try:
+            check_split_covers(split, dataset)
+        except EdgeDatasetError as exc:
+            raise ExitInputError(f"dataset_verification_failed:{exc}") from exc
+    ohlc_basis = manifest.provenance.ohlc_basis
+    for plan in plan_list:
+        _check_basis(plan.side, ohlc_basis)
+    if cost_model.currency != manifest.base.units:
+        # Gross is (exit - entry) x unit_size in PRICE units. A cost in another currency would
+        # be subtracted from it without conversion; that conversion (contract size, tick value)
+        # is adapter-supplied and not implemented, so refuse instead of mixing units.
+        raise ExitInputError("cost_units_mismatch")
     ids = [p.signal_id for p in plan_list]
     if len(set(ids)) != len(ids):
         raise ExitInputError("duplicate_signal_id")
@@ -456,6 +526,7 @@ def run_exit_mode(
             raise ExitInputError("conflicting_same_time_signals")
 
     access: HoldoutAccess | None = None
+    segment_name = "unsplit"
     if split is not None and segment is not None:
         low, high = split.bounds(segment)
         bars = select_completed_segment(
@@ -472,6 +543,16 @@ def run_exit_mode(
             access = access_log.entries[-1]
         if any(not low <= p.decision_time < high for p in plan_list):
             raise ExitInputError("plan_outside_segment")
+        segment_name = segment
+    elif split is not None and walk_forward is not None:
+        window, part = walk_forward
+        low, high = window_bounds(split, window, part)
+        # Same completeness rule as a segment: the whole bar, through its availability time,
+        # must lie inside the window part.
+        bars = tuple(e for e in dataset if low <= e.event_time and e.received_at <= high)
+        if any(not low <= p.decision_time < high for p in plan_list):
+            raise ExitInputError("plan_outside_segment")
+        segment_name = f"walk_forward:{window.index}:{part}"
     else:
         bars = dataset
 
@@ -481,7 +562,7 @@ def run_exit_mode(
     busy_until: datetime | None = None
     blocked = False
     for plan in ordered:
-        outcome = simulate_exit(plan, bars, policy)
+        outcome = simulate_exit(plan, bars, policy, ohlc_basis=ohlc_basis)
         if policy.concurrency == "one_position" and outcome.status in ("closed", "open_at_end"):
             assert outcome.entry_time is not None
             if blocked or (busy_until is not None and outcome.entry_time < busy_until):
@@ -506,7 +587,6 @@ def run_exit_mode(
         else:
             unresolved.append(outcome)
 
-    segment_name = segment if segment is not None else "unsplit"
     gates = evaluate_gates(dataset_integrity_verified=True)  # verify_edge_dataset passed above
     run_id = "edge-exit-run:" + canonical_hash(
         (
@@ -516,6 +596,7 @@ def run_exit_mode(
             manifest.manifest_hash,
             segment_name,
             split.plan_hash if split is not None else None,
+            walk_forward[0] if walk_forward is not None else None,
             ordered,
             [t.exit for t in trades],
         )
@@ -530,10 +611,15 @@ def run_exit_mode(
         "statistical_evidence_fail_closed",
         *(f"blocker={b}" for b in gates.blockers),
         "open_trades_at_segment_end_are_excluded_quant_decision_open",
+        f"ohlc_basis={ohlc_basis}",
+        "exit_triggers_on_exit_side_quotes",
+        "entry_spread_quote_timing_within_bar_undeclared",
+        "exit_side_spread_not_modelled",
+        f"cost_units={cost_model.currency}",
     ]
     if not manifest.declared_real_market:
         notes.append("synthetic_data_not_statistical_evidence")
-    if segment is None:
+    if split is None:
         notes.append("unsplit_run_not_valid_out_of_sample")
     if policy.concurrency == "allow_overlap":
         notes.append("overlapping_positions_may_stack_exposure")
@@ -551,5 +637,6 @@ def run_exit_mode(
         unresolved=tuple(unresolved),
         ambiguous_count=sum(1 for t in trades if t.exit.ambiguous),
         skipped_overlap_count=sum(1 for u in unresolved if u.status == "skipped_overlap"),
+        open_at_end_count=sum(1 for u in unresolved if u.status == "open_at_end"),
         notes=tuple(notes),
     )

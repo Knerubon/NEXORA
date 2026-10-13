@@ -42,7 +42,12 @@ UNAVAILABLE = CostComponent("unavailable")
 
 @dataclass(frozen=True, slots=True)
 class CostModel:
-    """Per-component cost states. Spread may instead be derived from observed bid/ask."""
+    """Per-component cost states. Spread may instead be derived from observed bid/ask.
+
+    `currency` names the unit EVERY amount is expressed in. The SL/TP exit mode measures gross
+    PnL in price units x unit_size, so it requires `currency` to equal the dataset's price
+    `units`; converting to an account currency (contract size, tick value) needs
+    adapter-supplied facts and is not done here."""
 
     version: str
     currency: str

@@ -23,10 +23,13 @@ from nexora.edge.dataset import (
     QualityReport,
     audit_events,
     build_edge_manifest,
+    check_split_covers,
+    verified_evidence_gates,
     verify_edge_dataset,
 )
 from nexora.edge.evidence import EvidenceGates, evaluate_gates
 from nexora.edge.exits import (
+    EXIT_SIDE_BASIS,
     EdgeExitRun,
     EdgeTrade,
     ExitInputError,
@@ -51,9 +54,11 @@ from nexora.edge.splits import (
     select_segment,
     validate_segment,
     walk_forward_windows,
+    window_bounds,
 )
 
 __all__ = [
+    "EXIT_SIDE_BASIS",
     "KNOWN_ZERO",
     "SEGMENTS",
     "UNAVAILABLE",
@@ -82,6 +87,7 @@ __all__ = [
     "WalkForwardWindow",
     "audit_events",
     "build_edge_manifest",
+    "check_split_covers",
     "compute_costs",
     "evaluate_gates",
     "plan_from_signal",
@@ -91,6 +97,8 @@ __all__ = [
     "simulate_exit",
     "to_edge_trade",
     "validate_segment",
+    "verified_evidence_gates",
     "verify_edge_dataset",
     "walk_forward_windows",
+    "window_bounds",
 ]

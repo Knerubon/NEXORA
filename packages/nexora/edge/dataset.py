@@ -20,9 +20,14 @@ from nexora.artifacts import canonical_hash
 from nexora.backtest.datasets import manifest_for, verify_events
 from nexora.backtest.models import DatasetManifest
 from nexora.edge.evidence import EvidenceGates, evaluate_gates
+from nexora.edge.splits import SplitPlan
 from nexora.market_data.models import NormalizedPriceEvent
 
 DataClass = Literal["synthetic_fixture", "real_market"]
+# Which side of the book a bar's OPEN/HIGH/LOW/CLOSE were built from. This is NOT
+# `NormalizedPriceEvent.price_source`: for bars that field only says which OHLC value became
+# `price` (e.g. "close"); the event model does not record the quote side at all.
+OhlcBasis = Literal["bid", "ask", "mid", "last"]
 _MICROSECOND = timedelta(microseconds=1)
 
 # Every issue the audit can raise. Any of them blocks a dataset unless it is also listed in
@@ -40,6 +45,7 @@ BLOCKING_CODES = frozenset(
         "gap",
         "missing_sequence",
         "mixed_symbol_or_source",
+        "mixed_price_basis_or_units",
     }
 )
 # Conditions that describe MISSING or LATE data and may be knowingly accepted. Everything else
@@ -68,6 +74,9 @@ class Provenance:
     capability_profile: tuple[tuple[str, str], ...] = ()
     capability_profile_ref: str | None = None
     notes: tuple[str, ...] = ()
+    # Declared quote side of bar OHLC. None = undeclared, and the SL/TP exit mode then refuses
+    # to run because stop/target triggers cannot be evaluated side-aware (`nexora.edge.exits`).
+    ohlc_basis: OhlcBasis | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,7 +128,15 @@ def audit_events(
             note("timestamp_anomaly", index)
         elif e.received_at - e.event_time > max_latency:
             note("stale", index)
-        if e.identity_key in seen or e.is_duplicate:
+        # Two bars for the same period are duplicates even with different identities.
+        same_bar_period = (
+            e.kind == "bar"
+            and previous is not None
+            and previous.kind == "bar"
+            and aware
+            and e.event_time == previous.event_time
+        )
+        if e.identity_key in seen or e.is_duplicate or same_bar_period:
             note("duplicate", index)
         seen.add(e.identity_key)
         if e.is_out_of_order:
@@ -147,6 +164,8 @@ def audit_events(
         if previous is not None and aware:
             if e.symbol != previous.symbol or e.source != previous.source:
                 note("mixed_symbol_or_source", index)
+            if e.price_source != previous.price_source or e.units != previous.units:
+                note("mixed_price_basis_or_units", index)
             if e.source_sequence <= previous.source_sequence or e.event_time < previous.event_time:
                 note("out_of_order", index)
             elif e.source_sequence - previous.source_sequence > 1:
@@ -173,6 +192,10 @@ class EdgeDatasetManifest:
     max_latency_us: int
     expected_gap_us: int | None
     accepted_issues: tuple[str, ...]
+    # Hash of the SplitPlan pre-registered for this dataset (None = no split registered). It is
+    # part of `manifest_hash`, so a run can only use the plan fixed before evaluation and a
+    # dataset with a registered plan can never be run unsplit (holdout bypass).
+    split_plan_hash: str | None = None
 
     @property
     def manifest_hash(self) -> str:
@@ -183,14 +206,16 @@ class EdgeDatasetManifest:
         """The caller's LABEL only. It is not evidence that the data is real."""
         return self.provenance.data_class == "real_market"
 
-    def evidence_gates(self, *, dataset_integrity_verified: bool) -> EvidenceGates:
-        return evaluate_gates(dataset_integrity_verified=dataset_integrity_verified)
+    def evidence_gates(self) -> EvidenceGates:
+        """Gates for the manifest ALONE. Integrity is unverified here because no events were
+        checked; use `verified_evidence_gates` to establish it. A caller cannot assert it."""
+        return evaluate_gates(dataset_integrity_verified=False)
 
     @property
     def statistical_evidence_eligible(self) -> bool:
         """Always False while no independent provenance or holdout-authorization mechanism
         exists (`nexora.edge.evidence`). A real-market label cannot change this."""
-        return self.evidence_gates(dataset_integrity_verified=False).statistical_evidence_eligible
+        return self.evidence_gates().statistical_evidence_eligible
 
 
 def _check_real_market_attestation(
@@ -209,6 +234,22 @@ def _check_real_market_attestation(
 
 def _to_us(value: timedelta) -> int:
     return value // _MICROSECOND
+
+
+def check_split_covers(plan: SplitPlan, events: Sequence[NormalizedPriceEvent]) -> None:
+    """A pre-registered plan must partition THIS dataset: every event lies in [start, end) and
+    the holdout is not empty. Otherwise a plan could "register" a holdout the data never
+    reaches, or leave data outside every segment."""
+    if not isinstance(plan, SplitPlan):
+        raise EdgeDatasetError("invalid_split_plan")
+    rows = tuple(events)
+    if not rows:
+        raise EdgeDatasetError("empty_dataset")
+    if any(not plan.start <= e.event_time < plan.end for e in rows):
+        raise EdgeDatasetError("split_plan_does_not_cover_dataset")
+    low, high = plan.bounds("holdout")
+    if not any(low <= e.event_time < high for e in rows):
+        raise EdgeDatasetError("split_plan_holdout_empty")
 
 
 def apply_dataset_policy(
@@ -255,9 +296,15 @@ def build_edge_manifest(
     max_latency: timedelta,
     expected_gap: timedelta | None = None,
     accepted_issues: frozenset[str] = frozenset(),
+    split_plan: SplitPlan | None = None,
 ) -> EdgeDatasetManifest:
-    """Fail closed: any policy violation raises."""
+    """Fail closed: any policy violation raises.
+
+    `split_plan` pre-registers the train/validation/holdout boundaries with the dataset. Once
+    registered, every SL/TP run over this manifest must use exactly that plan."""
     rows = tuple(events)
+    if split_plan is not None:
+        check_split_covers(split_plan, rows)
     report = apply_dataset_policy(
         rows,
         provenance,
@@ -277,6 +324,7 @@ def build_edge_manifest(
         max_latency_us=_to_us(max_latency),
         expected_gap_us=None if expected_gap is None else _to_us(expected_gap),
         accepted_issues=tuple(sorted(accepted_issues)),
+        split_plan_hash=None if split_plan is None else split_plan.plan_hash,
     )
 
 
@@ -321,3 +369,14 @@ def verify_edge_dataset(
     )
     if report != manifest.quality:
         raise EdgeDatasetError("quality_report_mismatch")
+
+
+def verified_evidence_gates(
+    manifest: EdgeDatasetManifest,
+    events: Sequence[NormalizedPriceEvent],
+    *,
+    expected_manifest_hash: str,
+) -> EvidenceGates:
+    """The only way to obtain gates with integrity verified: it runs the verification."""
+    verify_edge_dataset(manifest, events, expected_manifest_hash=expected_manifest_hash)
+    return evaluate_gates(dataset_integrity_verified=True)

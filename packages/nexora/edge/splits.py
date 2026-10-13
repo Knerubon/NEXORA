@@ -257,24 +257,29 @@ def walk_forward_windows(
     train: timedelta,
     test: timedelta,
     step: timedelta | None = None,
-    purge: timedelta = timedelta(0),
+    purge: timedelta | None = None,
     anchored: bool = False,
 ) -> tuple[WalkForwardWindow, ...]:
     """Chronological windows over the plan's NON-holdout range [plan.start, validation_end).
 
     The range comes from the plan, never from the caller, so walk-forward cannot reach the
     holdout. Each test window starts after its train window plus purge, and test windows
-    never overlap one another."""
+    never overlap one another. The purge defaults to the plan's purge and may not be smaller:
+    the label horizon that justified the plan's purge applies to every window too."""
     if not isinstance(plan, SplitPlan):
         raise SplitError("invalid_split_input")
     start, end = plan.start, plan.validation_end
     _duration(train)
     _duration(test)
+    if purge is None:
+        purge = plan.purge
     _duration(purge)
     if step is not None:
         _duration(step)
     if train <= timedelta(0) or test <= timedelta(0) or purge < timedelta(0):
         raise SplitError("invalid_window_lengths")
+    if purge < plan.purge:
+        raise SplitError("purge_below_plan_purge")
     stride = step if step is not None else test
     if stride < test:
         raise SplitError("test_windows_would_overlap")
@@ -294,3 +299,29 @@ def walk_forward_windows(
     if not windows:
         raise SplitError("range_too_short_for_walk_forward")
     return tuple(windows)
+
+
+WindowPart = Literal["train", "test"]
+
+
+def window_bounds(
+    plan: SplitPlan, window: WalkForwardWindow, part: str
+) -> tuple[datetime, datetime]:
+    """Half-open bounds of one part of a walk-forward window, after checking the window could
+    have come from `walk_forward_windows(plan, ...)`: inside [plan.start, validation_end) and
+    separated by at least the plan's purge. A hand-built window cannot reach the holdout."""
+    if not isinstance(window, WalkForwardWindow):
+        raise SplitError("invalid_split_input")
+    if type(part) is not str or part not in ("train", "test"):
+        raise SplitError("invalid_window_part")
+    for value in (window.train_start, window.train_end, window.test_start, window.test_end):
+        _aware(value)
+    if not (
+        plan.start <= window.train_start < window.train_end
+        and window.train_end + plan.purge <= window.test_start < window.test_end
+        and window.test_end <= plan.validation_end
+    ):
+        raise SplitError("window_not_derived_from_plan")
+    if part == "train":
+        return window.train_start, window.train_end
+    return window.test_start, window.test_end

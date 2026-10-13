@@ -11,9 +11,12 @@ from decimal import Decimal
 
 from nexora.edge.dataset import (
     EdgeDatasetManifest,
+    OhlcBasis,
     Provenance,
     build_edge_manifest,
 )
+from nexora.edge.exits import EXIT_SIDE_BASIS, ExitPolicy, ExitResult, TradePlan, simulate_exit
+from nexora.edge.splits import SplitPlan
 from nexora.market_data.models import NormalizedPriceEvent
 
 T0 = datetime(2026, 1, 5, 0, 0, tzinfo=UTC)
@@ -67,8 +70,12 @@ def synthetic_manifest(
     events: tuple[NormalizedPriceEvent, ...],
     *,
     max_latency: timedelta = BAR + timedelta(seconds=30),
+    ohlc_basis: OhlcBasis | None = "bid",
+    split_plan: SplitPlan | None = None,
 ) -> tuple[EdgeDatasetManifest, str]:
-    """Manifest + its hash for synthetic events (bars: allow bar length + 30s latency)."""
+    """Manifest + its hash for synthetic events (bars: allow bar length + 30s latency).
+
+    Bars are declared bid-based by default (long exits); pass "ask" for short-only runs."""
     manifest = build_edge_manifest(
         events,
         Provenance(
@@ -77,7 +84,14 @@ def synthetic_manifest(
             retrieved_at=T0,
             timezone="UTC",
             tool_version="edge-test",
+            ohlc_basis=ohlc_basis,
         ),
         max_latency=max_latency,
+        split_plan=split_plan,
     )
     return manifest, manifest.manifest_hash
+
+
+def sim(plan: TradePlan, bars: tuple[NormalizedPriceEvent, ...], policy: ExitPolicy) -> ExitResult:
+    """`simulate_exit` on bars declared to be built from the plan's own exit side."""
+    return simulate_exit(plan, bars, policy, ohlc_basis=EXIT_SIDE_BASIS.get(plan.side, "bid"))
