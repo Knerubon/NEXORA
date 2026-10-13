@@ -1,0 +1,116 @@
+"""SYNTHETIC fixtures for edge-validation ENGINEERING tests only.
+
+Nothing built here is market data. Results computed from it test code correctness and must
+never be presented as evidence of trading profitability.
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+from typing import Any
+
+from nexora.edge.dataset import (
+    EdgeDatasetManifest,
+    OhlcBasis,
+    Provenance,
+    build_edge_manifest,
+)
+from nexora.edge.exits import EXIT_SIDE_BASIS, ExitPolicy, ExitResult, TradePlan, simulate_exit
+from nexora.edge.registration import SplitRegistration, SplitRegistry
+from nexora.edge.splits import SplitPlan
+from nexora.market_data.models import NormalizedPriceEvent
+
+T0 = datetime(2026, 1, 5, 0, 0, tzinfo=UTC)
+BAR = timedelta(minutes=5)
+
+
+def make_bar(
+    i: int,
+    o: str,
+    h: str,
+    low: str,
+    c: str,
+    *,
+    seq: int | None = None,
+    bid: str | None = None,
+    ask: str | None = None,
+    start: datetime = T0,
+    latency: timedelta = timedelta(0),
+) -> NormalizedPriceEvent:
+    opened = start + BAR * i
+    sequence = i if seq is None else seq
+    return NormalizedPriceEvent(
+        schema_version=1,
+        identity_key=f"synthetic:{sequence}",
+        source="synthetic-test",
+        symbol="SYNTH",
+        kind="bar",
+        event_time=opened,
+        received_at=opened + BAR + latency,
+        source_sequence=sequence,
+        source_order=sequence,
+        source_event_id=f"synthetic:{sequence}",
+        price_source="close",
+        units="SYNTH-UNIT",
+        precision=2,
+        price=Decimal(c),
+        bid=None if bid is None else Decimal(bid),
+        ask=None if ask is None else Decimal(ask),
+        open_price=Decimal(o),
+        high=Decimal(h),
+        low=Decimal(low),
+        close=Decimal(c),
+    )
+
+
+def flat_bars(count: int, price: str = "100") -> tuple[NormalizedPriceEvent, ...]:
+    return tuple(make_bar(i, price, price, price, price) for i in range(count))
+
+
+def synthetic_manifest(
+    events: tuple[NormalizedPriceEvent, ...],
+    *,
+    max_latency: timedelta = BAR + timedelta(seconds=30),
+    ohlc_basis: OhlcBasis | None = "bid",
+    split_plan: SplitPlan | None = None,
+) -> tuple[EdgeDatasetManifest, str]:
+    """Manifest + its hash for synthetic events (bars: allow bar length + 30s latency).
+
+    Bars are declared bid-based by default (long exits); pass "ask" for short-only runs."""
+    manifest = build_edge_manifest(
+        events,
+        Provenance(
+            data_class="synthetic_fixture",
+            source="synthetic-test",
+            retrieved_at=T0,
+            timezone="UTC",
+            tool_version="edge-test",
+            ohlc_basis=ohlc_basis,
+        ),
+        max_latency=max_latency,
+        split_plan=split_plan,
+    )
+    return manifest, manifest.manifest_hash
+
+
+def sim(plan: TradePlan, bars: tuple[NormalizedPriceEvent, ...], policy: ExitPolicy) -> ExitResult:
+    """`simulate_exit` on bars declared to be built from the plan's own exit side."""
+    return simulate_exit(plan, bars, policy, ohlc_basis=EXIT_SIDE_BASIS.get(plan.side, "bid"))
+
+
+def registry_args(
+    split_plan: SplitPlan | None = None,
+    *,
+    source: str = "synthetic-test",
+    symbol: str = "SYNTH",
+) -> dict[str, Any]:
+    """`run_exit_mode` keyword arguments for a registry that registers `split_plan` (or
+    nothing) for the synthetic stream, with its hash as the expected independent record."""
+    entries = (
+        ()
+        if split_plan is None
+        else (SplitRegistration(source, symbol, split_plan, "edge-test", "synthetic fixture"),)
+    )
+    registry = SplitRegistry(entries)
+    return {"registry": registry, "expected_registry_hash": registry.registry_hash}
