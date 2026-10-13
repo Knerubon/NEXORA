@@ -168,3 +168,12 @@ re-review of the delta pending. On `0318818`, 33 of the 36 tests in
 | N-2 (MINOR) | AWS-, Stripe-, short `ghp_`-shaped values persisted | Well-known credential prefixes rejected at any length in `token`/`reference`. Residual risk (64-hex lowercase secrets, short or `.`/`:`-split unprefixed secrets) recorded as ADR-036 open item 11 |
 | N-I1 (INFO) | `source_sequence` `None` / `"7"` / `8.0` -> Guard `ok` | `type(source_sequence) is int` or `invalid_numeric_type`; ordering/contiguity only compare real ints |
 | N-I2 (INFO) | contiguity now mandatory | recorded as ADR-036 open item 12 |
+
+## Hardening round 4 (response to narrow re-review of `239f987`: 1 MINOR)
+
+Starting HEAD `239f98796f39280b4b3c3035a450902dd950e685` (verified). R3-1: the known-credential
+check covered only `token`/`reference`, so AWS/Stripe-style keys were still persisted through
+caller references (`lifecycle_ref`, `instrument_id`, `risk_authority_outcome`) and free text
+(`future_conditions`). 15 of 16 tests in `tests/test_audit_dq_hardening_round4.py` fail on
+`239f987` (the 16th is a clean baseline). Fix: `_KNOWN_CREDENTIAL` also applies to the `ref` and
+`text` kinds; ADR-036 D3 and open item 11 updated. Self-review only; final delta re-review pending.

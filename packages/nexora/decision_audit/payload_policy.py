@@ -159,7 +159,11 @@ def _credential_shaped(value: str) -> bool:
 def _check_text(value: Any) -> None:
     if not isinstance(value, str) or len(value) > _MAX_TEXT:
         raise _fail()
-    if not all(ch.isprintable() for ch in value) or _SECRET_VALUE.search(value):
+    if (
+        not all(ch.isprintable() for ch in value)
+        or _SECRET_VALUE.search(value)
+        or _KNOWN_CREDENTIAL.search(value)
+    ):
         raise _fail()
 
 
@@ -182,6 +186,7 @@ def _check_scalar(kind: str, value: Any) -> None:
             or not _TOKEN.fullmatch(value)
             or _SENSITIVE_KEY.search(value)
             or _OPAQUE_RUN.search(value)
+            or _KNOWN_CREDENTIAL.search(value)
         ):
             raise _fail()
     elif base == "reference":
