@@ -107,8 +107,9 @@ decision-to-intent binding requirement (proposal section 4.7) and an eighth ques
 1. Confirm `RiskProposal.signal: ResearchSignal` and `RiskDecision.signal_id: str` are both
    required/non-Optional today (confirmed, section 1 of the proposal) — do not assume from ADR
    text alone, verify against `packages/nexora/risk/models.py`.
-2. Confirm `NewTradeAuthority.evaluate_manual()` reads only `risk_decision.action` — true, and
-   unchanged under Option A — but do **not** generalize this into "the gap is isolated upstream
+2. Confirm `NewTradeAuthority.evaluate_manual()` reads only `risk_decision.action` — true; its
+   signature is unchanged under Option A, but a decision-to-intent binding check is still
+   required (proposal section 4.7, question 8). Do **not** generalize this into "the gap is isolated upstream
    under every option": for Option B it is not (a new sibling decision type requires widening or
    adding to `evaluate_manual()`'s already-frozen signature, itself an ADR-governed change). This
    narrower, corrected claim replaces the overstated version from the prior revision.
@@ -193,10 +194,10 @@ still-valid for the corrected content).
   revision had claimed (incorrectly) that it was not.
 - Decisions made by this task: none — by design, unchanged from the prior revision. The task
   produces decision *inputs* (options + honestly-costed impact analysis), not decisions. See
-  proposal section 5 for the exact list of decisions deferred to Quant/Architect (now seven
+  proposal section 5 for the exact list of decisions deferred to Quant/Architect (at `fdc832e`: seven
   questions, was six — a new question on `proposal_id` namespace convention and a new question on
   stop-size/monetary-unit policy were added; the account/reservation question was sharpened with
-  its exact failure mode).
+  its exact failure mode; eight since Wave 2, see question 8).
 - Corrections applied at this HEAD, per Orchestrator integration review of HEAD `6f8436a`:
   - MAJOR 1: Option A3 reclassified from "available option needing Quant sign-off" to "excluded
     outright — fabricates a signal identity in effect." Option A1 reclassified from "zero

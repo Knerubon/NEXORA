@@ -507,7 +507,8 @@ decided or defaulted by this proposal (AGENTS.md section 9):
 - Does not implement `ManualRiskProposal`, `evaluate_manual_open()`, or any new decision type.
 - Does not modify `packages/nexora/risk/*`, `packages/nexora/autonomous/*`,
   `packages/nexora/position/*`, `packages/nexora/paper/*`, or any other production code.
-- Does not amend ADR-015 or ADR-034, and does not declare either accepted/frozen for this topic.
+- Does not amend ADR-015 or ADR-034. ADR-034 is already accepted/FROZEN on main (PR #50); this
+  proposal adds no acceptance, freeze or amendment for this topic.
 - Does not pick A1 vs A2 vs B — that is the Quant/Architect decision in section 5. Does not treat
   A3 as a live option requiring sign-off — it is excluded outright (section 3).
 - Does not claim any option is "zero compatibility impact" — every option is an explicit,
