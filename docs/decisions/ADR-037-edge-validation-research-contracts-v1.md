@@ -1,6 +1,6 @@
 # ADR-037 — Edge-validation research contracts and their relation to ADR-014 / ADR-030
 
-Status: **Proposed. Not accepted.** Drafted for the Architect/Rin decision on review finding B-3 of PR #79. Nothing in this document is in force until Rin records a decision; until then the interim rule in "Until a decision exists" applies.
+Status: **Proposed. Not accepted.** Drafted for the Architect/Rin decision on review finding B-3 of PR #79. The Owner chose Option 1 (keep `edge/*` separate) on 2026-10-13; this document is written on that basis. Nothing in it is in force until Rin accepts it; until then the interim rule in "Until a decision exists" applies.
 Date: 2026-10-13
 Workstream: EDGE-VALIDATION-1, `claude/edge-validation-v1` (PR #79), acting as ARCHITECT for the proposal only (no self-acceptance)
 Base: `origin/main` `36c90c59e2aa4f0d221c9c468a8379c5f57cbb87`
@@ -31,7 +31,7 @@ Facts that bear on the choice (verified at PR #79 HEAD):
 
 ## Options
 
-### Option 1 — Separate research-only contract, with an explicit mapping to ADR-014 (recommended)
+### Option 1 — Separate research-only contract, with an explicit mapping to ADR-014 (chosen by the Owner)
 
 `edge/*` is recorded as its own research contract family (`edge-research/v1`) that **does not** replace or extend ADR-014. ADR-014 stays frozen and unchanged. The relation is fixed by a one-way mapping:
 
@@ -63,9 +63,9 @@ Keep `edge/*` off `main` until VALID-1 / Backtest Lab consumers are designed, th
 
 Consequences: no contract risk, but the validation-readiness work (dataset manifests, holdout lock, side-aware exits) stays on a long-lived branch and drifts from `main`.
 
-## Recommendation (not a decision)
+## Chosen direction (pending Rin acceptance)
 
-Option 1. It is the only option that changes no frozen contract, matches the fact that `edge/*` has no consumers, and keeps the stricter semantics (locked holdout, unknown-is-not-zero costs) out of ADR-014 until something needs them.
+Option 1, chosen by the Owner on 2026-10-13 (decision card in the NEXORA project, relayed to this workstream). Rationale: it is the only option that changes no frozen contract, matches the fact that `edge/*` has no consumers, and keeps the stricter semantics (locked holdout, unknown-is-not-zero costs) out of ADR-014 until something needs them.
 
 ## Holdout pre-registration record (review findings B-2 / R-1)
 
@@ -94,7 +94,7 @@ Limits that remain, stated plainly: the registry and both expected hashes are st
 
 | Field | Value |
 |---|---|
-| Decision | _pending (Rin)_ |
-| Option chosen | _pending_ |
-| Decided by / date | _pending_ |
+| Owner direction | Option 1, keep `edge/*` a separate research contract with the mapping above (2026-10-13) |
+| Rin acceptance | _pending_ (status stays Proposed until recorded) |
+| Accepted by / date | _pending_ |
 | Pre-registration record rule accepted | _pending_ |

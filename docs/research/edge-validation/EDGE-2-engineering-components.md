@@ -185,7 +185,8 @@ API changes: `run_exit_mode(..., registry=, expected_registry_hash=)` (required)
 ### Architecture decision required (B-3, not decided here)
 
 Proposed as [ADR-037](../../decisions/ADR-037-edge-validation-research-contracts-v1.md) (status:
-Proposed, not accepted). It recommends option 1 below with an explicit mapping table.
+Proposed, not accepted). The Owner chose option 1 below (keep separate, with an explicit mapping
+table); Rin acceptance is still pending.
 
 `edge/*` adds its own split vocabulary (`train | validation | holdout`), cost model (`CostModel`
 with unknown/unavailable states) and run identity (`EdgeExitRun.run_id`). The frozen ADR-014
