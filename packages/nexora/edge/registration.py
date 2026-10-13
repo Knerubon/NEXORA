@@ -7,20 +7,28 @@ registry closes that gap: it records, per market stream (`source`, `symbol`), wh
 which time range, and `run_exit_mode` checks every run against it.
 
 Rules (enforced in `run_exit_mode`, see `governing_registration`):
+* Streams are compared by `stream_key`: NFKC, case-folded, with every non-alphanumeric
+  character removed, so "Synthetic-Test", "synthetic-test " and "synthetic_test" are one
+  stream. A name that is not ASCII after NFKC (look-alike dashes or letters) is refused.
 * A dataset whose time range overlaps a registered plan's `[start, end)` for the same stream
   must be run with exactly that plan; it can never be run unsplit or under another plan.
-* A dataset that overlaps no registration can only be run unsplit (and is labelled so).
+* Once a stream has any registration, a dataset of that stream outside every registered range
+  is refused (`stream_registered_dataset_outside_registered_ranges`): the same bars with their
+  timestamps moved cannot escape the registry by no longer overlapping it.
+* A stream with no registration at all can only be run unsplit (and is labelled so).
 * Registrations for the same stream may not overlap in time, and a dataset may not span two.
 
 Limits (not hidden): the registry is still caller-supplied data. It protects the holdout only
 when it is loaded from an independently reviewed record (a committed JSON file whose
-`registry_hash` is pinned next to the expected manifest hash) and when the stream labels are
-honest; a renamed `source` or `symbol` is a different stream. See ADR-037 (Proposed).
+`registry_hash` is pinned next to the expected manifest hash), when a range is registered
+before any run touches it, and when the labels are honest: a genuinely different `source` or
+`symbol` (e.g. "feed2") is a different stream. See ADR-037 (Proposed).
 """
 
 from __future__ import annotations
 
 import json
+import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -37,6 +45,25 @@ class RegistrationError(ValueError):
     def __init__(self, code: str) -> None:
         self.code = code
         super().__init__(code)
+
+
+def _name_key(name: object) -> str:
+    if type(name) is not str:
+        raise RegistrationError("invalid_stream_name")
+    folded = unicodedata.normalize("NFKC", name).casefold()
+    if not folded.isascii():
+        # Look-alike characters (U+2010 hyphen, Cyrillic letters) would otherwise make a
+        # second, unregistered stream that reads the same as the registered one.
+        raise RegistrationError("non_ascii_stream_name")
+    key = "".join(ch for ch in folded if ch.isalnum())
+    if not key:
+        raise RegistrationError("invalid_stream_name")
+    return key
+
+
+def stream_key(source: object, symbol: object) -> tuple[str, str]:
+    """Normalised identity of a market stream; near-identical spellings collapse to one key."""
+    return (_name_key(source), _name_key(symbol))
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,10 +83,11 @@ class SplitRegistration:
         for value in (self.source, self.symbol, self.registered_by, self.reason):
             if type(value) is not str or not value.strip():
                 raise RegistrationError("invalid_registration_field")
+        stream_key(self.source, self.symbol)  # refuse names that cannot be normalised
 
     @property
     def stream(self) -> tuple[str, str]:
-        return (self.source, self.symbol)
+        return stream_key(self.source, self.symbol)
 
     def overlaps(self, low: datetime, high: datetime) -> bool:
         """True when the closed range [low, high] intersects the plan's [start, end)."""
@@ -95,13 +123,19 @@ class SplitRegistry:
     def governing_registration(
         self, source: str, symbol: str, event_times: Sequence[datetime]
     ) -> SplitRegistration | None:
-        """The registration that governs a dataset with these event times, or None."""
+        """The registration that governs a dataset with these event times, or None when the
+        stream has no registration at all. Raises when the stream is registered but the
+        dataset lies outside every registered range, or spans more than one."""
         if not event_times:
             raise RegistrationError("empty_dataset")
+        key = stream_key(source, symbol)
         low, high = min(event_times), max(event_times)
-        found = [e for e in self.entries if e.stream == (source, symbol) and e.overlaps(low, high)]
+        same_stream = [e for e in self.entries if e.stream == key]
+        found = [e for e in same_stream if e.overlaps(low, high)]
         if len(found) > 1:
             raise RegistrationError("dataset_spans_multiple_registrations")
+        if not found and same_stream:
+            raise RegistrationError("stream_registered_dataset_outside_registered_ranges")
         return found[0] if found else None
 
     def to_json(self) -> str:

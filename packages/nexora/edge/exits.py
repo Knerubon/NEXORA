@@ -479,10 +479,13 @@ def run_exit_mode(
     The split must be the plan pre-registered in the manifest (`split_plan_hash`) AND the plan
     that `registry` records for the dataset's stream and time range. A dataset overlapping a
     registered plan can never be run unsplit or under another plan, even through a second
-    manifest built over the same or overlapping bars; one overlapping no registration can never
-    be split. This holds only as far as `registry` and `expected_registry_hash` come from an
-    independently reviewed record and the stream labels (`source`, `symbol`) are honest; a
-    caller who controls both can still describe the data differently (ADR-037, Proposed).
+    manifest built over the same, trimmed or overlapping bars; a dataset of a registered stream
+    outside every registered range (e.g. the same bars with moved timestamps) is refused; a
+    stream with no registration can never be split. Stream names are compared normalised
+    (`nexora.edge.registration.stream_key`). This holds only as far as `registry` and
+    `expected_registry_hash` come from an independently reviewed record and the labels
+    (`source`, `symbol`, timestamps) are honest; a caller who controls both can still describe
+    the data differently (ADR-037, Proposed).
 
     The bars' declared `Provenance.ohlc_basis` must be the exit side of every plan, and
     `cost_model.currency` must equal the dataset's price `units` (gross PnL is in price units).

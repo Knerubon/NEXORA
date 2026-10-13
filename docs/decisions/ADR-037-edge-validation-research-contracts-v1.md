@@ -72,17 +72,18 @@ Option 1, chosen by the Owner on 2026-10-13 (decision card in the NEXORA project
 ADR-030 G9 requires splits to be fixed before evaluation. PR #79 implements this in two layers; this ADR proposes the second layer as the named independent record the round-3 re-review asked for (R-1):
 
 1. **Per manifest.** `build_edge_manifest(..., split_plan=...)` hashes the plan into the manifest; a run must use exactly that plan and can never be unsplit once one is registered.
-2. **Per market stream (new, `nexora.edge.registration`).** A `SplitRegistry` records, for each `(source, symbol)`, which `SplitPlan` governs which time range. `run_exit_mode` requires the registry and its expected hash and refuses:
-   - an unsplit run over any dataset whose events overlap a registered plan's range (`registered_split_requires_split_run`), even through a second manifest built over the same, trimmed or shifted events;
+2. **Per market stream (new, `nexora.edge.registration`).** A `SplitRegistry` records, for each `(source, symbol)` stream, which `SplitPlan` governs which time range. Streams are compared by a normalised key (NFKC, case-folded, non-alphanumerics removed), so case, spacing and separator differences are the same stream; names that are not ASCII after NFKC (look-alike dashes or letters) are refused. `run_exit_mode` requires the registry and its expected hash and refuses:
+   - an unsplit run over any dataset whose events overlap a registered plan's range (`registered_split_requires_split_run`), even through a second manifest built over the same or trimmed events, or shifted events that still overlap the range;
+   - any dataset of a registered stream that lies outside every registered range (`stream_registered_dataset_outside_registered_ranges`), so the same bars with moved timestamps cannot run unsplit;
    - a split different from the registered one (`split_plan_not_registered_for_dataset`);
    - a split with no registry entry (`split_not_in_registry`);
    - a dataset that spans two registrations, and overlapping registrations for one stream.
 
    The registry serialises to canonical JSON (`SplitRegistry.to_json`) with a per-entry plan hash cross-check, so it can be committed and reviewed.
 
-Proposed operating rule (needs acceptance): the split registry for any dataset used in edge validation is a committed, reviewed JSON file, and its `registry_hash` is pinned in the same independent record as the expected manifest hash. Adding a registration is a reviewed change; editing or removing one is not allowed (a new plan is a new registration over a new time range).
+Proposed operating rule (needs acceptance): the split registry for any dataset used in edge validation is a committed, reviewed JSON file, and its `registry_hash` is pinned in the same independent record as the expected manifest hash. Adding a registration is a reviewed change; editing or removing one is not allowed (a new plan is a new registration over a new time range). A range must be registered before any run touches it, and a range that was already run unsplit is disqualified from later holdout registration (re-review F-3).
 
-Limits that remain, stated plainly: the registry and both expected hashes are still inputs to the library; they protect the holdout only when they come from the reviewed record. A renamed `source` or `symbol` is a different stream. Holdout unlock remains a declaration (`authorization_verified=False`), and statistical evidence eligibility remains constant `False` until independent provenance and authorization mechanisms exist. None of this unlocks the holdout.
+Limits that remain, stated plainly: the registry and both expected hashes are still inputs to the library; they protect the holdout only when they come from the reviewed record. A genuinely different `source` or `symbol` (for example `feed2`) is a different stream, and timestamps are labels too: bars relabelled with a new stream name and moved timestamps are not recognised (a content fingerprint is out of scope). Holdout unlock remains a declaration (`authorization_verified=False`), and statistical evidence eligibility remains constant `False` until independent provenance and authorization mechanisms exist. None of this unlocks the holdout.
 
 ## Until a decision exists
 

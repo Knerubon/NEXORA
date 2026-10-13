@@ -87,12 +87,15 @@ that plan (`split_plan_hash_mismatch` otherwise) and can never be unsplit
 window lies in `[plan.start, validation_end)` and keeps at least the plan's purge.
 
 This closes the omission and substitution bypasses inside one manifest. A second manifest built
-over the same (or trimmed, or shifted) events is closed by the **split registry**
-(`nexora.edge.registration`, Round 4): `run_exit_mode(registry=..., expected_registry_hash=...)`
-looks up the plan registered for the dataset's `(source, symbol)` and time range and refuses an
-unsplit run or any other plan there. The registry is protective only when it and its hash come
-from an independently reviewed record (proposed in ADR-037); a renamed source or symbol is a
-different stream.
+over the same or trimmed events, or shifted events that still overlap the registered range, is
+closed by the **split registry** (`nexora.edge.registration`, Round 4):
+`run_exit_mode(registry=..., expected_registry_hash=...)` looks up the plan registered for the
+dataset's `(source, symbol)` and time range and refuses an unsplit run or any other plan there.
+Stream names are compared normalised (case, spacing, separators; non-ASCII names refused), and a
+dataset of a registered stream outside every registered range is refused, so moving the
+timestamps does not escape the registry. The registry is protective only when it and its hash
+come from an independently reviewed record (proposed in ADR-037) and the labels are honest: a
+genuinely different source or symbol is a different stream.
 
 ## Hardening Round 1 (PR #79)
 
@@ -175,11 +178,13 @@ it turns a test red).
 | R-3 INFO | `ohlc_basis="xyz"` stored and hashed, refused only at run time | `invalid_ohlc_basis` at build and verify |
 | R-4 INFO | bars closer than the bar length passed the audit | optional `bar_interval` in `audit_events` / `build_edge_manifest`: blocking, non-acceptable `bar_overlap`; stored as `bar_interval_us` (hashed); a run whose `ExitPolicy.bar_interval` differs is refused (`bar_interval_mismatch`) |
 | R-5 INFO | `evaluate_gates(dataset_integrity_verified=True)` was public | `evaluate_gates(integrity=...)` needs an `IntegrityReceipt`, which only `verify_edge_dataset` issues |
+| F-1 MINOR (round-4 re-review) | case, trailing-space and look-alike variants of `source` / `symbol` missed the registry and read the holdout | `stream_key`: NFKC + casefold + non-alphanumerics removed; non-ASCII names refused (`non_ascii_stream_name`) |
+| F-2 MINOR (round-4 re-review) | the same bars moved a year forward ran unsplit; docs said "shifted" without qualification | a registered stream outside every registered range is refused (`stream_registered_dataset_outside_registered_ranges`); docs narrowed to "shifted but still overlapping" |
 
 API changes: `run_exit_mode(..., registry=, expected_registry_hash=)` (required);
 `EdgeExitRun.registry_hash`; `verify_edge_dataset` returns an `IntegrityReceipt`;
 `evaluate_gates(integrity=None)`; `build_edge_manifest(..., bar_interval=None)`;
-`EdgeDatasetManifest.bar_interval_us`; new `SplitRegistration`, `SplitRegistry`,
+`EdgeDatasetManifest.bar_interval_us`; new `SplitRegistration`, `SplitRegistry`, `stream_key`,
 `RegistrationError`, `IntegrityReceipt`.
 
 ### Architecture decision required (B-3, not decided here)

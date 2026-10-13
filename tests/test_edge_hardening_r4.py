@@ -159,13 +159,99 @@ def test_r1_manifest_plan_without_a_registry_entry_cannot_be_split() -> None:
         )
 
 
-def test_r1_unregistered_stream_or_range_runs_unsplit_and_is_labelled() -> None:
+def test_r1_unregistered_stream_runs_unsplit_and_is_labelled() -> None:
     other_stream = registry(plan60(), source="another-feed")
     result = run([HOLDOUT_PLAN], holdout_market(), manifest_plan=None, reg=other_stream)
     assert result.segment == "unsplit"
     assert "unsplit_run_not_valid_out_of_sample" in result.notes
+
+
+def test_r1_registered_stream_outside_its_registered_ranges_is_refused() -> None:
+    # Round-4 behaviour was to run this unsplit; once a stream is registered, every run on it
+    # must sit inside a registered range (re-review F-2).
     later = SplitPlan(T0 + BAR * 100, T0 + BAR * 120, T0 + BAR * 140, T0 + BAR * 160)
-    assert run([HOLDOUT_PLAN], holdout_market(), manifest_plan=None, reg=registry(later)).trades
+    with pytest.raises(ExitInputError, match="stream_registered_dataset_outside_registered_ranges"):
+        run([HOLDOUT_PLAN], holdout_market(), manifest_plan=None, reg=registry(later))
+
+
+# ---- Round-4 re-review F-1 / F-2 -----------------------------------------------------------
+
+
+def relabel(
+    bars: tuple[NormalizedPriceEvent, ...], *, source: str | None = None, symbol: str | None = None
+) -> tuple[NormalizedPriceEvent, ...]:
+    return tuple(
+        replace(
+            b,
+            source=b.source if source is None else source,
+            symbol=b.symbol if symbol is None else symbol,
+        )
+        for b in bars
+    )
+
+
+def relabelled_manifest_run(bars: tuple[NormalizedPriceEvent, ...], reg: SplitRegistry) -> Any:
+    source = bars[0].source
+    manifest = build_edge_manifest(bars, replace(PROV, source=source), max_latency=LAT)
+    return run_exit_mode(
+        [HOLDOUT_PLAN],
+        bars,
+        manifest=manifest,
+        expected_manifest_hash=manifest.manifest_hash,
+        registry=reg,
+        expected_registry_hash=reg.registry_hash,
+        policy=OVERLAP,
+        cost_model=ZERO,
+        unit_size=D("1"),
+    )
+
+
+@pytest.mark.parametrize(
+    ("source", "symbol"),
+    [
+        ("Synthetic-Test", "SYNTH"),
+        ("synthetic-test ", "SYNTH"),
+        ("SYNTHETIC_TEST", "SYNTH"),
+        ("synthetic test", "SYNTH"),
+        ("ｓｙｎｔｈｅｔｉｃ-ｔｅｓｔ", "SYNTH"),  # fullwidth, NFKC folds it
+        ("synthetic-test", "synth"),
+        ("synthetic-test", " SYNTH"),
+    ],
+)
+def test_f1_near_identical_stream_names_are_the_registered_stream(source: str, symbol: str) -> None:
+    # Previously (re-review F-1): ran unsplit and read the holdout target.
+    bars = relabel(holdout_market(), source=source, symbol=symbol)
+    with pytest.raises(ExitInputError, match="registered_split_requires_split_run"):
+        relabelled_manifest_run(bars, registry(plan60()))
+
+
+@pytest.mark.parametrize("source", ["synthetic\u2010test", "synthetic-t\u0435st"])
+def test_f1_look_alike_characters_are_refused(source: str) -> None:
+    bars = relabel(holdout_market(), source=source.encode().decode("unicode_escape"))
+    with pytest.raises(ExitInputError, match="non_ascii_stream_name"):
+        relabelled_manifest_run(bars, registry(plan60()))
+    with pytest.raises(RegistrationError, match="non_ascii_stream_name"):
+        SplitRegistration(bars[0].source, "SYNTH", plan60(), "rin", "r")
+
+
+def test_f1_registrations_that_normalise_to_one_stream_cannot_overlap() -> None:
+    p = plan60()
+    with pytest.raises(RegistrationError, match="overlapping_registrations"):
+        registry(p).register(SplitRegistration("Synthetic_Test", "synth", p, "x", "y"))
+    with pytest.raises(RegistrationError, match="invalid_stream_name"):
+        SplitRegistration("--", "SYNTH", p, "x", "y")
+
+
+def test_f2_the_same_bars_moved_a_year_forward_cannot_run_unsplit() -> None:
+    # Previously (re-review F-2, probe E1): ran unsplit, 1 trade, target on the holdout bar.
+    year = timedelta(days=365)
+    moved = tuple(
+        replace(b, event_time=b.event_time + year, received_at=b.received_at + year)
+        for b in holdout_market()
+    )
+    plan = replace(HOLDOUT_PLAN, decision_time=HOLDOUT_PLAN.decision_time + year)
+    with pytest.raises(ExitInputError, match="stream_registered_dataset_outside_registered_ranges"):
+        run([plan], moved, manifest_plan=None, reg=registry(plan60()))
 
 
 def test_r1_registered_holdout_still_needs_unlock_and_is_recorded() -> None:

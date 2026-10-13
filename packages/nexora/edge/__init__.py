@@ -41,7 +41,12 @@ from nexora.edge.exits import (
     simulate_exit,
     to_edge_trade,
 )
-from nexora.edge.registration import RegistrationError, SplitRegistration, SplitRegistry
+from nexora.edge.registration import (
+    RegistrationError,
+    SplitRegistration,
+    SplitRegistry,
+    stream_key,
+)
 from nexora.edge.splits import (
     SEGMENTS,
     HoldoutAccess,
@@ -100,6 +105,7 @@ __all__ = [
     "select_completed_segment",
     "select_segment",
     "simulate_exit",
+    "stream_key",
     "to_edge_trade",
     "validate_segment",
     "verified_evidence_gates",
