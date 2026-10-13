@@ -1,0 +1,18 @@
+# PR-4 readiness prerequisites (dedup store) - matrix
+
+Base: 41c03866807c006643007357d804d0060398f67a. Branch: claude/pr4-dedup-hardening-v1.
+Status: self-review; independent + Security review pending. Scope: prerequisites only; the ExecutionPipeline (PR-4) is NOT implemented here.
+
+| # | Prerequisite (Rin) | Status | Evidence |
+|---|---|---|---|
+| 1 | Result-without-attempt enforcement belongs to PR-4 orchestration; store keeps legacy compatibility | PLANNED (PR-4) | Store still accepts `record_result` in CLAIMED_NOT_ATTEMPTED (`dedup_store.py` `record_result`; module docstring RESULT-WITHOUT-ATTEMPT); gate recorded in `tasks/PR5-dedup-core.md`. Not removed here. |
+| 2 | State access only via `state()` / `inspect()`, never `lookup().latest_result` | DONE (store side) / PLANNED (PR-4 consumer) | Protocol `lookup` docstring; guard tests `test_inspect_reports_unsafe_when_latest_result_looks_clean`, `test_unknown_then_rejected_stays_unresolved_and_unreleasable`, `test_quarantined_state_is_visible_only_via_inspect` (tests/test_execution_dedup_hardening.py). PR-4 must still comply. |
+| 3 | OPEN-16 gate blocks on RESULT_UNSAFE and QUARANTINED, no automatic retry/reclaim | PLANNED (PR-4) + OPEN (global enumeration) | Store never auto-clears: `test_late_unsafe_result_is_durable_and_never_auto_cleared` and related tests in tests/test_execution_dedup_attempt_abort.py. Global enumeration is OPEN: `tasks/DEDUP-ENUM-1-durable-enumeration.md` (PROPOSAL FOR RIN). `unresolved_among` is caller-scoped only. |
+| 4 | Exception hierarchy: IO and integrity errors siblings under DedupStoreError | DONE | `dedup_store.py` (`DedupStoreError`, `DedupStoreCorruptError`, `DedupStoreIOError`); tests `test_io_and_corrupt_errors_are_siblings_under_dedup_store_error`, `test_io_failure_is_denied_not_integrity_not_success[*]`, `test_inspect_site_integrity_quarantines_io_propagates`, `test_closed_storage_is_io_class_and_denied`. Independent review pending. |
+| 5 | evidence_ref (request_digest / reconciliation_evidence_ref / preflight_decision_ref) cannot become an uncontrolled secret/PII transport | DONE (minimal write-side rule) / OPEN (policy gap for Rin) | `opaque_ref_violation`, `attempt_payload`; tests `test_attempt_rejects_non_opaque_refs`, `test_rejected_ref_writes_nothing_and_key_stays_claimed`, `test_opaque_refs_accepted`. Gap: ADR-035 only says "opaque refs"; the 256-char / charset / keyword rule is a minimal guard, not a Rin-approved policy, and legacy stored rows are not re-validated on read. |
+| 6 | Lifecycle helper RAISES on invalid/stale transition; PR-4 orchestration catches -> reconciliation/quarantine, NO execution retry (frozen) | DONE (helper) / PLANNED (PR-4 catch) | `position/result_lifecycle.py` raises `PositionInputError` (`illegal_position_state_transition`, `position_not_open_or_managing`, quantity mismatches); tests/test_position_result_lifecycle.py. PR-4 catch behavior is not built; frozen, not reopened. |
+
+## Catch-site audit for the hierarchy change
+- Production: only `JournalExecutionDedupStore.inspect` caught the pair; it now catches only `DedupStoreCorruptError` (quarantine) and IO errors propagate, same behavior as before. `_events` catches `DedupStoreError` and re-raises (unchanged). `_append`/`_events` raise IO/Corrupt as before.
+- No other production module references the dedup exceptions (repo-wide grep).
+- Tests: `test_closed_storage_fails_closed` relied on subclassing and now expects `DedupStoreIOError`; `_never_first_claim` catches only integrity errors from corrupted streams (an I/O error would now surface as a test failure, which is stricter). No compatibility alias was added.

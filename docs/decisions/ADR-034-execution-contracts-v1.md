@@ -1,6 +1,10 @@
 # ADR-034 — Execution Contract Freeze V1
 
-Status: PROPOSED — Rin review required; CONTRACT FREEZE V1 NOT DECLARED until Rin approves
+Status: **accepted** — Execution Contract Freeze V1 **FROZEN** (contract shapes and boundaries only).
+Acceptance record (Owner-confirmed, 2026-10-03): independent review approved; review fixes
+completed; delta review approved; [PR #50](https://github.com/Knerubon/NEXORA/pull/50)
+human-merged into `main` at `d9ac44537c785490a5d2b37b503ff34cffdce269`.
+This records the completed lifecycle; the scope, contracts and open questions below are unchanged.
 Date: 2026-10-03
 Owner: Architecture Developer (Claude Code), acting as ARCHITECT/INTEGRATOR per AGENTS.md section 1
 Task: Execution Contract Freeze V1
@@ -399,4 +403,4 @@ Restated explicitly, each with where it is enforced and tested
   governance (AGENTS.md section 0) until a dedicated governance ADR narrowly lifts it, per
   ADR-033 section 21 (unchanged, not revisited here).
 
-EXECUTION CONTRACT FREEZE V1 READY FOR RIN REVIEW
+EXECUTION CONTRACT FREEZE V1 ACCEPTED — FROZEN (contract shapes and boundaries only)

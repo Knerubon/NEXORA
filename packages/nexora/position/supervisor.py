@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from decimal import Decimal
+from typing import TYPE_CHECKING, NoReturn
 
 from nexora.autonomous_contracts import (
     TRADE_STATE_TRANSITIONS,
@@ -29,6 +30,19 @@ from nexora.autonomous_contracts import (
     TradeState,
 )
 from nexora.position.models import ExitDecision, PositionInputError, PositionRecord
+
+if TYPE_CHECKING:
+    from datetime import datetime
+
+RECOVERY_AUTHORIZATION_NOT_RESOLVED = "recovery_authorization_not_resolved"
+
+
+class RecoveryAuthorizationNotResolvedError(PositionInputError):
+    """EMERGENCY recovery is HARD-DENIED (ADR-035 section 6, OPEN-20 unresolved)."""
+
+    def __init__(self) -> None:
+        super().__init__(RECOVERY_AUTHORIZATION_NOT_RESOLVED)
+
 
 _EXIT_ACTION_TO_INTENT_KIND: dict[str, TradeIntentKind] = {
     "TIGHTEN": TradeIntentKind.MODIFY_PROTECTION,
@@ -118,6 +132,32 @@ def mark_closed(position: PositionRecord) -> PositionRecord:
         raise PositionInputError("cannot_close_nonzero_quantity")
     _require_transition(position.state, TradeState.CLOSED)
     return replace(position, state=TradeState.CLOSED)
+
+
+def recover_from_emergency(
+    position: PositionRecord,
+    evidence: object,
+    *,
+    operator_ref: str,
+    recovered_at: datetime,
+) -> NoReturn:
+    """HARD-DENY stub for the EMERGENCY recovery transition (ADR-035 section 6, INV-30).
+
+    ``position/supervisor.py`` owns the authorization-enabled recovery
+    transition; ``execution/recovery.py`` only plans. Plan != authorize !=
+    apply. OPEN-20 (authorization model) and OPEN-1 (freshness bound) are
+    unresolved, so this function ALWAYS raises
+    ``RecoveryAuthorizationNotResolvedError`` and NEVER returns a
+    ``PositionRecord`` (the ADR's ``-> PositionRecord`` is realised as
+    ``NoReturn``). Every argument is ignored: ``operator_ref`` is audit
+    identity only, a ``RecoveryPlan`` (or its ``authorized``/``derived_target``)
+    is no proof of authorization, and there is no flag, override, default,
+    timeout or test-only path. It does no I/O, reads no clock, and never
+    mutates ``position``. ``TRADE_STATE_TRANSITIONS[EMERGENCY]`` is unchanged.
+    """
+
+    del position, evidence, operator_ref, recovered_at
+    raise RecoveryAuthorizationNotResolvedError()
 
 
 def build_trade_intent(

@@ -4,7 +4,39 @@ Research/observation and local paper only; PROD is a stable screen, not authoriz
 for live or demo orders. Same market input; separate code, configuration, processes,
 brain, storage and logs. No strategy, P&F, Matrix, Signal or Experience formula changes.
 
-## Layout and baseline
+## Cloud-first development and the Windows integration node
+
+Code development no longer happens on the Windows machine. The roles are:
+
+| Place | Role | Runtime environments it may hold |
+| --- | --- | --- |
+| GitHub | Source of truth for code, docs, ADRs, tasks, handoffs | none |
+| Claude Code cloud session | Primary development, testing and review ([AGENTS.md section 5.2](../AGENTS.md)) | disposable DEV/test runtimes only: temporary runtime roots, fixture journals, disposable PostgreSQL |
+| Windows machine | MT5 / broker integration node | the real DEV/PROD runtimes, MT5 terminal, local PostgreSQL, Tailscale |
+| Local SSD | Disposable runtime/cache/integration checkouts | as Windows node; never the only copy of code |
+
+Boundary rules:
+
+- Cloud sessions never connect to an MT5 terminal or a real broker, never use production
+  DSNs, `.env.production`, PROD journals, checkpoints or secrets, and never set `NEXORA_MT5_*`.
+  The isolation guards in this document still apply to every runtime they start.
+- The Windows node runs only WINDOWS-INTEGRATION checks (see [development guide](development.md)):
+  an operator pulls a named SHA from GitHub into a disposable checkout, runs the check and reports
+  evidence back to the PR. It is not a development workspace and edits made there are not
+  integrated unless pushed through a normal branch and PR.
+- PROD start/stop/build/deploy and anything touching PROD storage are PRODUCTION-ONLY: never
+  automatic, never part of a development task, and each needs separate Rin authority
+  ([AGENTS.md section 20.7](../AGENTS.md)). No real-order transmission and no AUTO unlock.
+- `D:\NEXORA` is a recovery source only. Do not assume it exists, do not develop there, and do
+  not run Git repair or mass scans on it; recovery is targeted at items not already on GitHub.
+- Non-Git operational data (research config JSON, instrument bindings, recorded datasets,
+  journals) is backed up separately; a cloud session receives only explicitly approved,
+  non-secret, non-production copies.
+
+The worktree layout below is the legacy local model. It still describes how DEV and PROD are
+isolated on the Windows node, but `D:\NEXORA` paths are historical examples, not a requirement.
+
+## Layout and baseline (legacy local model)
 
 - `D:\NEXORA\NEXORA`: existing stable worktree; do not edit it during development.
 - `D:\NEXORA\NEXORA-DEV`: development feature worktree.
@@ -25,7 +57,7 @@ Copy-Item config/development.env.example .env.development
 
 Install `--extra mt5` separately when using the existing MT5 adapter. Each worktree
 owns its virtualenv and node_modules; do not junction writable build/dependency folders.
-All feature edits, tests, builds and Codex work run in DEV. Update stable code only
+All feature edits, tests, builds and Codex work run in DEV (today: in cloud sessions, see above). Update stable code only
 through an approved release while that environment is stopped. No automated checkout,
 merge, tag, deployment or movement of the existing repository is provided.
 
