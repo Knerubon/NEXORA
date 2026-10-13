@@ -2,8 +2,8 @@
 
 Research/backtest only. Reuses `nexora.backtest` hashing and dataset checks and adds:
 dataset provenance + quality audit, chronological splits, cost accounting with explicit
-unknown states, and a separate SL/TP-aware exit mode. Nothing here freezes the P&F
-baseline or evaluates real-market edge.
+unknown states, split pre-registration, and a separate SL/TP-aware exit mode. Nothing here
+freezes the P&F baseline or evaluates real-market edge.
 """
 
 from nexora.edge.costs import (
@@ -27,7 +27,7 @@ from nexora.edge.dataset import (
     verified_evidence_gates,
     verify_edge_dataset,
 )
-from nexora.edge.evidence import EvidenceGates, evaluate_gates
+from nexora.edge.evidence import EvidenceGates, IntegrityReceipt, evaluate_gates
 from nexora.edge.exits import (
     EXIT_SIDE_BASIS,
     EdgeExitRun,
@@ -41,6 +41,7 @@ from nexora.edge.exits import (
     simulate_exit,
     to_edge_trade,
 )
+from nexora.edge.registration import RegistrationError, SplitRegistration, SplitRegistry
 from nexora.edge.splits import (
     SEGMENTS,
     HoldoutAccess,
@@ -79,10 +80,14 @@ __all__ = [
     "HoldoutAccessLog",
     "HoldoutLocked",
     "HoldoutUnlock",
+    "IntegrityReceipt",
     "Provenance",
     "QualityReport",
+    "RegistrationError",
     "SplitError",
     "SplitPlan",
+    "SplitRegistration",
+    "SplitRegistry",
     "TradePlan",
     "WalkForwardWindow",
     "audit_events",

@@ -34,7 +34,15 @@ from nexora.edge import (
 )
 from nexora.market_data.models import NormalizedPriceEvent
 
-from tests.edge_fixtures import BAR, T0, flat_bars, make_bar, sim, synthetic_manifest
+from tests.edge_fixtures import (
+    BAR,
+    T0,
+    flat_bars,
+    make_bar,
+    registry_args,
+    sim,
+    synthetic_manifest,
+)
 
 D = Decimal
 LAT = BAR + timedelta(seconds=30)
@@ -72,6 +80,7 @@ def run(
         bars,
         manifest=manifest,
         expected_manifest_hash=digest,
+        **registry_args(registered(kwargs)),
         policy=policy,
         cost_model=ZERO,
         unit_size=D("1"),
@@ -173,6 +182,7 @@ def test_f3_bars_that_do_not_match_the_manifest_are_refused() -> None:
             tampered,
             manifest=manifest,
             expected_manifest_hash=digest,
+            **registry_args(),
             policy=OVERLAP,
             cost_model=ZERO,
             unit_size=D("1"),
@@ -183,6 +193,7 @@ def test_f3_bars_that_do_not_match_the_manifest_are_refused() -> None:
             bars,
             manifest=manifest,
             expected_manifest_hash="0" * 64,
+            **registry_args(),
             policy=OVERLAP,
             cost_model=ZERO,
             unit_size=D("1"),
@@ -314,6 +325,7 @@ def test_f4_attested_real_market_label_still_yields_no_statistical_eligibility()
         bars,
         manifest=manifest,
         expected_manifest_hash=manifest.manifest_hash,
+        **registry_args(),
         policy=OVERLAP,
         cost_model=ZERO,
         unit_size=D("1"),

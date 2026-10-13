@@ -17,7 +17,7 @@ mechanism exists, extend `evaluate_gates` only, and change its tests in the same
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 NO_PROVENANCE_MECHANISM = "no_independent_provenance_verification_mechanism"
 NO_AUTHORIZATION_MECHANISM = "no_independent_holdout_authorization_mechanism"
@@ -26,6 +26,29 @@ INTEGRITY_NOT_VERIFIED = "dataset_integrity_not_verified"
 
 class EvidenceGateError(ValueError):
     pass
+
+
+# Only `nexora.edge.dataset.verify_edge_dataset` holds this; it is how gate (1) is proven.
+_ISSUED_BY_VERIFICATION = object()
+
+
+@dataclass(frozen=True, slots=True)
+class IntegrityReceipt:
+    """Proof that `verify_edge_dataset` passed for the manifest with this hash. It cannot be
+    constructed by a caller (the issuing token is private), so gate (1) can no longer be
+    asserted by passing `True`."""
+
+    manifest_hash: str
+    _issuer: object = field(default=None, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if self._issuer is not _ISSUED_BY_VERIFICATION:
+            raise EvidenceGateError("integrity_receipt_not_issued_by_verification")
+
+
+def _issue_integrity_receipt(manifest_hash: str) -> IntegrityReceipt:
+    """Private to `nexora.edge.dataset`; call it only after a full verification passed."""
+    return IntegrityReceipt(manifest_hash, _ISSUED_BY_VERIFICATION)
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,9 +71,13 @@ class EvidenceGates:
             raise EvidenceGateError("eligible_with_blockers")
 
 
-def evaluate_gates(*, dataset_integrity_verified: bool) -> EvidenceGates:
-    """The only place gate values are decided. Provenance and holdout authorization are
-    constants (False) because no independent mechanism exists to establish them."""
+def evaluate_gates(*, integrity: IntegrityReceipt | None = None) -> EvidenceGates:
+    """The only place gate values are decided. Integrity is True only with a receipt issued by
+    `verify_edge_dataset`. Provenance and holdout authorization are constants (False) because
+    no independent mechanism exists to establish them."""
+    if integrity is not None and not isinstance(integrity, IntegrityReceipt):
+        raise EvidenceGateError("invalid_integrity_receipt")
+    dataset_integrity_verified = integrity is not None
     blockers: list[str] = []
     if not dataset_integrity_verified:
         blockers.append(INTEGRITY_NOT_VERIFIED)

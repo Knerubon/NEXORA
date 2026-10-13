@@ -36,7 +36,7 @@ from nexora.edge import (
 )
 from nexora.market_data.models import NormalizedPriceEvent
 
-from tests.edge_fixtures import BAR, T0, make_bar, synthetic_manifest
+from tests.edge_fixtures import BAR, T0, make_bar, registry_args, synthetic_manifest
 
 D = Decimal
 LAT = BAR + timedelta(seconds=30)
@@ -67,6 +67,7 @@ def run(
         bars,
         manifest=manifest,
         expected_manifest_hash=digest,
+        **registry_args(register),
         policy=OVERLAP,
         cost_model=cost_model,
         unit_size=D("1"),
@@ -235,6 +236,7 @@ def test_b2_tampering_with_the_registered_hash_fails_verification() -> None:
             holdout_market(),
             manifest=forged,
             expected_manifest_hash=digest,
+            **registry_args(plan60()),
             policy=OVERLAP,
             cost_model=ZERO,
             unit_size=D("1"),

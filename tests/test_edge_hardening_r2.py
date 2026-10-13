@@ -47,7 +47,15 @@ from nexora.market_data.models import NormalizedPriceEvent
 from nexora.signals import ResearchSignal
 from nexora.signals.models import SignalDecision, SignalTarget
 
-from tests.edge_fixtures import BAR, T0, flat_bars, make_bar, sim, synthetic_manifest
+from tests.edge_fixtures import (
+    BAR,
+    T0,
+    flat_bars,
+    make_bar,
+    registry_args,
+    sim,
+    synthetic_manifest,
+)
 
 D = Decimal
 LAT = BAR + timedelta(seconds=30)
@@ -97,6 +105,7 @@ def run(
         bars,
         manifest=manifest,
         expected_manifest_hash=digest,
+        **registry_args(registered(kwargs)),
         policy=policy,
         cost_model=ZERO,
         unit_size=D("1"),
@@ -359,14 +368,18 @@ def test_p1_bar_missing_ohlc_fields_is_invalid() -> None:
 
 
 def test_p0_gates_are_four_separate_facts_and_only_integrity_can_be_true() -> None:
-    gates = evaluate_gates(dataset_integrity_verified=True)
+    bars = flat_bars(3)
+    manifest, digest = synthetic_manifest(bars)
+    gates = evaluate_gates(
+        integrity=verify_edge_dataset(manifest, bars, expected_manifest_hash=digest)
+    )
     assert gates.dataset_integrity_verified
     assert not gates.provenance_independently_verified
     assert not gates.holdout_evaluation_authorized
     assert not gates.statistical_evidence_eligible
     assert "no_independent_provenance_verification_mechanism" in gates.blockers
     assert "no_independent_holdout_authorization_mechanism" in gates.blockers
-    unverified = evaluate_gates(dataset_integrity_verified=False)
+    unverified = evaluate_gates()
     assert "dataset_integrity_not_verified" in unverified.blockers
 
 
@@ -374,7 +387,7 @@ def test_p0_gate_function_takes_no_caller_supplied_proof() -> None:
     call: Any = evaluate_gates
     for kwarg in ("provenance_independently_verified", "holdout_evaluation_authorized"):
         with pytest.raises(TypeError):
-            call(dataset_integrity_verified=True, **{kwarg: True})
+            call(**{kwarg: True})
 
 
 def test_p0_inconsistent_gate_objects_cannot_exist() -> None:
@@ -400,6 +413,7 @@ def test_p0_real_market_label_adapter_ref_unlock_and_log_cannot_make_a_run_eligi
         bars,
         manifest=manifest,
         expected_manifest_hash=manifest.manifest_hash,
+        **registry_args(p, source="adapter-feed"),
         policy=OVERLAP,
         cost_model=ZERO,
         unit_size=D("1"),
@@ -700,6 +714,7 @@ def test_p1_holding_time_and_swap_use_the_bar_close_not_the_arrival_time() -> No
         bars,
         manifest=manifest,
         expected_manifest_hash=digest,
+        **registry_args(),
         policy=OVERLAP,
         cost_model=model,
         unit_size=D("1"),

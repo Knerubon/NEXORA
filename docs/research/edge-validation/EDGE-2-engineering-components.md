@@ -24,6 +24,7 @@ and `EdgeDatasetManifest.statistical_evidence_eligible` is `False` for `syntheti
 |---|---|
 | `edge/dataset.py` | Provenance (`data_class`, source, UTC, tool version, adapter-supplied capability profile), quality audit (duplicate, out-of-order, stale, gap, missing sequence, crossed quote, non-positive price, timestamp anomaly, mixed symbol), manifest + hash verification. Fails closed unless an issue is explicitly accepted in the manifest. Wraps `backtest.datasets.manifest_for/verify_events`. |
 | `edge/splits.py` | Half-open chronological train / validation / holdout with optional purge; holdout needs a `HoldoutUnlock` bound to the exact plan hash with named authority and reason, and every read is recorded in a mandatory `HoldoutAccessLog` (repeat reads are flagged); walk-forward windows (rolling or anchored, non-overlapping tests, test after train + purge) take the **plan**, and their range is always `[plan.start, plan.validation_end)`, so they cannot reach the holdout. |
+| `edge/registration.py` | Split pre-registration per market stream (`source`, `symbol`) and time range, independent of any single manifest; required by `run_exit_mode` (Round 4, R-1). Canonical JSON for a committed, reviewed record. |
 | `edge/costs.py` | Spread / commission / slippage / swap each `known`, `unknown` or `unavailable`. Unknown is never zero; `CostBreakdown.complete` is false and net PnL is reported as *known-cost net* only. Spread can come from observed bid/ask. No broker, symbol or lot rule is encoded. |
 | `edge/exits.py` | New SL/TP-aware exit mode on completed OHLC bars. Legacy `BacktestRunner._to_trade` fixed-delay exit is untouched. |
 
@@ -60,8 +61,9 @@ and `EdgeDatasetManifest.statistical_evidence_eligible` is `False` for `syntheti
   a short needs `ask` bars; any other combination, or an undeclared basis, is refused. One dataset
   therefore runs one side; a BUY+SELL study needs a bid series and an ask series. Approximating the
   missing side (e.g. shifting by an observed spread) is an open Quant decision and not done.
-* The entry price is the bar open on the declared basis; the half spread to the other side is
-  charged as a cost, not as a price shift. The quote timing of a bar's `bid`/`ask` inside the bar is
+* The entry price is the bar open on the declared basis; the full observed spread is charged once
+  per round trip as a cost, not as a price shift (a long on bid bars enters at the ask and exits at
+  the bid). The quote timing of a bar's `bid`/`ask` inside the bar is
   undeclared and exit-side spread widening is not modelled (both recorded in every run's notes).
 * `CostModel.currency` must equal the dataset's price `units`: gross PnL is in price units, and no
   conversion to an account currency (contract size, tick value) exists.
@@ -84,9 +86,13 @@ that plan (`split_plan_hash_mismatch` otherwise) and can never be unsplit
 `run_exit_mode(split=..., walk_forward=(window, "train" | "test"))`; `window_bounds` checks that the
 window lies in `[plan.start, validation_end)` and keeps at least the plan's purge.
 
-This closes the omission and substitution bypasses inside one manifest. It cannot stop someone
-building a second manifest over the same events with no plan; that is visible only because the
-two manifests have different hashes and the independent record names one of them.
+This closes the omission and substitution bypasses inside one manifest. A second manifest built
+over the same (or trimmed, or shifted) events is closed by the **split registry**
+(`nexora.edge.registration`, Round 4): `run_exit_mode(registry=..., expected_registry_hash=...)`
+looks up the plan registered for the dataset's `(source, symbol)` and time range and refuses an
+unsplit run or any other plan there. The registry is protective only when it and its hash come
+from an independently reviewed record (proposed in ADR-037); a renamed source or symbol is a
+different stream.
 
 ## Hardening Round 1 (PR #79)
 
@@ -157,7 +163,29 @@ API changes: `simulate_exit(..., ohlc_basis=...)` (required keyword); `Provenanc
 `run_exit_mode(..., walk_forward=...)`; `EdgeExitRun.open_at_end_count`;
 `walk_forward_windows(purge=None)`; `EdgeDatasetManifest.evidence_gates()` has no parameter.
 
+## Hardening Round 4 (PR #79, independent re-review R-1 .. R-5)
+
+Regression tests in `tests/test_edge_hardening_r4.py`; each guard was mutation-checked (disabling
+it turns a test red).
+
+| Finding | Was | Now |
+|---|---|---|
+| R-1 MINOR | a second manifest over the same events (no plan, or another plan) read the holdout as `unsplit` / `validation`; the `run_exit_mode` docstring overclaimed | `SplitRegistry` keyed by `(source, symbol)` + time range, required by `run_exit_mode` with `expected_registry_hash`; refuses `registered_split_requires_split_run`, `split_plan_not_registered_for_dataset`, `split_not_in_registry`, `dataset_spans_multiple_registrations`; registrations for one stream cannot overlap or be replaced; canonical JSON with plan-hash cross-check; `EdgeExitRun.registry_hash` (also in `run_id`); docstring states the limits |
+| R-2 INFO | doc said "half spread" | says full spread (code unchanged; it was already correct) |
+| R-3 INFO | `ohlc_basis="xyz"` stored and hashed, refused only at run time | `invalid_ohlc_basis` at build and verify |
+| R-4 INFO | bars closer than the bar length passed the audit | optional `bar_interval` in `audit_events` / `build_edge_manifest`: blocking, non-acceptable `bar_overlap`; stored as `bar_interval_us` (hashed); a run whose `ExitPolicy.bar_interval` differs is refused (`bar_interval_mismatch`) |
+| R-5 INFO | `evaluate_gates(dataset_integrity_verified=True)` was public | `evaluate_gates(integrity=...)` needs an `IntegrityReceipt`, which only `verify_edge_dataset` issues |
+
+API changes: `run_exit_mode(..., registry=, expected_registry_hash=)` (required);
+`EdgeExitRun.registry_hash`; `verify_edge_dataset` returns an `IntegrityReceipt`;
+`evaluate_gates(integrity=None)`; `build_edge_manifest(..., bar_interval=None)`;
+`EdgeDatasetManifest.bar_interval_us`; new `SplitRegistration`, `SplitRegistry`,
+`RegistrationError`, `IntegrityReceipt`.
+
 ### Architecture decision required (B-3, not decided here)
+
+Proposed as [ADR-037](../../decisions/ADR-037-edge-validation-research-contracts-v1.md) (status:
+Proposed, not accepted). It recommends option 1 below with an explicit mapping table.
 
 `edge/*` adds its own split vocabulary (`train | validation | holdout`), cost model (`CostModel`
 with unknown/unavailable states) and run identity (`EdgeExitRun.run_id`). The frozen ADR-014
@@ -189,13 +217,15 @@ the bar length plus a tolerance.
 * ADR-030 Q-V2–Q-V5 remain open and are neither assumed nor defaulted.
 * **QUANT DECISION REQUIRED**: how to evaluate the side the bar basis does not cover (second
   OHLC series vs spread shift); open trades at a segment end (B-8).
-* **ARCHITECT / RIN DECISION REQUIRED**: relationship of `edge/*` to ADR-014 / ADR-030 (B-3); confirm
-  the manifest pre-registration binding (B-2) as the holdout mechanism.
+* **ARCHITECT / RIN DECISION REQUIRED**: relationship of `edge/*` to ADR-014 / ADR-030 (B-3), drafted
+  as ADR-037 (Proposed); accept the manifest + split-registry pre-registration (B-2 / R-1) as the
+  holdout mechanism and the committed registry file as its independent record.
 * **DATA REQUIRED**: an approved, non-secret, non-production historical dataset with bid/ask and
   broker capability metadata; none exists in the repo or the cloud session.
 
 ## Tests (all synthetic; see `tests/edge_fixtures.py`)
 
 `tests/test_edge_dataset.py`, `test_edge_splits.py`, `test_edge_costs.py`, `test_edge_exits.py`,
-`test_edge_hardening.py`, `test_edge_hardening_r2.py`, `test_edge_hardening_r3.py` cover deterministic replay, look-ahead prevention, holdout isolation, walk-forward boundaries,
+`test_edge_hardening.py`, `test_edge_hardening_r2.py`, `test_edge_hardening_r3.py`,
+`test_edge_hardening_r4.py` cover deterministic replay, look-ahead prevention, holdout isolation, walk-forward boundaries,
 cost accounting, invalid / missing data and extreme numerics.

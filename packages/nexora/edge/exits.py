@@ -36,6 +36,7 @@ from nexora.edge.dataset import (
     verify_edge_dataset,
 )
 from nexora.edge.evidence import EvidenceGates, evaluate_gates
+from nexora.edge.registration import RegistrationError, SplitRegistry
 from nexora.edge.splits import (
     HoldoutAccess,
     HoldoutAccessLog,
@@ -427,6 +428,8 @@ class EdgeExitRun:
     unit_size: Decimal
     # Bound to the verified dataset: see `verify_edge_dataset`.
     manifest_hash: str
+    # The split pre-registration record the run was checked against (`nexora.edge.registration`).
+    registry_hash: str
     # Four separate facts, never interchangeable (see `nexora.edge.evidence`).
     gates: EvidenceGates
     segment: str  # "unsplit" or the evaluated segment name
@@ -452,6 +455,8 @@ def run_exit_mode(
     *,
     manifest: EdgeDatasetManifest,
     expected_manifest_hash: str,
+    registry: SplitRegistry,
+    expected_registry_hash: str,
     policy: ExitPolicy,
     cost_model: CostModel,
     unit_size: Decimal,
@@ -471,9 +476,13 @@ def run_exit_mode(
     same for one walk-forward window, which never reaches the holdout. Without a split the
     run is labelled `unsplit` and is not valid out-of-sample evidence.
 
-    The split must be the plan pre-registered in the manifest (`split_plan_hash`); a dataset
-    with a registered plan can never be run unsplit, and one without can never be split, so
-    the holdout cannot be read by omitting the split or by substituting a different plan.
+    The split must be the plan pre-registered in the manifest (`split_plan_hash`) AND the plan
+    that `registry` records for the dataset's stream and time range. A dataset overlapping a
+    registered plan can never be run unsplit or under another plan, even through a second
+    manifest built over the same or overlapping bars; one overlapping no registration can never
+    be split. This holds only as far as `registry` and `expected_registry_hash` come from an
+    independently reviewed record and the stream labels (`source`, `symbol`) are honest; a
+    caller who controls both can still describe the data differently (ADR-037, Proposed).
 
     The bars' declared `Provenance.ohlc_basis` must be the exit side of every plan, and
     `cost_model.currency` must equal the dataset's price `units` (gross PnL is in price units).
@@ -491,9 +500,15 @@ def run_exit_mode(
     plan_list = tuple(plans)  # a one-shot iterator must not be consumed more than once
     dataset = tuple(events)
     try:
-        verify_edge_dataset(manifest, dataset, expected_manifest_hash=expected_manifest_hash)
+        receipt = verify_edge_dataset(
+            manifest, dataset, expected_manifest_hash=expected_manifest_hash
+        )
     except ValueError as exc:
         raise ExitInputError(f"dataset_verification_failed:{exc}") from exc
+    if manifest.bar_interval_us is not None and manifest.bar_interval_us != (
+        policy.bar_interval // timedelta(microseconds=1)
+    ):
+        raise ExitInputError("bar_interval_mismatch")
     # Pre-registration: the run's split must be exactly the one fixed in the verified manifest.
     registered = manifest.split_plan_hash
     if split is None and registered is not None:
@@ -507,6 +522,25 @@ def run_exit_mode(
             check_split_covers(split, dataset)
         except EdgeDatasetError as exc:
             raise ExitInputError(f"dataset_verification_failed:{exc}") from exc
+    if not isinstance(registry, SplitRegistry):
+        raise ExitInputError("invalid_split_registry")
+    if registry.registry_hash != expected_registry_hash:
+        raise ExitInputError("registry_hash_mismatch")
+    # Independent record: the plan that governs this stream and time range, whatever the
+    # (caller-built) manifest says. Closes the second-manifest bypass (review R-1).
+    try:
+        governing = registry.governing_registration(
+            manifest.base.source, manifest.base.symbol, [e.event_time for e in dataset]
+        )
+    except RegistrationError as exc:
+        raise ExitInputError(exc.code) from exc
+    if governing is not None:
+        if split is None:
+            raise ExitInputError("registered_split_requires_split_run")
+        if split.plan_hash != governing.plan.plan_hash:
+            raise ExitInputError("split_plan_not_registered_for_dataset")
+    elif split is not None:
+        raise ExitInputError("split_not_in_registry")
     ohlc_basis = manifest.provenance.ohlc_basis
     for plan in plan_list:
         _check_basis(plan.side, ohlc_basis)
@@ -587,13 +621,14 @@ def run_exit_mode(
         else:
             unresolved.append(outcome)
 
-    gates = evaluate_gates(dataset_integrity_verified=True)  # verify_edge_dataset passed above
+    gates = evaluate_gates(integrity=receipt)
     run_id = "edge-exit-run:" + canonical_hash(
         (
             policy.hash_payload(),
             cost_model,
             unit_size,
             manifest.manifest_hash,
+            registry.registry_hash,
             segment_name,
             split.plan_hash if split is not None else None,
             walk_forward[0] if walk_forward is not None else None,
@@ -629,6 +664,7 @@ def run_exit_mode(
         cost_model=cost_model,
         unit_size=unit_size,
         manifest_hash=manifest.manifest_hash,
+        registry_hash=registry.registry_hash,
         gates=gates,
         segment=segment_name,
         split_plan_hash=split.plan_hash if split is not None else None,

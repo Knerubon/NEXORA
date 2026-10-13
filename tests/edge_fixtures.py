@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from typing import Any
 
 from nexora.edge.dataset import (
     EdgeDatasetManifest,
@@ -16,6 +17,7 @@ from nexora.edge.dataset import (
     build_edge_manifest,
 )
 from nexora.edge.exits import EXIT_SIDE_BASIS, ExitPolicy, ExitResult, TradePlan, simulate_exit
+from nexora.edge.registration import SplitRegistration, SplitRegistry
 from nexora.edge.splits import SplitPlan
 from nexora.market_data.models import NormalizedPriceEvent
 
@@ -95,3 +97,20 @@ def synthetic_manifest(
 def sim(plan: TradePlan, bars: tuple[NormalizedPriceEvent, ...], policy: ExitPolicy) -> ExitResult:
     """`simulate_exit` on bars declared to be built from the plan's own exit side."""
     return simulate_exit(plan, bars, policy, ohlc_basis=EXIT_SIDE_BASIS.get(plan.side, "bid"))
+
+
+def registry_args(
+    split_plan: SplitPlan | None = None,
+    *,
+    source: str = "synthetic-test",
+    symbol: str = "SYNTH",
+) -> dict[str, Any]:
+    """`run_exit_mode` keyword arguments for a registry that registers `split_plan` (or
+    nothing) for the synthetic stream, with its hash as the expected independent record."""
+    entries = (
+        ()
+        if split_plan is None
+        else (SplitRegistration(source, symbol, split_plan, "edge-test", "synthetic fixture"),)
+    )
+    registry = SplitRegistry(entries)
+    return {"registry": registry, "expected_registry_hash": registry.registry_hash}

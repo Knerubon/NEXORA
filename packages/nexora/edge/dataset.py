@@ -14,12 +14,17 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Literal
+from typing import Literal, get_args
 
 from nexora.artifacts import canonical_hash
 from nexora.backtest.datasets import manifest_for, verify_events
 from nexora.backtest.models import DatasetManifest
-from nexora.edge.evidence import EvidenceGates, evaluate_gates
+from nexora.edge.evidence import (
+    EvidenceGates,
+    IntegrityReceipt,
+    _issue_integrity_receipt,
+    evaluate_gates,
+)
 from nexora.edge.splits import SplitPlan
 from nexora.market_data.models import NormalizedPriceEvent
 
@@ -46,6 +51,7 @@ BLOCKING_CODES = frozenset(
         "missing_sequence",
         "mixed_symbol_or_source",
         "mixed_price_basis_or_units",
+        "bar_overlap",
     }
 )
 # Conditions that describe MISSING or LATE data and may be knowingly accepted. Everything else
@@ -101,12 +107,15 @@ def audit_events(
     *,
     max_latency: timedelta,
     expected_gap: timedelta | None = None,
+    bar_interval: timedelta | None = None,
 ) -> QualityReport:
     """Report quality issues without raising, so dirty data can be inspected and counted.
 
     `max_latency` bounds `received_at - event_time`. For completed bars `event_time` is the
     bar OPEN, so callers must allow the bar length plus a tolerance (e.g. 5m bars: 5m30s).
     `expected_gap` flags consecutive event_time jumps above it (None disables the check).
+    `bar_interval` flags consecutive bars that open less than one interval apart
+    (`bar_overlap`); None disables the check.
     """
     rows = tuple(events)  # a one-shot iterator must not be consumed twice
     counts: dict[str, int] = {}
@@ -172,6 +181,14 @@ def audit_events(
                 note("missing_sequence", index)
             if expected_gap is not None and e.event_time - previous.event_time > expected_gap:
                 note("gap", index)
+            step = e.event_time - previous.event_time
+            if (
+                bar_interval is not None
+                and e.kind == "bar"
+                and previous.kind == "bar"
+                and timedelta(0) < step < bar_interval
+            ):
+                note("bar_overlap", index)
         if aware:  # a naive timestamp can't be ordered against its neighbours
             previous = e
     return QualityReport(
@@ -196,6 +213,9 @@ class EdgeDatasetManifest:
     # part of `manifest_hash`, so a run can only use the plan fixed before evaluation and a
     # dataset with a registered plan can never be run unsplit (holdout bypass).
     split_plan_hash: str | None = None
+    # Bar length the audit checked against (`bar_overlap`), in whole microseconds. None = not
+    # checked; a run then relies on `ExitPolicy.bar_interval` alone (`bars_overlap_interval`).
+    bar_interval_us: int | None = None
 
     @property
     def manifest_hash(self) -> str:
@@ -209,7 +229,7 @@ class EdgeDatasetManifest:
     def evidence_gates(self) -> EvidenceGates:
         """Gates for the manifest ALONE. Integrity is unverified here because no events were
         checked; use `verified_evidence_gates` to establish it. A caller cannot assert it."""
-        return evaluate_gates(dataset_integrity_verified=False)
+        return evaluate_gates()
 
     @property
     def statistical_evidence_eligible(self) -> bool:
@@ -259,6 +279,7 @@ def apply_dataset_policy(
     max_latency: timedelta,
     expected_gap: timedelta | None,
     accepted_issues: frozenset[str],
+    bar_interval: timedelta | None = None,
 ) -> QualityReport:
     """The complete acceptance policy. Used by BOTH build and verify so they cannot diverge.
 
@@ -268,8 +289,15 @@ def apply_dataset_policy(
         raise EdgeDatasetError("empty_dataset")
     if provenance.timezone != "UTC":
         raise EdgeDatasetError("non_utc_timezone")
-    if max_latency <= timedelta(0) or (expected_gap is not None and expected_gap <= timedelta(0)):
+    if (
+        max_latency <= timedelta(0)
+        or (expected_gap is not None and expected_gap <= timedelta(0))
+        or (bar_interval is not None and bar_interval <= timedelta(0))
+    ):
         raise EdgeDatasetError("invalid_policy_duration")
+    if provenance.ohlc_basis is not None and provenance.ohlc_basis not in get_args(OhlcBasis):
+        # Refused at build time, not only at run time, so an invalid basis is never hashed.
+        raise EdgeDatasetError("invalid_ohlc_basis")
     unknown = accepted_issues - BLOCKING_CODES
     if unknown:
         raise EdgeDatasetError("unknown_accepted_issue", tuple(sorted(unknown)))
@@ -278,7 +306,9 @@ def apply_dataset_policy(
         raise EdgeDatasetError("issue_not_acceptable", tuple(sorted(never)))
     if provenance.data_class == "real_market":
         _check_real_market_attestation(rows, provenance)
-    report = audit_events(rows, max_latency=max_latency, expected_gap=expected_gap)
+    report = audit_events(
+        rows, max_latency=max_latency, expected_gap=expected_gap, bar_interval=bar_interval
+    )
     blocking = report.blocking(accepted_issues)
     if blocking:
         raise EdgeDatasetError("dataset_quality_blocking", blocking)
@@ -297,6 +327,7 @@ def build_edge_manifest(
     expected_gap: timedelta | None = None,
     accepted_issues: frozenset[str] = frozenset(),
     split_plan: SplitPlan | None = None,
+    bar_interval: timedelta | None = None,
 ) -> EdgeDatasetManifest:
     """Fail closed: any policy violation raises.
 
@@ -311,6 +342,7 @@ def build_edge_manifest(
         max_latency=max_latency,
         expected_gap=expected_gap,
         accepted_issues=accepted_issues,
+        bar_interval=bar_interval,
     )
     try:
         base = manifest_for(rows, quality="partial" if accepted_issues else "complete")
@@ -325,6 +357,7 @@ def build_edge_manifest(
         expected_gap_us=None if expected_gap is None else _to_us(expected_gap),
         accepted_issues=tuple(sorted(accepted_issues)),
         split_plan_hash=None if split_plan is None else split_plan.plan_hash,
+        bar_interval_us=None if bar_interval is None else _to_us(bar_interval),
     )
 
 
@@ -333,11 +366,12 @@ def verify_edge_dataset(
     events: Sequence[NormalizedPriceEvent],
     *,
     expected_manifest_hash: str,
-) -> None:
+) -> IntegrityReceipt:
     """Re-verify integrity AND re-apply the full acceptance policy; any violation raises.
 
     `expected_manifest_hash` must come from a record independent of the manifest itself; a
-    manifest cannot vouch for its own hash. Passing proves integrity only, never authenticity."""
+    manifest cannot vouch for its own hash. Passing proves integrity only, never authenticity.
+    The returned receipt is the only way to obtain gates with integrity verified."""
     rows = tuple(events)
     if manifest.manifest_hash != expected_manifest_hash:
         raise EdgeDatasetError("manifest_hash_mismatch")
@@ -366,9 +400,15 @@ def verify_edge_dataset(
         max_latency=timedelta(microseconds=manifest.max_latency_us),
         expected_gap=gap,
         accepted_issues=accepted,
+        bar_interval=(
+            None
+            if manifest.bar_interval_us is None
+            else timedelta(microseconds=manifest.bar_interval_us)
+        ),
     )
     if report != manifest.quality:
         raise EdgeDatasetError("quality_report_mismatch")
+    return _issue_integrity_receipt(manifest.manifest_hash)
 
 
 def verified_evidence_gates(
@@ -378,5 +418,5 @@ def verified_evidence_gates(
     expected_manifest_hash: str,
 ) -> EvidenceGates:
     """The only way to obtain gates with integrity verified: it runs the verification."""
-    verify_edge_dataset(manifest, events, expected_manifest_hash=expected_manifest_hash)
-    return evaluate_gates(dataset_integrity_verified=True)
+    receipt = verify_edge_dataset(manifest, events, expected_manifest_hash=expected_manifest_hash)
+    return evaluate_gates(integrity=receipt)

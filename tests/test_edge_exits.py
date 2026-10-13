@@ -29,7 +29,7 @@ from nexora.market_data.models import NormalizedPriceEvent
 from nexora.signals import ResearchSignal
 from nexora.signals.models import SignalDecision, SignalTarget
 
-from tests.edge_fixtures import BAR, T0, make_bar, synthetic_manifest
+from tests.edge_fixtures import BAR, T0, make_bar, registry_args, synthetic_manifest
 from tests.edge_fixtures import sim as sim_on_exit_side
 
 D = Decimal
@@ -327,6 +327,7 @@ def _run(
         bars,
         manifest=manifest,
         expected_manifest_hash=manifest_hash,
+        **registry_args(),
         policy=policy,
         cost_model=ZERO_COSTS,
         unit_size=D("1"),
@@ -366,6 +367,7 @@ def test_run_rejects_duplicate_ids_and_bad_unit_size() -> None:
             bars,
             manifest=manifest,
             expected_manifest_hash=manifest_hash,
+            **registry_args(),
             policy=POLICY,
             cost_model=ZERO_COSTS,
             unit_size=D("0"),
