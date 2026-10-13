@@ -44,6 +44,7 @@ Unmodified by design: `signals/**`, `research/**`, `market_data/quality*.py`, `e
 - [x] ruff, mypy, full pytest, recovery_drill, git diff --check (see Checks)
 - [x] Hardening round 1 (CHANGES REQUESTED): F1, F2, F3 and the security items below are fixed with regression tests; see "Hardening round 1"
 - [x] Hardening round 2 (Agent A review, CHANGES REQUESTED): F-A1 (MAJOR) and F-A2..F-A4 fixed with regression tests; see "Hardening round 2"
+- [x] Hardening round 3 (independent re-review of round 2: 2 MINOR + 1 INFO): N-1, N-2, N-I1 fixed or documented; see "Hardening round 3"
 - [ ] Independent re-review of the hardening delta, Security review (persistence + secrets boundary), Rin approval: pending
 
 ## Execution record
@@ -154,3 +155,16 @@ first: every test in `tests/test_audit_dq_hardening_round2.py` that covers a fin
 
 ADR-036 D2 and D3 wording updated to match. No change to engines, thresholds, `execution/**`,
 `market_data/**`, `apps/**` or `infra/**`.
+
+## Hardening round 3 (response to independent re-review of `0318818`: 0 MAJOR / 2 MINOR)
+
+Starting HEAD `03188185bcb0777854142e47b78715a5ce4734f2` (verified). Self-review only; narrow
+re-review of the delta pending. On `0318818`, 33 of the 36 tests in
+`tests/test_audit_dq_hardening_round3.py` fail (the other 3 are accepted-reference baselines).
+
+| ID | Observed on `0318818` | Fix |
+|---|---|---|
+| N-1 (MINOR) | `Decimal` subclass with overridden comparisons, `price=-5` -> Guard `ok`, full gate `recorded_eligible` | `type(value) is Decimal` in `_numeric`, `_is_finite_decimal` (now a `TypeGuard`) and the `mid` branch |
+| N-2 (MINOR) | AWS-, Stripe-, short `ghp_`-shaped values persisted | Well-known credential prefixes rejected at any length in `token`/`reference`. Residual risk (64-hex lowercase secrets, short or `.`/`:`-split unprefixed secrets) recorded as ADR-036 open item 11 |
+| N-I1 (INFO) | `source_sequence` `None` / `"7"` / `8.0` -> Guard `ok` | `type(source_sequence) is int` or `invalid_numeric_type`; ordering/contiguity only compare real ints |
+| N-I2 (INFO) | contiguity now mandatory | recorded as ADR-036 open item 12 |

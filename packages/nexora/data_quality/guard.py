@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from typing import TypeGuard
 
 from nexora.artifacts import canonical_hash
 from nexora.data_quality import models as m
@@ -167,12 +168,23 @@ class DataQualityGuard:
             "low": event.low,
             "close": event.close,
         }
+        if type(event.source_sequence) is not int:
+            # The contiguity and ordering checks compare sequences; only a real int is valid.
+            out.append(
+                QualityFinding(
+                    m.INVALID_NUMERIC_TYPE,
+                    "blocking",
+                    event.identity_key,
+                    _ev(field="source_sequence"),
+                )
+            )
         for name, value in fields.items():
             if value is None:
                 continue
-            if not isinstance(value, Decimal):
-                # Decimal only, like the config: a float (or anything else) would skip the
-                # Decimal-only positivity, OHLC and price-source checks below.
+            if type(value) is not Decimal:
+                # Exactly Decimal, like the config (``type(...) is Decimal``): a float, or a
+                # Decimal subclass with overridden comparisons, would defeat the positivity,
+                # OHLC and price-source checks below.
                 out.append(
                     QualityFinding(
                         m.INVALID_NUMERIC_TYPE, "blocking", event.identity_key, _ev(field=name)
@@ -211,7 +223,7 @@ class DataQualityGuard:
             ("low", event.low),
             ("close", event.close),
         ):
-            if _is_finite_decimal(value) and value <= 0:  # type: ignore[operator]
+            if _is_finite_decimal(value) and value <= 0:
                 out.append(QualityFinding(m.INVALID_PRICE, "blocking", key, _ev(field=name)))
         if event.kind == "bar":
             out.extend(self._ohlc(event))
@@ -253,12 +265,7 @@ class DataQualityGuard:
         if source == "mid":
             bid, ask = event.bid, event.ask
             expected = (
-                (bid + ask) / 2
-                if isinstance(bid, Decimal)
-                and isinstance(ask, Decimal)
-                and bid.is_finite()
-                and ask.is_finite()
-                else None
+                (bid + ask) / 2 if _is_finite_decimal(bid) and _is_finite_decimal(ask) else None
             )
         else:
             expected = {
@@ -282,7 +289,7 @@ class DataQualityGuard:
                 )
             ]
         tolerance = Decimal(1).scaleb(-precision)  # one unit in the last place
-        if abs(event.price - expected) > tolerance:  # type: ignore[operator]
+        if abs(event.price - expected) > tolerance:
             return [
                 QualityFinding(
                     m.PRICE_SOURCE_MISMATCH,
@@ -392,7 +399,12 @@ class DataQualityGuard:
                     _ev(prev=prev.event_time.isoformat(), cur=cur.event_time.isoformat()),
                 )
             )
-        if cur.source_sequence <= prev.source_sequence and cur.identity_key != prev.identity_key:
+        sequenced = type(prev.source_sequence) is int and type(cur.source_sequence) is int
+        if (
+            sequenced
+            and cur.source_sequence <= prev.source_sequence
+            and cur.identity_key != prev.identity_key
+        ):
             out.append(
                 QualityFinding(
                     m.OUT_OF_ORDER_SEQUENCE,
@@ -401,7 +413,7 @@ class DataQualityGuard:
                     _ev(prev=prev.source_sequence, cur=cur.source_sequence),
                 )
             )
-        if cur.source_sequence > prev.source_sequence + 1:
+        if sequenced and cur.source_sequence > prev.source_sequence + 1:
             # Same contiguity rule the normalizer uses to set ``is_gap``; re-checked here
             # because the flag is unvalidated input like every other event field.
             out.append(
@@ -475,8 +487,8 @@ def _fingerprint(event: NormalizedPriceEvent) -> str:
         return "repr:" + repr(event)
 
 
-def _is_finite_decimal(value: object) -> bool:
-    return isinstance(value, Decimal) and value.is_finite()
+def _is_finite_decimal(value: object) -> TypeGuard[Decimal]:
+    return type(value) is Decimal and value.is_finite()
 
 
 def _ev(**values: object) -> tuple[tuple[str, str], ...]:

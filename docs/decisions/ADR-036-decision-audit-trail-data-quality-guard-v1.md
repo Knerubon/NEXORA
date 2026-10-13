@@ -71,8 +71,9 @@ security items. This revision resolves them; the resolution is recorded in the t
 - **Price / OHLC trust boundary.** `NormalizedPriceEvent` is a plain dataclass with no
   constructor validation and can arrive from replay, storage or tests, so the Guard (the trust
   boundary for eligibility) re-validates: known event `kind`, `precision` in 0..10, every price
-  field a `Decimal` (any other type, including `float` and `bool`, is `invalid_numeric_type`,
-  blocking, so no value can skip the Decimal-only checks that follow), finite and `> 0`, bars carry complete OHLC with `low <= open, close <= high`, and
+  field exactly a `Decimal` (`type(...) is Decimal`, as for the config; any other type,
+  including `float`, `bool` and `Decimal` subclasses, is `invalid_numeric_type`, blocking, so no
+  value can skip or subvert the checks that follow), `source_sequence` exactly an `int`, finite and `> 0`, bars carry complete OHLC with `low <= open, close <= high`, and
   `price` equals the field named by `price_source` (`mid` = (bid+ask)/2) within one unit in the
   last place. New additive codes: `invalid_price`, `invalid_ohlc`, `incomplete_ohlc`,
   `price_source_mismatch`, `invalid_precision`, `invalid_event_kind`.
@@ -153,8 +154,11 @@ library.
   credential-shaped and long opaque values. Engine-derived `token` and `reference` values
   (evidence references, identity keys, versions, codes) reject any opaque run of 40 or more
   `[A-Za-z0-9+/_-]` characters unless that run is exactly a 64-character lowercase hex digest, so
-  a token-shaped value cannot be persisted through them (round 2). This is a shape check, not
-  proof that nothing secret is ever persisted. The builder copies only the fields it selects, so
+  a token-shaped value cannot be persisted through them (round 2). Well-known credential
+  prefixes (AWS `AKIA`/`ASIA`, Stripe-style `sk_`/`rk_`/`pk_` live/test, GitHub `ghp_`-family and
+  `github_pat_`, Slack `xox?-`, GitLab `glpat-`, Google `AIza`) are rejected at any length
+  (round 3). This is a shape check, not proof that nothing secret is ever persisted; the
+  residual risk is open item 11. The builder copies only the fields it selects, so
   unknown engine keys are never persisted; **credential-like keys anywhere inside the sections the
   audit reads** (`signals` excluding unread `history`, `entry_readiness`, `regime`, `structure`,
   `trendline`, and top-level keys) are rejected outright (`audit_unexpected_sensitive_field`).
@@ -273,3 +277,12 @@ Risk/Execution. `ExecutionPreflight` stays DENY-ONLY.
 10. Eligibility is not authorization: `new_trade_eligible=True` only means audit, verified data
     quality and a genuinely emitted signal did not deny. Risk, Authority and Execution gates keep
     full, independent authority.
+11. **Residual secret-shape risk** (documented; Security/Rin to accept or require closure): a
+    64-character lowercase-hex secret, or an unprefixed secret shorter than 40 characters or
+    split by `.`/`:`, is indistinguishable by shape from the digests and identifiers the audit persists, and the
+    append-only journal has no delete path. Mitigation today: values come only from internal
+    engine output and the builder copies only selected fields. Closing it needs a per-field
+    digest contract (for example typed `sha:` references) in the engine evidence schema.
+12. **Contiguity is mandatory inside a snapshot** (D2): a snapshot built from a sampled or filtered
+    subset of a stream blocks as `sequence_gap`. The `SequenceHistoryProvider` (item 1) must
+    return contiguous events.

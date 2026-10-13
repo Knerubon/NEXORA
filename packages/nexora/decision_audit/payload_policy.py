@@ -29,6 +29,19 @@ _TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:/+\-]{0,127}")
 _REFERENCE = re.compile(r"[A-Za-z0-9_.:;,|/+#\-]{0,512}")
 _HASH = re.compile(r"[0-9a-f]{64}")
 _OPAQUE_RUN = re.compile(r"[A-Za-z0-9+/_-]{40,}")
+# Well-known credential prefixes that are shorter than ``_OPAQUE_RUN`` or split by
+# separators (synthetic examples only in tests). Matched case-sensitively, at a token start.
+_KNOWN_CREDENTIAL = re.compile(
+    r"(?<![A-Za-z0-9])("
+    r"(AKIA|ASIA)[0-9A-Z]{16}"  # AWS access key id
+    r"|(sk|rk|pk)_(live|test)_[0-9A-Za-z]{8,}"  # Stripe-style keys
+    r"|gh[pousr]_[0-9A-Za-z]{20,}"  # GitHub tokens
+    r"|github_pat_[0-9A-Za-z_]{20,}"
+    r"|xox[abprs]-[0-9A-Za-z-]{10,}"  # Slack tokens
+    r"|glpat-[0-9A-Za-z_-]{20,}"  # GitLab tokens
+    r"|AIza[0-9A-Za-z_-]{35}"  # Google API key
+    r")"
+)
 _MAX_TEXT = 512
 _MAX_ITEMS = 2000
 
@@ -132,7 +145,14 @@ def _fail(code: str = "audit_redaction_violation") -> AuditError:
 
 
 def _credential_shaped(value: str) -> bool:
-    """A long opaque run that is not a 64-hex content digest (the only blob we persist)."""
+    """A well-known credential prefix, or a long opaque run that is not a 64-hex digest.
+
+    Shape only: a 64-character lowercase-hex secret, or an unprefixed secret shorter than
+    ``_OPAQUE_RUN`` or split by ``.``/``:``, is indistinguishable from the digests and
+    identifiers the audit persists (ADR-036 open item 11).
+    """
+    if _KNOWN_CREDENTIAL.search(value):
+        return True
     return any(not _HASH.fullmatch(run.group(0)) for run in _OPAQUE_RUN.finditer(value))
 
 
