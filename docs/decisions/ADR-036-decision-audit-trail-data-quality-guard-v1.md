@@ -71,10 +71,17 @@ security items. This revision resolves them; the resolution is recorded in the t
 - **Price / OHLC trust boundary.** `NormalizedPriceEvent` is a plain dataclass with no
   constructor validation and can arrive from replay, storage or tests, so the Guard (the trust
   boundary for eligibility) re-validates: known event `kind`, `precision` in 0..10, every price
-  field finite and `> 0`, bars carry complete OHLC with `low <= open, close <= high`, and
+  field a `Decimal` (any other type, including `float` and `bool`, is `invalid_numeric_type`,
+  blocking, so no value can skip the Decimal-only checks that follow), finite and `> 0`, bars carry complete OHLC with `low <= open, close <= high`, and
   `price` equals the field named by `price_source` (`mid` = (bid+ask)/2) within one unit in the
   last place. New additive codes: `invalid_price`, `invalid_ohlc`, `incomplete_ohlc`,
   `price_source_mismatch`, `invalid_precision`, `invalid_event_kind`.
+- **Sequence and clock checks re-derive, not trust (round 2).** Inside a snapshot, consecutive
+  events must have contiguous `source_sequence` (the same per-stream rule the normalizer uses to
+  set `is_gap`); a jump is `sequence_gap` even when the unvalidated `is_gap` flag is `False`.
+  `received_at` later than `evaluated_at` plus `max_future_skew_seconds` is
+  `clock_anomaly_received_after_evaluation` (additive code), so `decided_at` can never run ahead
+  of the verdict's evaluation time beyond the configured skew.
 
 ### D2a. The Guard is stateless; a sequence-history provider is required
 The Guard remembers nothing between calls. Ordering, sequence-gap, duplicate and staleness
@@ -143,7 +150,11 @@ library.
   field-set equality is enforced, so an undeclared field cannot reach the journal, and each value
   must satisfy its kind's grammar. Caller-supplied references (`instrument_id`,
   `risk_authority_outcome`, `lifecycle_ref`) get a stricter short-token grammar that rejects
-  credential-shaped and long opaque values. The builder copies only the fields it selects, so
+  credential-shaped and long opaque values. Engine-derived `token` and `reference` values
+  (evidence references, identity keys, versions, codes) reject any opaque run of 40 or more
+  `[A-Za-z0-9+/_-]` characters unless that run is exactly a 64-character lowercase hex digest, so
+  a token-shaped value cannot be persisted through them (round 2). This is a shape check, not
+  proof that nothing secret is ever persisted. The builder copies only the fields it selects, so
   unknown engine keys are never persisted; **credential-like keys anywhere inside the sections the
   audit reads** (`signals` excluding unread `history`, `entry_readiness`, `regime`, `structure`,
   `trendline`, and top-level keys) are rejected outright (`audit_unexpected_sensitive_field`).

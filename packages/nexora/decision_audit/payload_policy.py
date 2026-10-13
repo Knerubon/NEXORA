@@ -131,6 +131,11 @@ def _fail(code: str = "audit_redaction_violation") -> AuditError:
     return AuditError(code)
 
 
+def _credential_shaped(value: str) -> bool:
+    """A long opaque run that is not a 64-hex content digest (the only blob we persist)."""
+    return any(not _HASH.fullmatch(run.group(0)) for run in _OPAQUE_RUN.finditer(value))
+
+
 def _check_text(value: Any) -> None:
     if not isinstance(value, str) or len(value) > _MAX_TEXT:
         raise _fail()
@@ -146,7 +151,7 @@ def _check_scalar(kind: str, value: Any) -> None:
             return
         raise _fail()
     if base == "token":
-        if not isinstance(value, str) or not _TOKEN.fullmatch(value):
+        if not isinstance(value, str) or not _TOKEN.fullmatch(value) or _credential_shaped(value):
             raise _fail()
     elif base == "ref":
         # Caller-supplied opaque reference (instrument/risk/lifecycle): short token grammar,
@@ -165,6 +170,7 @@ def _check_scalar(kind: str, value: Any) -> None:
             not isinstance(value, str)
             or not _REFERENCE.fullmatch(value)
             or (kind.endswith("+") and not value)
+            or _credential_shaped(value)
         ):
             raise _fail()
     elif base == "hash":

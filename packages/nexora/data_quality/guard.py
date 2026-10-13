@@ -6,7 +6,6 @@ never reads a clock. Anything it cannot positively verify yields NO NEW TRADE.
 
 from __future__ import annotations
 
-import math
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -171,18 +170,16 @@ class DataQualityGuard:
         for name, value in fields.items():
             if value is None:
                 continue
-            if isinstance(value, Decimal):
-                finite = value.is_finite()
-            elif isinstance(value, float):
-                finite = math.isfinite(value)
-            else:
+            if not isinstance(value, Decimal):
+                # Decimal only, like the config: a float (or anything else) would skip the
+                # Decimal-only positivity, OHLC and price-source checks below.
                 out.append(
                     QualityFinding(
                         m.INVALID_NUMERIC_TYPE, "blocking", event.identity_key, _ev(field=name)
                     )
                 )
                 continue
-            if not finite:
+            if not value.is_finite():
                 out.append(
                     QualityFinding(
                         m.NON_FINITE_VALUE, "blocking", event.identity_key, _ev(field=name)
@@ -303,8 +300,8 @@ class DataQualityGuard:
             if cfg.require_bid_ask:
                 return [QualityFinding(m.MISSING_BID_ASK, "unknown", key, _ev(bid=bid, ask=ask))]
             return []
-        if not (_finite(bid) and _finite(ask)):
-            return []  # already reported as non-finite; spread is undefined
+        if not (_is_finite_decimal(bid) and _is_finite_decimal(ask)):
+            return []  # already reported as non-finite / wrong type; spread is undefined
         if bid <= 0 or ask <= 0:
             return [QualityFinding(m.INVALID_BID_ASK, "blocking", key, _ev(bid=bid, ask=ask))]
         spread = ask - bid
@@ -361,6 +358,15 @@ class DataQualityGuard:
                     _ev(latency_ms=latency_ms, max_ms=cfg.max_latency_ms),
                 )
             )
+        if event.received_at > now + timedelta(seconds=cfg.max_future_skew_seconds):
+            out.append(
+                QualityFinding(
+                    m.CLOCK_ANOMALY_RECEIVED_AFTER_EVALUATION,
+                    "blocking",
+                    key,
+                    _ev(received_at=event.received_at.isoformat(), evaluated_at=now.isoformat()),
+                )
+            )
         if event.event_time > now + timedelta(seconds=cfg.max_future_skew_seconds):
             out.append(
                 QualityFinding(
@@ -390,6 +396,17 @@ class DataQualityGuard:
             out.append(
                 QualityFinding(
                     m.OUT_OF_ORDER_SEQUENCE,
+                    "blocking",
+                    key,
+                    _ev(prev=prev.source_sequence, cur=cur.source_sequence),
+                )
+            )
+        if cur.source_sequence > prev.source_sequence + 1:
+            # Same contiguity rule the normalizer uses to set ``is_gap``; re-checked here
+            # because the flag is unvalidated input like every other event field.
+            out.append(
+                QualityFinding(
+                    m.SEQUENCE_GAP,
                     "blocking",
                     key,
                     _ev(prev=prev.source_sequence, cur=cur.source_sequence),
@@ -460,10 +477,6 @@ def _fingerprint(event: NormalizedPriceEvent) -> str:
 
 def _is_finite_decimal(value: object) -> bool:
     return isinstance(value, Decimal) and value.is_finite()
-
-
-def _finite(value: Decimal | float) -> bool:
-    return value.is_finite() if isinstance(value, Decimal) else math.isfinite(value)
 
 
 def _ev(**values: object) -> tuple[tuple[str, str], ...]:

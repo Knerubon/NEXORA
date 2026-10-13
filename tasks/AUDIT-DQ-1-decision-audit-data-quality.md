@@ -43,6 +43,7 @@ Unmodified by design: `signals/**`, `research/**`, `market_data/quality*.py`, `e
 - [x] No order submission / execution activation (AST import-boundary tests; no execution/risk/paper/MT5/network/env imports)
 - [x] ruff, mypy, full pytest, recovery_drill, git diff --check (see Checks)
 - [x] Hardening round 1 (CHANGES REQUESTED): F1, F2, F3 and the security items below are fixed with regression tests; see "Hardening round 1"
+- [x] Hardening round 2 (Agent A review, CHANGES REQUESTED): F-A1 (MAJOR) and F-A2..F-A4 fixed with regression tests; see "Hardening round 2"
 - [ ] Independent re-review of the hardening delta, Security review (persistence + secrets boundary), Rin approval: pending
 
 ## Execution record
@@ -135,3 +136,21 @@ See ADR-036 "Open items / blockers": sequence-history provider implementation (1
 and EVALUATION_BLOCKED integration (2, BLOCKED), runtime wiring (3), Quant confirmation of configuration-sanity
 ceilings (4), actionable-without-evidence denial (5), replay-never-re-authorizes recovery story (6), journal
 read-back (7).
+
+## Hardening round 2 (response to Agent A review: CHANGES REQUESTED, 1 MAJOR / 3 MINOR)
+
+Starting HEAD `f3d505a7b48afccc2c63e87e099ade39ae606b23` (verified against GitHub; base `origin/main`
+`36c90c59e2aa4f0d221c9c468a8379c5f57cbb87`, unchanged). Same branch; PR #80 stays Draft/HOLD.
+Self-review only; independent re-review pending. All four findings were reproduced on `f3d505a`
+first: every test in `tests/test_audit_dq_hardening_round2.py` that covers a finding fails there
+(52 of 73; the rest are baselines that must keep passing).
+
+| ID | Observed on `f3d505a` | Fix | Tests |
+|---|---|---|---|
+| F-A1 (MAJOR) | Float `price=-5.0` (`price_source="last"`) on the real BUY at fixture index 7 -> `recorded_eligible`, `new_trade_eligible=True`; float bar with `high < low` -> `ok` | `guard._numeric`: any non-`Decimal` price field (float, bool, int, str) is `invalid_numeric_type` (blocking); `_quote` only computes spread on finite Decimals, so float bid/ask is reported, not turned into a guard error | 8 fields x 7 non-Decimal values, negative / mismatched / inverted-OHLC floats, float bid/ask, full-gate `recorded_denied_data_quality` |
+| F-A2 | `source_sequence` 1 then 500 with `is_gap=False` -> `ok` | `guard._ordering`: `cur > prev + 1` is `sequence_gap`, the same per-stream rule the normalizer uses for `is_gap` | gap without flag, contiguous run stays `ok` |
+| F-A3 | Token-shaped string in `positive_evidence[].source_refs` -> `recorded_eligible` and persisted | `payload_policy`: `token` / `reference` values reject an opaque run of 40+ chars unless it is exactly a 64-hex lowercase digest | 5 token shapes rejected and not echoed, digest still accepted, token-shaped version rejected |
+| F-A4 | `received_at` up to skew + latency after `evaluated_at` -> `ok` | `guard._clock`: new additive code `clock_anomaly_received_after_evaluation` when `received_at > evaluated_at + max_future_skew_seconds` | beyond skew blocked, at skew ok |
+
+ADR-036 D2 and D3 wording updated to match. No change to engines, thresholds, `execution/**`,
+`market_data/**`, `apps/**` or `infra/**`.

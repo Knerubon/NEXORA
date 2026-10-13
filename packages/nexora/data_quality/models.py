@@ -51,6 +51,8 @@ INCOMPLETE_OHLC = "incomplete_ohlc"
 PRICE_SOURCE_MISMATCH = "price_source_mismatch"
 INVALID_PRECISION = "invalid_precision"
 INVALID_EVENT_KIND = "invalid_event_kind"
+# Additive in hardening round 2.
+CLOCK_ANOMALY_RECEIVED_AFTER_EVALUATION = "clock_anomaly_received_after_evaluation"
 
 # Sanity ceilings for thresholds. They exist so a typo or hostile value (for example
 # ``max_quote_age_seconds=10**12``) cannot silently turn a check into a no-op. They are
