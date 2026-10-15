@@ -5,6 +5,7 @@ Branch: `claude/edge-validation-protocol-v1`. Base: `origin/main` `36c90c5`.
 Status: **DRAFT — PROPOSED, NOT FROZEN.** Every numeric threshold is an explicit open decision (section 14). This protocol becomes binding only when Rin freezes it with the Quant decisions filled in, and its frozen version is hashed (section 12).
 Scope: research and backtest only. No production change, no order path, no holdout unlock, no strategy change.
 Revision 2: addresses the independent review of revision 1 (`bfaec81`): absolute net-positive requirement, alignment with the PR #79 split registry and ADR-037, and eight minor findings.
+Revision 3: addresses the re-review of revision 2 (`894469f`): two-entry pre-registration record (N-1), config information cutoff bounded against the holdout (N-2), random-entry p-value convention and draw count.
 
 Related: `EDGE-1-baseline-v1-spec.md`, `EDGE-2-engineering-components.md` (this directory) and `ADR-037-edge-validation-research-contracts-v1.md` (Proposed), all on PR #79 (`claude/edge-validation-v1`) and not yet on `main`; [ADR-014](../../decisions/ADR-014-backtest-lab-reproducibility.md), [ADR-030](../../decisions/ADR-030-replay-validation-framework-v1.md), AGENTS.md sections 9, 11 and 20.
 
@@ -37,7 +38,7 @@ A run that misses any gate is `EXPLORATORY` at best. It is kept in the run ledge
 | P1 Baseline frozen | EDGE-1 open items pinned: box/ATR params, resolutions, `cooldown_events`, `expiry_events`, `stale_after_events`, ADR-010 regime thresholds; TP1 vs TP2, concurrency policy, time-stop, same-time BUY/SELL tie. Recorded as a config hash + clean 40-hex commit SHA, together with the **config information cutoff** (section 4) | **NOT MET** (values not recovered; Quant decisions open) |
 | P2 Dataset approved | Non-secret, non-production historical dataset with an `EdgeDatasetManifest`, `data_class = real_market`, adapter capability profile, **both bid and ask** OHLC series (EDGE-2: a long needs bid bars, a short ask bars), verified by `verify_edge_dataset` | **NOT MET** (Track B) |
 | P3 Costs complete | Spread observed from the data; commission, slippage assumption and swap convention all `known` for the instrument. Any `unknown`/`unavailable` cost makes the run non-headline (section 5) | **NOT MET** |
-| P4 Split pre-registered | `SplitPlan` registered in the manifest (`split_plan_hash`) **and** in the committed split registry, with `registry_hash` pinned in the pre-registration record (section 3.3), before any run touches the registered range | **NOT MET** (no registry file or record yet) |
+| P4 Split pre-registered | `SplitPlan` registered in the manifest (`split_plan_hash`) **and** in the committed split registry, with `registry_hash` pinned in the registration entry of the pre-registration record before any run touches the registered range, and the confirmatory entry merged before the first validation run (section 3.3) | **NOT MET** (no registry file or record yet) |
 | P5 Protocol frozen | This document frozen by Rin, all `OPEN-VP-*` that the run needs answered, frozen version hash recorded | **NOT MET** |
 | P6 Contract decision | Relationship of `edge/*` to ADR-014/ADR-030 (PR #79 finding B-3) | **NOT MET.** Owner chose Option 1 (separate research contract) on 2026-10-13; ADR-037 is Proposed. Met only when Rin accepts ADR-037, including its pre-registration record rule |
 | P7 Clean provenance | Every cited run records a clean 40-hex commit SHA, a dirty flag and a code fingerprint; a dirty or unknown tree ⇒ `EXPLORATORY` (ADR-030 Q-V7 principle) | **NOT MET for edge runs.** `code_fingerprint()` and `git_dirty` exist only in `nexora.validation` (ADR-030 Decision 10); `EdgeExitRun.run_id` carries no code SHA or dirty flag. Gap for the PR #79 owner (section 13) |
@@ -60,14 +61,12 @@ Until Rin unlocks it (section 9), **nothing derived from holdout prices may be s
 PR #79 protects the holdout in two layers: the plan hash in each manifest, and a `SplitRegistry` (`nexora.edge.registration`) keyed by normalised `(source, symbol)` stream. `run_exit_mode(registry=, expected_registry_hash=)` refuses an unsplit run over any registered range (including through a second manifest over the same or trimmed events), a dataset of a registered stream outside every registered range, a different plan, and a split with no registry entry. This closes the second-manifest bypass **within a stream**. The library still trusts whatever registry and expected hashes it is given, so the protocol requires them to come from an **independent, committed record**:
 
 - **Split registry file.** The registry JSON (`SplitRegistry.to_json`) is committed to `main` through a reviewed PR. Location: `OPEN-VP-16` (Architect).
-- **Pre-registration record.** A committed file next to it, merged through a reviewed PR **before** the first run touches the registered range. Contents:
-  - base dataset hash (`manifest.base`), `manifest_hash`, split plan hash;
-  - `registry_hash` and the commit SHA of the registry file;
-  - frozen protocol version hash, baseline config hash, config information cutoff (section 4);
-  - pre-registered hypotheses (primary + challengers, H-abs and H-rel for each), comparator, metric definitions, cost model hash, cost stress multipliers;
-  - random-entry null seeds and draw count, if that comparator is used (section 6).
+- **Pre-registration record.** A committed, append-only file next to it, filled in two entries, each merged through a reviewed PR:
+  1. **Registration entry, before any run touches the registered range** (including `train`): base dataset hash (`manifest.base`), `manifest_hash`, split plan hash, `registry_hash` and the commit SHA of the registry file.
+  2. **Confirmatory entry, before the first `validation`-segment run:** frozen protocol version hash, baseline config hash, config information cutoff (section 4); pre-registered hypotheses (primary + challengers, H-abs and H-rel for each), comparator, metric definitions, cost model hash, cost stress multipliers; random-entry null seeds and draw count, if that comparator is used (section 6).
+- Between the two entries only `train`-segment runs are allowed. They are `EXPLORATORY`, go in the run ledger, and exist to supply what freezing needs: the train trade frequency (section 3.1) and the train-only variance for the power calculation (section 8.1). No `validation` or `holdout` run happens before the confirmatory entry is merged.
 - **Registration rules** (from ADR-037's proposed operating rule; binding with this protocol's freeze):
-  - a range is registered before any run, of any kind, touches it;
+  - a range is registered (entry 1) before any run, of any kind, touches it;
   - a range that has already been run unsplit is disqualified from later holdout registration;
   - registrations and record entries are append-only: never edited or removed. A new plan is a new registration over a new time range;
   - a run whose expected manifest or registry hash differs from the record is `INVALID` (`preregistration_mismatch`).
@@ -79,7 +78,10 @@ Changing the record after validation results exist starts a **new** protocol ver
 
 - Walk-forward runs only on `[plan.start, plan.validation_end)`; it cannot reach the holdout (enforced by `walk_forward_windows`).
 - **Baseline V1 has no fitted parameters.** For the baseline, walk-forward is a **stability test across time**, not refitting: each test window is evaluated with the same frozen config. A challenger with tuned parameters may fit only on its window's train part.
-- **Config information cutoff.** The walk-forward range includes the train segment, and the EDGE-1 values may be pinned by people who have looked at data. Quant declares, in the pre-registration record, the latest market date of any data seen when the baseline config or any `OPEN-VP` value was chosen. **C6 counts only test windows that start after that cutoff.** If the cutoff cannot be established, C6 counts only test windows inside the `validation` segment.
+- **Config information cutoff.** The walk-forward range includes the train segment, and the EDGE-1 values may be pinned by people who have looked at data. Quant declares, in the pre-registration record, the latest market date of any data seen when the baseline config or any `OPEN-VP` value was chosen. **C6 counts only test windows that start after that cutoff.**
+  - If the cutoff is at or after the holdout start (`validation_end`), the holdout has been seen: the registration is **ineligible** for a confirmatory evaluation, and any holdout result under it is `INVALID` (C9). A new, later holdout is needed (section 9.4).
+  - If the cutoff is at or after `validation_start`, part of the validation segment has been seen: C6 counts only test windows that start after the cutoff, and the validation runs used to request the unlock must also lie after it.
+  - If the cutoff cannot be established, it is treated as unknown, not as early: the registration is ineligible until Quant can state a cutoff that precedes `validation_start`. The fallback of counting only `validation`-segment windows applies only when the cutoff is known to precede `validation_start`.
 - Window scheme (`rolling` vs `anchored`), train length, test length and step: `OPEN-VP-4`. Purge per window is at least the plan purge (enforced).
 - Test windows do not overlap, so each trade belongs to exactly one window.
 - Reported per window: trade count, primary metric with its interval, cost share of gross, ambiguous-bar share, open-at-end count. The consistency criterion (C6) uses these.
@@ -127,7 +129,7 @@ A relative result is only meaningful next to a comparator run through the **same
 - **H-abs** is judged by a one-sided interval on the baseline's own net primary metric.
 - **H-rel** is judged on the **difference** baseline − comparator:
   - against a point comparator (runner `baseline` mode, zero): a one-sided interval on the paired difference over the same time range;
-  - against the random-entry null: the one-sided p-value is the share of null draws whose primary metric is ≥ the baseline's minus the minimum effect, so the "lower bound" condition becomes "p-value ≤ the adjusted level".
+  - against the random-entry null: the one-sided p-value is the share of null draws whose primary metric is ≥ the baseline's minus the minimum effect, so the "lower bound" condition becomes "p-value ≤ the adjusted level". The finite-sample convention (for example `(k+1)/(N+1)` or `k/N`) is part of `OPEN-VP-14`, and the draw count `N` must be large enough that the smallest p-value the convention can produce is below the smallest adjusted level in the family; otherwise the test can never pass and the registration is ineligible.
 - **Minimum trade count is a power requirement.** `OPEN-VP-11` must be justified by a power calculation that can detect the minimum effect `OPEN-VP-12` at the adjusted level, using variance estimated on the `train` segment only. Below it, counts only, no intervals.
 
 ### 8.2 Multiple-testing control
@@ -151,7 +153,7 @@ All thresholds are open decisions; the **structure** below is what this protocol
 | C6 | Walk-forward consistency (checked on validation **before** requesting unlock): among test windows after the config information cutoff (section 4), the share with positive net primary metric ≥ threshold | `OPEN-VP-17` |
 | C7 | Holdout max drawdown ≤ limit | `OPEN-VP-18` |
 | C8 | Open-at-end and skipped trades do not exceed a share of signals that could reverse C2 or C3 (treatment per `OPEN-VP-9`) | `OPEN-VP-19` |
-| C9 | No protocol violation: entry gates met, holdout read once (reproduction per 9.3 excepted), manifest, registry and pre-registration record match | none |
+| C9 | No protocol violation: entry gates met, holdout read once (reproduction per 9.3 excepted), manifest, registry and both pre-registration entries match, config information cutoff precedes the holdout start (section 4) | none |
 
 ### 8.4 Verdicts
 
@@ -185,7 +187,7 @@ As with merge authority, the token is valid only as a message from Rin/Owner in 
 The requester is the MASTER session or the edge workstream owner. It may ask Rin only when all of these are attached:
 
 1. Entry gates P1–P7 met, with hashes.
-2. Split registry file and pre-registration record committed on `main`, with their commit SHAs.
+2. Split registry file and both pre-registration entries committed on `main`, with their commit SHAs, and the confirmatory entry merged before the first validation run.
 3. Validation and walk-forward results complete, including C6, and reported with the trial ledger count.
 4. Quant sign-off that all `OPEN-VP-*` the evaluation needs are answered.
 5. An independent reviewer (not the implementer, not the evaluator) has checked items 1–4 and reproduced the **validation** run from the manifest.
@@ -258,11 +260,11 @@ None of these is decided here. Leaving one unresolved blocks the entry gate or c
 | OPEN-VP-7 | Quant | Second-side evaluation: second OHLC series required, or spread-shift approximation | P2 |
 | OPEN-VP-8 | Quant + Data | Slippage assumption and swap convention per instrument | P3 |
 | OPEN-VP-9 | Quant | Headline treatment of open-at-end trades (PR #79 B-8) | C8 |
-| OPEN-VP-10 | Quant | Comparator(s); for the random-entry null, seeds and draw count | C3 |
+| OPEN-VP-10 | Quant | Comparator(s); for the random-entry null, seeds and draw count (draw count bounded below per 8.1) | C3 |
 | OPEN-VP-11 | Quant | Minimum closed-trade count, justified by a power calculation on train-only variance (8.1) | C1 |
 | OPEN-VP-12 | Quant + Rin | Minimum effect size worth acting on | C3 |
 | OPEN-VP-13 | Quant | Cost stress multiplier(s) | C4 |
-| OPEN-VP-14 | Quant | Interval method, block length, confidence level (ADR-030 Q-V5) | C2, C3 |
+| OPEN-VP-14 | Quant | Interval method, block length, confidence level (ADR-030 Q-V5); finite-sample p-value convention for the random-entry null | C2, C3 |
 | OPEN-VP-15 | Quant | Multiple-testing method and α; data-snooping correction if variants are searched | C2, C3 |
 | OPEN-VP-16 | Architect | Location and format of the split registry file, pre-registration record and run ledger | P4 |
 | OPEN-VP-17 | Quant | Walk-forward consistency threshold | C6 |
