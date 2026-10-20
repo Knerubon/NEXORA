@@ -17,11 +17,14 @@ from nexora.market_history.convert import TimeConversion, TimeSegment
 from nexora.market_history.extract import (
     DEFAULT_MAX_CHUNK_TICKS,
     ExtractionRequest,
+    dataset_status,
     extract,
+    make_anchor,
     preflight,
     usability_blockers,
     verify_dataset,
 )
+from nexora.market_history.models import HistoryError
 from nexora.market_history.provider import Mt5ReadOnlyHistorySource
 from nexora.market_history.quality import QualityConfig
 
@@ -54,7 +57,25 @@ def main() -> int:
     )
     ap.add_argument("--protected-margin-ms", type=int, default=0)
     ap.add_argument("--out", type=Path, required=True)
+    anchor = ap.add_argument_group(
+        "anchor (optional; all three together)",
+        "Write the external anchor record. It MUST be stored outside the dataset folder and "
+        "outside this machine's working copy (ticket, PR comment, another host). A dataset "
+        "without an independently stored anchor stays UNTRUSTED.",
+    )
+    anchor.add_argument("--anchor-out", type=Path)
+    anchor.add_argument("--anchor-recorded-by")
+    anchor.add_argument("--anchor-storage-ref", help="where the anchor is kept (e.g. PR comment)")
     args = ap.parse_args()
+    anchor_args = (args.anchor_out, args.anchor_recorded_by, args.anchor_storage_ref)
+    if any(anchor_args) and not all(anchor_args):
+        ap.error("--anchor-out, --anchor-recorded-by and --anchor-storage-ref go together")
+    if args.anchor_out is not None:
+        out_abs, anchor_abs = args.out.resolve(), args.anchor_out.resolve()
+        if anchor_abs == out_abs or out_abs in anchor_abs.parents:
+            raise HistoryError("anchor_inside_dataset")
+        if args.anchor_out.exists() or args.anchor_out.is_symlink():
+            raise HistoryError("anchor_file_exists")
 
     # Everything below up to the source is validated BEFORE attaching to the terminal.
     raw = json.loads(args.time_conversion.read_text())
@@ -90,9 +111,21 @@ def main() -> int:
         )
     finally:
         source.close()
-    # The anchor must come from outside the folder; this run only prints it for the operator.
     problems = verify_dataset(args.out)
     blockers = usability_blockers(args.out)
+    record = None
+    if args.anchor_out is not None:
+        record = make_anchor(
+            manifest,
+            recorded_by=args.anchor_recorded_by,
+            storage_ref=args.anchor_storage_ref,
+            recorded_at=datetime.now(UTC),
+        )
+        with args.anchor_out.open("x") as fh:  # exclusive: never overwrite an anchor
+            fh.write(json.dumps(record, indent=2, sort_keys=True) + "\n")
+    # Writing the anchor next to the data on the same disk proves nothing on its own: the operator
+    # must copy it to its independent home. Until then, and without it, the status is UNTRUSTED.
+    status = dataset_status(args.out, record)
     print(
         json.dumps(
             {
@@ -101,6 +134,8 @@ def main() -> int:
                 "manifest_sha256": manifest["manifest_sha256"],  # record this OUTSIDE the folder
                 "verify_problems": problems,
                 "usability_blockers": blockers,
+                "status": status.status,
+                "status_reasons": list(status.reasons),
             }
         )
     )

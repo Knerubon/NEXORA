@@ -142,7 +142,7 @@ def test_fall_back_boundary_inside_window_refused(tmp_path: Path) -> None:
     # offset falls 10800 -> 7200 at raw 3000: raw time repeats there
     refuses(
         tmp_path / "o",
-        "fall_back_boundary_in_window",
+        "window_touches_derived_fold_range",
         conversion=segs((0, 3000, 10800), (3000, None, 7200)),
     )
 
@@ -150,9 +150,11 @@ def test_fall_back_boundary_inside_window_refused(tmp_path: Path) -> None:
 def test_spring_forward_and_outside_boundaries_allowed(tmp_path: Path) -> None:
     # offset RISES: raw skips ahead, no ambiguity
     go(tmp_path / "a", conversion=segs((0, 3000, 7200), (3000, None, 10800)))
-    # fall-back boundary exists but outside the extracted window
-    go(tmp_path / "b", conversion=segs((0, 500, 10800), (500, 900, 7200), (900, None, 7200)))
-    with pytest.raises(HistoryError, match="fall_back_boundary_in_window"):
+    # fall-back boundary exists but its derived ambiguous range ([500-3.6M, 500+3.6M)) is far
+    # from the extracted window only when the drop is small: a 1 s drop at raw 100 ends at 1100
+    far = segs((0, 100, 10801), (100, None, 10800))
+    go(tmp_path / "b", req=ExtractionRequest("SYN", 2000, 6000, 2000), conversion=far)
+    with pytest.raises(HistoryError, match="window_touches_derived_fold_range"):
         check_attestation(att(), segs((0, 3000, 10800), (3000, None, 7200)), 2000, 4000)
 
 
@@ -223,7 +225,7 @@ def test_verify_rechecks_attestation_and_conversion(tmp_path: Path) -> None:
         tmp_path / "b",
         lambda m: m.update(time_conversion=segs((0, 3000, 10800), (3000, None, 7200)).to_json()),
     )
-    assert "clock_attestation_invalid:fall_back_boundary_in_window" in verify_dataset(
+    assert "clock_attestation_invalid:window_touches_derived_fold_range" in verify_dataset(
         tmp_path / "b"
     )
 
@@ -398,12 +400,17 @@ def test_volatile_metadata_excluded_but_content_and_mapping_included(tmp_path: P
             return CapabilityProfile((MetaField("connected", "known", "False"),))
 
         def instrument(self, symbol: str) -> InstrumentSpec:
-            return InstrumentSpec(symbol, (MetaField("swap_long", "known", "-9"),))
-
-        def descriptor(self) -> SourceDescriptor:
-            return SourceDescriptor("fixture", "999")
+            return InstrumentSpec(
+                symbol,
+                (
+                    MetaField("trade_tick_size", "known", "0.01"),
+                    MetaField("commission", "unavailable"),
+                    MetaField("swap_long", "known", "-9"),
+                ),
+            )
 
     base = go(tmp_path / "a")
+    # capability profile and trading-rule metadata (swap_long) are not identity
     assert go(tmp_path / "b", Meta(TICKS))["dataset_id"] == base["dataset_id"]
     other_ticks = [*TICKS[:-1], mk(9999 - 5000 + 1000 + 4500, "100.5", "100.6")]
     assert go(tmp_path / "c", FakeSource(other_ticks))["dataset_id"] != base["dataset_id"]

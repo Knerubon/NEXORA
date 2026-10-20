@@ -51,7 +51,8 @@
     "window_to_raw_msc": 10000000000000
   },
   "content_sha256": "87702c0d63f3ad47e5d69f7036eea6f222dbe18f16faf406ce48a978dc4bb60a",
-  "dataset_id": "8c2b0c608d3f667693a3b6ce7ce6353ed22afc3a9ce5a0829425b1d9af23efd4",
+  "dataset_id": "e7a682be55b0762aecfca5c88845a3b890fe7415f89a13ed9a78375c8ec74f8f",
+  "development_status": "UNTRUSTED",
   "immutable": true,
   "instrument": {
     "fields": [
@@ -68,10 +69,10 @@
     ],
     "symbol": "SYN"
   },
-  "manifest_sha256": "e08116ca9d87f78b532d8beca13b63f271f194acbb9a8e4925cd0aee3fbedd6e",
+  "manifest_sha256": "050b827524a08018926d047c3323a29b637686af226d2afeeaa43f9e33342709",
   "max_chunk_ticks": 1000000,
   "provenance": {
-    "extractor": "nexora.market-history-extractor/3",
+    "extractor": "nexora.market-history-extractor/4",
     "orders_submitted": 0,
     "protected_margin_ms": 0,
     "protected_utc_ranges": [],
@@ -104,7 +105,7 @@
     "zero_spread_count": 0
   },
   "quality_hard_defects": [],
-  "schema": "nexora.market-history/2",
+  "schema": "nexora.market-history/3",
   "source": {
     "kind": "fixture",
     "notes": "synthetic_fixture",
@@ -113,6 +114,7 @@
   "symbol": "SYN",
   "tick_count": 10,
   "time_conversion": {
+    "derived_fold_ranges": [],
     "segments": [
       {
         "basis": "operator_declared",
@@ -122,7 +124,53 @@
         "to_raw_msc": null
       }
     ],
-    "version": "nexora.time-conversion/1"
+    "version": "nexora.time-conversion/2"
+  },
+  "units": {
+    "instrument_fields": {
+      "currency_base": {
+        "state": "unknown",
+        "value": null
+      },
+      "currency_margin": {
+        "state": "unknown",
+        "value": null
+      },
+      "currency_profit": {
+        "state": "unknown",
+        "value": null
+      },
+      "digits": {
+        "state": "unknown",
+        "value": null
+      },
+      "point": {
+        "state": "unknown",
+        "value": null
+      },
+      "trade_contract_size": {
+        "state": "unknown",
+        "value": null
+      },
+      "trade_tick_size": {
+        "state": "known",
+        "value": "0.01"
+      },
+      "trade_tick_value": {
+        "state": "unknown",
+        "value": null
+      },
+      "trade_tick_value_loss": {
+        "state": "unknown",
+        "value": null
+      },
+      "trade_tick_value_profit": {
+        "state": "unknown",
+        "value": null
+      }
+    },
+    "price": "decimal string of the source's float exactly as received; quote currency per unit",
+    "time": "utc_msc: integer milliseconds since the Unix epoch, derived only via time_conversion"
   },
   "window_raw_msc": [
     1000,

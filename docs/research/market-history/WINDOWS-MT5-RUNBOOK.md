@@ -39,8 +39,11 @@ are your choice, write them down). Interpret:
   evidence.
 Write `time_conversion.json`: `{"segments":[{"from_raw_msc":..,"to_raw_msc":..,"offset_seconds":..,
 "basis":"operator_declared","evidence_ref":"<report id / ticket>"}]}`. Segments are in RAW time and must
-cover the whole window; extraction refuses otherwise. A segment boundary where the offset FALLS (DST fall-back) is refused: raw time repeats there and a
-raw-keyed mapping cannot represent it.
+cover the whole window; extraction refuses otherwise. A segment boundary where the offset FALLS (DST fall-back) makes raw time repeat, and a
+raw-keyed mapping cannot represent that. The tool DERIVES the ambiguous raw range from the segments
+(`[end of earlier segment - drop, start of later segment + drop)`, both sides because a raw-keyed
+boundary cannot say which side repeats) and refuses any window touching it. No attestation can waive
+this: split the extraction into windows that stop before and start after that range.
 
 ### 3b. Clock attestation (mandatory, fail closed)
 A range query on raw time cannot separate the two passes of a repeated hour, and a provider that
@@ -53,8 +56,11 @@ tool does not try to detect it; it refuses to run without a recorded claim. Writ
 - The attested window must cover the extraction window; `ambiguous_raw_ranges` lists known repeated
   hours (from the broker's DST rules) and the extraction window must not touch them: choose windows
   that stop before and start after the repeated hour.
+- Fold ranges derived from the conversion are enforced in addition to `ambiguous_raw_ranges`; an empty
+  `ambiguous_raw_ranges` does not mean "no fold" when the conversion contains a falling offset.
 - The attestation is stored in the manifest and in the dataset identity; `verify_dataset` re-checks it
-  against the conversion. It is **not proof**: a false attestation cannot be detected from the data.
+  against the conversion. It is **not proof**: with a single-segment conversion nothing can be derived,
+  so a false attestation cannot be detected from the data.
   The evidence must show the broker's clock rule for the window (not just "I looked at the chart").
 
 ## 4. Run
@@ -73,8 +79,15 @@ uv run --no-sync python scripts/extract_market_history.py `
   (about 8x smaller than the Python objects) and cannot be bounded by this tool.
 - Output lives outside Git. Do not commit raw chunks (size, and broker data terms).
 - Exit code 0 only if verification is clean **and** there are no usability blockers.
-- The JSON printed at the end contains `manifest_sha256`. **Copy it into the PR/ticket now** (outside
-  the data folder). That external anchor is what detects a forged self-consistent manifest.
+- Only ONE extraction may own an output folder: a `.writer.lock` file (pid/host/token, `O_EXCL`) is
+  taken first. A second run fails with `writer_lock_held`. A lock is removed automatically only if
+  its owner is provably dead on the same host; otherwise investigate and remove it yourself.
+- `--out` must be a real directory (a symlink is refused).
+- Every dataset is born **UNTRUSTED** (`development_status`). To make it TRUSTED, add
+  `--anchor-out <file outside --out> --anchor-recorded-by <name> --anchor-storage-ref "<where it is kept>"`
+  and then **store that anchor file independently** (PR/ticket comment, another host). The anchor
+  carries `manifest_sha256`, `dataset_id`, `content_sha256`, `symbol`. A copy left next to the data on
+  the same disk is not independent.
 
 ## 5. If the run is interrupted
 Re-run the identical command. Final files are only ever complete (atomic create); leftover
@@ -92,8 +105,10 @@ statistics are produced by the quality report. Do not open chunk files for the l
 
 ## 7. Independent verification
 A second person on a clean checkout of the same SHA runs
-`verify_dataset(<folder>, expected_manifest_sha256=<anchor from the PR>)` and
-`usability_blockers(<folder>, expected_manifest_sha256=<anchor>)`; both must be empty.
+`uv run --no-sync python scripts/verify_market_history.py --dataset <folder> --anchor <anchor file
+fetched from the independent store> --require-trusted` (exit 0 only if `TRUSTED`). `TRUSTED` needs: a
+clean verification, no hard defects, and an anchor whose manifest hash, `dataset_id`, `content_sha256`
+and symbol all match. Without an anchor the result is `UNTRUSTED` (development use only).
 
 ## 8. Evidence to report back to the PR (no raw data)
 SHA, node/terminal build, operator, window and its pre-registration reference, `dataset_id` (content identity), `content_sha256`,
