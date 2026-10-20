@@ -51,8 +51,21 @@
     "window_to_raw_msc": 10000000000000
   },
   "content_sha256": "87702c0d63f3ad47e5d69f7036eea6f222dbe18f16faf406ce48a978dc4bb60a",
-  "dataset_id": "e7a682be55b0762aecfca5c88845a3b890fe7415f89a13ed9a78375c8ec74f8f",
+  "dataset_id": "72a42bea0abae7bf89ffd1f1ebde40317acb77461156e4de7dbc250a6eb02ddf",
   "development_status": "UNTRUSTED",
+  "filesystem_capabilities": {
+    "fs_class": "local",
+    "platform": "linux",
+    "probes": {
+      "advisory_lock_exclusion": true,
+      "dir_fd": true,
+      "fsync_dir": true,
+      "hardlink_no_overwrite": true,
+      "nlink_reported": true,
+      "nofollow_open": true
+    },
+    "schema": "nexora.fs-capabilities/1"
+  },
   "immutable": true,
   "instrument": {
     "fields": [
@@ -69,10 +82,11 @@
     ],
     "symbol": "SYN"
   },
-  "manifest_sha256": "050b827524a08018926d047c3323a29b637686af226d2afeeaa43f9e33342709",
+  "manifest_sha256": "13abbae73422226858ef29bb06cc8296580869e2558958d9e493aedf073e6a38",
   "max_chunk_ticks": 1000000,
   "provenance": {
-    "extractor": "nexora.market-history-extractor/4",
+    "extractor": "nexora.market-history-extractor/5",
+    "operator": null,
     "orders_submitted": 0,
     "protected_margin_ms": 0,
     "protected_utc_ranges": [],
@@ -105,7 +119,7 @@
     "zero_spread_count": 0
   },
   "quality_hard_defects": [],
-  "schema": "nexora.market-history/3",
+  "schema": "nexora.market-history/4",
   "source": {
     "kind": "fixture",
     "notes": "synthetic_fixture",

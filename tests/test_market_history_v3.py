@@ -338,14 +338,19 @@ def test_every_dataset_is_born_untrusted_and_the_manifest_cannot_grant_trust(
         require_trusted(tmp_path, None)
 
 
-def test_matching_external_anchor_makes_it_trusted(tmp_path: Path) -> None:
+def test_matching_v3_anchor_alone_no_longer_grants_trust(tmp_path: Path) -> None:
+    """V4 supersedes V3 here: a hash-only anchor is a candidate, not custody evidence. The positive
+    path (store + registry + independent approver) is covered in test_market_history_v4.py."""
     m = go(tmp_path / "d")
     anchor = anchored(tmp_path / "d", m)
     (tmp_path / "anchor.json").write_text(json.dumps(anchor))
     loaded = load_anchor(tmp_path / "anchor.json", dataset_dir=tmp_path / "d")
     s = dataset_status(tmp_path / "d", loaded)
-    assert s.status == "TRUSTED" and s.reasons == () and s.trusted
-    assert require_trusted(tmp_path / "d", loaded).trusted
+    assert s.status == "UNTRUSTED" and not s.trusted
+    assert "legacy_anchor_is_not_custody_evidence" in s.reasons
+    assert not any(r.startswith("integrity:") for r in s.reasons)  # the anchor itself matched
+    with pytest.raises(HistoryError, match="dataset_untrusted"):
+        require_trusted(tmp_path / "d", loaded)
 
 
 def test_resealed_forgery_is_untrusted_with_an_anchor_and_invisible_without_one(
@@ -496,11 +501,25 @@ def test_lock_is_released_after_success_and_after_failure(tmp_path: Path) -> Non
     assert not (tmp_path / "bad" / LOCK_NAME).exists()
 
 
-def test_provably_dead_lock_on_this_host_is_reaped(tmp_path: Path) -> None:
-    write_lock(tmp_path, pid=dead_pid(), host=socket.gethostname(), token="old")
+def test_v4_lock_record_of_a_dead_owner_is_free_because_the_os_lock_is_gone(
+    tmp_path: Path,
+) -> None:
+    """V3 reaped by reading pid/host and renaming by name (racy). V4 never reaps: a record is free
+    only because NO process holds the OS lock on it (the kernel dropped it at the owner's death)."""
+    write_lock(
+        tmp_path, format="nexora.writer-lock/2", pid=dead_pid(), host=socket.gethostname(),
+        token="old",
+    )  # fmt: skip
     go(tmp_path)
     assert verify_dataset(tmp_path) == []
     assert not [p for p in tmp_path.iterdir() if p.name.startswith(LOCK_NAME)]
+
+
+def test_v3_style_lock_record_is_never_reaped_even_with_a_dead_pid(tmp_path: Path) -> None:
+    write_lock(tmp_path, pid=dead_pid(), host=socket.gethostname(), token="old")
+    with pytest.raises(HistoryError, match="writer_lock_held"):
+        go(tmp_path)  # a V3 writer never took an OS lock: V4 cannot prove it is gone
+    assert (tmp_path / LOCK_NAME).exists()
 
 
 @pytest.mark.parametrize(
@@ -754,6 +773,7 @@ def test_resealed_mutants_never_raise_and_are_never_trusted_against_an_anchor(
         "max_chunk_ticks",
         "capability_profile",
         "instrument",
+        "filesystem_capabilities",
     }, quiet_stale
     # A forger who recomputes every self-hash defeats integrity checks by construction: that is
     # exactly why TRUSTED requires the anchor, which the assertions above prove.
@@ -825,7 +845,7 @@ def test_extract_cli_validates_anchor_arguments_before_attaching(
         cli.main()
 
 
-def test_verify_cli_reports_untrusted_without_and_trusted_with_an_external_anchor(
+def test_verify_cli_reports_untrusted_without_custody_and_for_a_hash_only_anchor(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     cli = _cli("verify_market_history.py")
@@ -837,14 +857,15 @@ def test_verify_cli_reports_untrusted_without_and_trusted_with_an_external_ancho
         return code, json.loads(capsys.readouterr().out)
 
     code, out = run()
-    assert (code, out["status"]) == (0, "UNTRUSTED") and out["status_reasons"] == [
-        "no_independent_anchor"
+    assert (code, out["status"]) == (0, "UNTRUSTED") and "no_independent_anchor" in out[
+        "status_reasons"
     ]
     assert run("--require-trusted")[0] == 1
     good = tmp_path / "anchor.json"
     good.write_text(json.dumps(anchored(tmp_path / "d", m)))
     code, out = run("--anchor", str(good), "--require-trusted")
-    assert (code, out["status"], out["status_reasons"]) == (0, "TRUSTED", [])
+    assert code == 1 and out["status"] == "UNTRUSTED"  # a hash-only anchor is not custody
+    assert "legacy_anchor_is_not_custody_evidence" in out["status_reasons"]
     wrong = anchored(tmp_path / "d", m)
     wrong["manifest_sha256"] = "0" * 64
     good.write_text(json.dumps(wrong))
