@@ -1,0 +1,102 @@
+{
+  "schema": "nexora.baseline-freeze-proposal/proposal-v0",
+  "status": "PROPOSAL_NOT_FROZEN",
+  "immutable": false,
+  "immutability_rule": "Becomes immutable only when Rin freezes it with every UNRESOLVED field filled, signed by Quant, and hashed. Until then this file is an inventory of decisions, not a configuration.",
+  "audited_main_sha": "36c90c59e2aa4f0d221c9c468a8379c5f57cbb87",
+  "audited_pr_refs": {
+    "pr79_edge_engineering": "196a962fd6fe2be41e0acfd70f6f7ec3b7a240db",
+    "pr81_validation_protocol": "49bd2d6c9d8cf11c0e78a1e209ccc0cbb5eb4282"
+  },
+  "value_legend": {
+    "source_default": "Value taken verbatim from a code default at the audited SHA. A code default is NOT an accepted production value.",
+    "production_value": "UNRESOLVED means no verified production-observed value exists. Repository examples (docs/examples/*.json) must never fill it.",
+    "no_default": "The source requires the caller to supply the value; there is nothing to propose."
+  },
+  "freeze_preconditions": [
+    {"id": "A1", "text": "Non-secret operator attestation of the actual observation process: clean full code SHA, run interval, approved research JSON + canonical hash, resolved feature document + hash, adapter/capability snapshot, time-offset version.", "state": "UNRESOLVED"},
+    {"id": "A2", "text": "Information cutoff: latest market date seen by any person or agent who selected parameters or thresholds.", "state": "UNRESOLVED"},
+    {"id": "A3", "text": "Quant-signed trade-plan semantics (target, stop movement, partial close, sizing, time stop, concurrency, ambiguity) before any validation result exists.", "state": "UNRESOLVED"},
+    {"id": "A4", "text": "ADR-037 and ADR-036 accepted by Rin; EDGE-VP-1 protocol frozen; PR #79 defects D-1 and D-2 corrected and re-reviewed at the exact resulting HEAD.", "state": "UNRESOLVED"}
+  ],
+  "components": [
+    {"component": "pnf", "source": "packages/nexora/pnf/models.py PnfConfig", "fields": [
+      {"field": "symbol", "no_default": true, "production_value": "UNRESOLVED"},
+      {"field": "box_size", "no_default": true, "production_value": "UNRESOLVED", "note": "Per resolution; no BOX 10/20/30 inference (AGENTS.md section 0)."},
+      {"field": "reversal_boxes", "no_default": true, "production_value": "UNRESOLVED"},
+      {"field": "price_precision", "no_default": true, "production_value": "UNRESOLVED"},
+      {"field": "price_source", "no_default": true, "production_value": "UNRESOLVED"},
+      {"field": "version", "no_default": true, "production_value": "UNRESOLVED"}
+    ]},
+    {"component": "adaptive_box", "source": "packages/nexora/adaptive_box/models.py AdaptiveBoxConfig", "fields": [
+      {"field": "mode", "no_default": true, "production_value": "UNRESOLVED"},
+      {"field": "fixed_box_size", "no_default": true, "production_value": "UNRESOLVED"},
+      {"field": "price_precision", "no_default": true, "production_value": "UNRESOLVED"},
+      {"field": "rule_version", "no_default": true, "production_value": "UNRESOLVED"},
+      {"field": "atr_period", "source_default": 14, "production_value": "UNRESOLVED"},
+      {"field": "atr_multiplier", "source_default": "1.0", "production_value": "UNRESOLVED"},
+      {"field": "min_box_size", "source_default": "0.1", "production_value": "UNRESOLVED"},
+      {"field": "max_box_size", "source_default": "50.0", "production_value": "UNRESOLVED", "note": "Unit policy is ADR-030 Q-V3 (open)."}
+    ]},
+    {"component": "pipeline_and_regime", "source": "packages/nexora/research/pipeline.py, runtime.py", "fields": [
+      {"field": "pipeline.version, resolutions, structure_resolution, stale_after_events", "no_default": true, "production_value": "UNRESOLVED"},
+      {"field": "runtime.implementation_version", "source_default": "research-pipeline-v2", "production_value": "UNRESOLVED"},
+      {"field": "regime.* (lookback, trend_min_slope, high_volatility_min_width, hysteresis, version)", "no_default": true, "production_value": "UNRESOLVED", "note": "ADR-010 thresholds; this session did not enumerate regime defaults. See Track A report."}
+    ]},
+    {"component": "signals", "source": "packages/nexora/signals/models.py SignalWeights, SignalConfig", "fields": [
+      {"field": "symbol, cooldown_events, expiry_events, version", "no_default": true, "production_value": "UNRESOLVED"},
+      {"field": "weights.pnf_reversal", "source_default": 20, "production_value": "UNRESOLVED"},
+      {"field": "weights.structure", "source_default": 25, "production_value": "UNRESOLVED"},
+      {"field": "weights.support_resistance", "source_default": 20, "production_value": "UNRESOLVED"},
+      {"field": "weights.matrix", "source_default": 20, "production_value": "UNRESOLVED"},
+      {"field": "weights.regime", "source_default": 15, "production_value": "UNRESOLVED"},
+      {"field": "weights.pattern_confirmation", "source_default": 10, "production_value": "UNRESOLVED"},
+      {"field": "weights.pattern_conflict_penalty", "source_default": 15, "production_value": "UNRESOLVED", "note": "Subtracted."},
+      {"field": "wait_score_max", "source_default": 49, "production_value": "UNRESOLVED"},
+      {"field": "action_score_min", "source_default": 65, "production_value": "UNRESOLVED"},
+      {"field": "action_gap_min", "source_default": 8, "production_value": "UNRESOLVED"},
+      {"field": "pattern_price_tolerance", "source_default": "0.8", "production_value": "UNRESOLVED"},
+      {"field": "entry_zone_half_width", "source_default": "0.5", "production_value": "UNRESOLVED", "note": "In boxes."},
+      {"field": "target_rr_tp1", "source_default": "1.5", "production_value": "UNRESOLVED", "note": "Geometry only; which target is traded is Q-T01, unresolved."},
+      {"field": "target_rr_tp2", "source_default": "2.5", "production_value": "UNRESOLVED"}
+    ]},
+    {"component": "optional_features", "source": "packages/nexora/features.py", "fields": [
+      {"field": "effective resolved feature document + canonical hash + algorithm descriptor versions", "no_default": true, "production_value": "UNRESOLVED", "note": "Separate from the pipeline config hash."}
+    ]},
+    {"component": "exit_policy", "source": "PR #79 packages/nexora/edge/exits.py ExitPolicy, TradePlan (NOT on main)", "fields": [
+      {"field": "concurrency", "no_default": true, "production_value": "UNRESOLVED", "decision": "Q-T06"},
+      {"field": "bar_interval", "no_default": true, "production_value": "UNRESOLVED"},
+      {"field": "ambiguity", "source_default": "stop_first", "production_value": "UNRESOLVED", "decision": "Q-T08", "note": "A code default is not Quant acceptance. PR #79 does not validate this value (finding D-1)."},
+      {"field": "max_hold_bars", "source_default": null, "production_value": "UNRESOLVED", "decision": "Q-T05", "note": "null means NO time stop; a finite purge cannot be derived while unbounded."},
+      {"field": "entry_delay", "source_default": "0", "production_value": "UNRESOLVED", "decision": "OPEN-VP-6", "note": "Protocol draft requires at least one bar unless knowledge-before-open is demonstrated."},
+      {"field": "target_name (TP1 or TP2)", "no_default": true, "production_value": "UNRESOLVED", "decision": "Q-T01"},
+      {"field": "partial_close", "no_default": true, "production_value": "UNRESOLVED", "decision": "Q-T02", "note": "Not representable in the audited static single-target exit contract."},
+      {"field": "stop_movement (break-even/trailing)", "no_default": true, "production_value": "UNRESOLVED", "decision": "Q-T03"},
+      {"field": "sizing / exposure unit", "no_default": true, "production_value": "UNRESOLVED", "decision": "Q-T04"}
+    ]},
+    {"component": "cost_model", "source": "PR #79 packages/nexora/edge/costs.py CostModel", "fields": [
+      {"field": "spread", "no_default": true, "production_value": "UNRESOLVED", "note": "Must be observed from real bid/ask; missing is never zero."},
+      {"field": "commission", "no_default": true, "production_value": "UNRESOLVED", "note": "Effective-dated capability schedule required. Legacy baseline-config.json value is an example, excluded."},
+      {"field": "slippage", "no_default": true, "production_value": "UNRESOLVED", "decision": "OPEN-VP-8"},
+      {"field": "swap", "no_default": true, "production_value": "UNRESOLVED", "decision": "OPEN-VP-8"},
+      {"field": "decimal_arithmetic_context", "no_default": true, "production_value": "UNRESOLVED", "decision": "Q-T12 (new)", "note": "Finding D-2: results depend on ambient Decimal context while run_id does not."}
+    ]},
+    {"component": "provenance_to_record_at_freeze", "fields": [
+      {"field": "clean_code_sha", "production_value": "UNRESOLVED"},
+      {"field": "complete_config_canonical_hash (all inherited defaults expanded)", "production_value": "UNRESOLVED"},
+      {"field": "feature_hash", "production_value": "UNRESOLVED"},
+      {"field": "execution_and_cost_contract_hashes", "production_value": "UNRESOLVED"},
+      {"field": "dataset_manifest_hash", "production_value": "UNRESOLVED"},
+      {"field": "split_and_registry_hash", "production_value": "UNRESOLVED"},
+      {"field": "information_cutoff", "production_value": "UNRESOLVED"},
+      {"field": "preregistration_protocol_hash", "production_value": "UNRESOLVED"},
+      {"field": "reviewers_and_approval_date", "production_value": "UNRESOLVED"}
+    ]}
+  ],
+  "explicitly_excluded_as_sources": [
+    "docs/examples/research-config.json (illustrative, symbol-specific)",
+    "docs/examples/baseline-config.json (legacy close-momentum comparator, not P&F Baseline V1)",
+    "PR #79 EDGE-1 wording 'frozen at bc1712f' (reconstruction reference; body states values are not pinned)"
+  ],
+  "safety": "Research proposal only. No tuning, no holdout access, no PROD, no live/demo/paper/AUTO, broker-agnostic."
+}
