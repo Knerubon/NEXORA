@@ -28,6 +28,7 @@ from decimal import Decimal
 from typing import Literal
 
 from nexora.artifacts import canonical_hash
+from nexora.edge.arithmetic import arithmetic_descriptor, deterministic_arithmetic
 from nexora.edge.costs import CostBreakdown, CostModel, compute_costs
 from nexora.edge.dataset import (
     EdgeDatasetError,
@@ -72,6 +73,22 @@ class ExitInputError(ValueError):
         super().__init__(code)
 
 
+# Closed policy vocabularies. Python `Literal` annotations are not enforced at runtime, so a
+# value loaded from configuration must be checked explicitly: an unknown ambiguity policy used
+# to fall through to the FAVOURABLE target outcome (review finding D-1, PR #79).
+AMBIGUITY_POLICIES: tuple[str, ...] = ("stop_first", "target_first")
+CONCURRENCY_POLICIES: tuple[str, ...] = ("one_position", "allow_overlap")
+
+
+def _closed_choice(value: object, vocabulary: tuple[str, ...], code: str) -> None:
+    """Accept only an exact `str` that is a member of the closed vocabulary.
+
+    `type(value) is str` (not isinstance) so a str subclass with a permissive `__eq__` or
+    `__hash__` cannot pass membership and then behave differently downstream."""
+    if type(value) is not str or value not in vocabulary:
+        raise ExitInputError(code)
+
+
 @dataclass(frozen=True, slots=True)
 class ExitPolicy:
     version: str
@@ -86,8 +103,8 @@ class ExitPolicy:
     entry_delay: timedelta = timedelta(0)
 
     def __post_init__(self) -> None:
-        if self.concurrency not in ("one_position", "allow_overlap"):
-            raise ExitInputError("invalid_concurrency")
+        _closed_choice(self.concurrency, CONCURRENCY_POLICIES, "invalid_concurrency")
+        _closed_choice(self.ambiguity, AMBIGUITY_POLICIES, "invalid_ambiguity")
         if not isinstance(self.bar_interval, timedelta) or self.bar_interval <= timedelta(0):
             raise ExitInputError("invalid_bar_interval")
         if self.max_hold_bars is not None and self.max_hold_bars < 1:
@@ -164,6 +181,7 @@ class ExitResult:
     # i.e. the holding time is an UPPER bound (conservative for swap, which is never a credit).
     exit_time_upper_bound: bool = False
 
+    @deterministic_arithmetic
     def gross_per_unit(self, price: Decimal | None = None) -> Decimal:
         if self.entry_price is None or (price is None and self.exit_price is None):
             raise ExitInputError("trade_not_closed")
@@ -223,6 +241,7 @@ def _check_plan(plan: TradePlan) -> None:
         raise ExitInputError("timezone_required")
 
 
+@deterministic_arithmetic
 def simulate_exit(
     plan: TradePlan,
     bars: Sequence[NormalizedPriceEvent],
@@ -235,6 +254,11 @@ def simulate_exit(
     `ohlc_basis` is the quote side the bars were built from (see `Provenance.ohlc_basis`). It
     must be the side that fills this plan's exit (`EXIT_SIDE_BASIS`), otherwise the plan is
     refused: trigger timing on the wrong side is systematically optimistic for one side."""
+    # Re-validate at the point of use: the policy dataclass is frozen, but a field can still be
+    # replaced by bypassing `__init__`/`__setattr__`. An unknown value must stop the run, never
+    # select an outcome.
+    _closed_choice(policy.concurrency, CONCURRENCY_POLICIES, "invalid_concurrency")
+    _closed_choice(policy.ambiguity, AMBIGUITY_POLICIES, "invalid_ambiguity")
     _check_plan(plan)
     _check_basis(plan.side, ohlc_basis)
     _validate_bars(bars, policy.bar_interval)
@@ -350,9 +374,18 @@ def simulate_exit(
                 return result(
                     bar, index, stop_fill, "stop", ambiguous=True, alternatives=alternatives
                 )
-            return result(
-                bar, index, plan.target_price, "target", ambiguous=True, alternatives=alternatives
-            )
+            if policy.ambiguity == "target_first":
+                return result(
+                    bar,
+                    index,
+                    plan.target_price,
+                    "target",
+                    ambiguous=True,
+                    alternatives=alternatives,
+                )
+            # Unreachable after the checks above; kept so no future edit can reintroduce a
+            # silent fall-through to the favourable outcome.
+            raise ExitInputError("invalid_ambiguity")
         if stop_hit:
             return result(bar, index, plan.stop_price, "stop")
         if target_hit:
@@ -386,6 +419,7 @@ class EdgeTrade:
     sensitivity: tuple[tuple[str, Decimal, Decimal], ...] = ()
 
 
+@deterministic_arithmetic
 def to_edge_trade(result: ExitResult, cost_model: CostModel, *, unit_size: Decimal) -> EdgeTrade:
     """Apply costs to a closed trade. `unit_size` is a research unit multiplier, not a
     position-sizing rule."""
@@ -449,6 +483,7 @@ class EdgeExitRun:
         return self.gates.statistical_evidence_eligible
 
 
+@deterministic_arithmetic
 def run_exit_mode(
     plans: Sequence[TradePlan],
     events: Sequence[NormalizedPriceEvent],
@@ -636,7 +671,12 @@ def run_exit_mode(
             split.plan_hash if split is not None else None,
             walk_forward[0] if walk_forward is not None else None,
             ordered,
-            [t.exit for t in trades],
+            # The COMPUTED ledger (costs, gross and net), not only the exits: the run id must
+            # change whenever any monetary output changes (review finding D-2).
+            trades,
+            # The arithmetic actually in force, so two different arithmetics can never share
+            # an identity even if their outputs happened to coincide on one dataset.
+            arithmetic_descriptor(),
         )
     )
     notes = [
@@ -654,6 +694,8 @@ def run_exit_mode(
         "entry_spread_quote_timing_within_bar_undeclared",
         "exit_side_spread_not_modelled",
         f"cost_units={cost_model.currency}",
+        f"arithmetic={arithmetic_descriptor()[0]}:prec={arithmetic_descriptor()[1]}",
+        "arithmetic_context_is_engineering_default_quant_decision_q_t12_open",
     ]
     if not manifest.declared_real_market:
         notes.append("synthetic_data_not_statistical_evidence")
