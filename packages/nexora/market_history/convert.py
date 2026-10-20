@@ -12,7 +12,7 @@ from typing import Any
 
 from nexora.market_history.models import HistoryError, NormalizedTick, RawTick, exact_sub
 
-CONVERSION_VERSION = "nexora.time-conversion/1"
+CONVERSION_VERSION = "nexora.time-conversion/2"
 _BASES = ("operator_declared", "documented_by_source")
 
 
@@ -27,6 +27,13 @@ class TimeSegment:
     evidence_ref: str  # where the claim comes from (doc/ticket/measurement report); required
 
     def __post_init__(self) -> None:
+        ints = (self.from_raw_msc, self.offset_seconds)
+        if not all(type(v) is int for v in ints) or not (
+            self.to_raw_msc is None or type(self.to_raw_msc) is int
+        ):
+            raise HistoryError("time_segment_malformed", "bounds and offset must be ints")
+        if type(self.basis) is not str or type(self.evidence_ref) is not str:
+            raise HistoryError("time_segment_malformed", "basis and evidence_ref must be text")
         if self.basis not in _BASES:
             raise HistoryError("unsupported_offset_basis", self.basis)
         if not self.evidence_ref.strip():
@@ -81,8 +88,26 @@ class TimeConversion:
                 return True
         return cursor >= to_raw
 
+    def derived_fold_ranges(self) -> tuple[tuple[int, int], ...]:
+        """RAW ranges that cannot be mapped to one UTC instant, derived from the segments alone.
+
+        A falling offset between two segments is a clock fall-back: raw time repeats by the size
+        of the drop. A raw-keyed segment boundary cannot say whether the repeated stretch sits
+        just before or just after the boundary, so BOTH sides are ambiguous:
+        [boundary_end - drop, boundary_start + drop). The operator cannot waive or shrink this."""
+        out: list[tuple[int, int]] = []
+        for prev, nxt in zip(self.segments, self.segments[1:], strict=False):
+            drop_ms = (prev.offset_seconds - nxt.offset_seconds) * 1000
+            if drop_ms > 0 and prev.to_raw_msc is not None:
+                out.append((prev.to_raw_msc - drop_ms, nxt.from_raw_msc + drop_ms))
+        return tuple(out)
+
     def to_json(self) -> dict[str, Any]:
-        return {"version": self.version, "segments": [s.to_json() for s in self.segments]}
+        return {
+            "version": self.version,
+            "segments": [s.to_json() for s in self.segments],
+            "derived_fold_ranges": [list(r) for r in self.derived_fold_ranges()],
+        }
 
 
 def normalize(ticks: Iterable[RawTick], conversion: TimeConversion) -> Iterator[NormalizedTick]:

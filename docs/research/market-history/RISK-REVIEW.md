@@ -20,3 +20,16 @@ terminal; large real-history chunk sizes; filesystem behaviour of the node.
 
 Dukascopy: retrieval stays **BLOCKED** (PR #90): lawful access for automated retrieval and a verified
 `.bi5` layout/time base are still missing. This branch does not touch it.
+
+
+## V3 corrective wave (PR #92 review findings F1-F7; self-authored, independent review pending)
+| Finding | Fix | Residual risk |
+|---|---|---|
+| F1 `verify` skipped a directory/FIFO at a chunk path (returned no problem) | `_kind()` via `lstat`; `chunk_not_regular_file`, `chunk_is_symlink`, `manifest_is_symlink`, `manifest_not_regular_file`; reads use `O_NOFOLLOW`+`O_NONBLOCK`+`fstat` | none known on POSIX; Windows has no `O_NOFOLLOW` (lstat pre-check only, small TOCTOU window) |
+| F2 repeated hour not enforced unless declared | `TimeConversion.derived_fold_ranges()` = `[prev_end - drop, next_start + drop)` per falling offset; refused by `check_attestation`, recorded in the manifest, recomputed by `verify` (`time_conversion_not_canonical`); attestation cannot waive it | **open:** one-segment conversion + false attestation is undetectable (Q-D01); a fold the operator never put into the conversion is invisible |
+| F3 `dataset_id` ignored interpretation metadata | `dataset_id` binds source, `units` (declared time/price units + unit-defining instrument fields) in addition to content/time/attestation; `units_binding_mismatch` if tampered; `content_sha256` stays pure | swap/volume/stop-level metadata still excluded on purpose (covered by `manifest_sha256` and the anchor) |
+| F7 anchor optional | `development_status` is always `UNTRUSTED`; `manifest_claims_trust` rejects self-granted trust; `dataset_status`/`require_trusted` need a valid, matching, externally stored anchor and no hard defects | "independently stored" is a process control: the tool only checks the anchor file is outside the dataset folder and names its `storage_ref` |
+| F4 no writer ownership | O_EXCL `.writer.lock` (pid/host/token), dead-owner reaping by atomic rename, token-checked release, unique temp names, `writer_lock_present`/`unexpected_entry` in verify; two-process race test | foreign-host or unreadable locks need an operator; PID reuse can look alive (fails closed) |
+| F5 symlinks | `out_dir_is_symlink`, `out_dir_not_a_directory`, dangling links at chunk/manifest names -> `HistoryError` | symlinked parent directories above `--out` are not inspected |
+| F6 stress counts | injected defects built non-interacting; dup / same-ts / non-monotonic / crossed / gap / non-positive asserted `==` for 3 seeds | gap threshold remains Quant MD-6 |
+| Fuzz | re-sealed structure-aware mutants (1500): never `verify_internal_error`, never TRUSTED against an anchor; stale-id edits to identity fields always detected. Found and fixed: unvalidated window order/coverage, non-int segment values, unvalidated `quality`, non-mapping anchors | a competent forger who recomputes every self-hash passes internal checks by construction: the anchor is the control (asserted in the test) |

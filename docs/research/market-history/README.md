@@ -12,9 +12,20 @@ WINDOWS-INTEGRATION, read-only, no credentials, no orders).
 - MT5 access passes a call allowlist (`initialize/shutdown/last_error/version/terminal_info/
   symbol_info/copy_ticks_range`; `initialize()` takes no arguments); trade calls are refused and the gate exposes no
   raw-module attribute. Terminal `path` and account fields are not captured.
-- `dataset_id` is a content identity (retries/layout excluded). Extraction needs a recorded clock attestation and an explicit protected-range declaration (both validated before any provider access). Chunks are write-once, created atomically (temp + fsync + no-overwrite link) and read-only; the manifest is written last, write-once, with a self hash and
+- `content_sha256` is the canonical tick bytes only. `dataset_id` is the **research** identity: it
+  binds the content hash to symbol, window, raw->UTC conversion (with derived fold ranges), clock
+  attestation, source kind/version and the declared units with the instrument facts that define them
+  (digits, point, tick size/value, contract size, currencies). Retries, retrieval time, chunk layout,
+  terminal state and trading-rule metadata (swaps, volume limits, stop levels) are not identity; they
+  are in `manifest_sha256`. Extraction needs a recorded clock attestation and an explicit protected-range declaration (both validated before any provider access). Chunks are write-once, created atomically (temp + fsync + no-overwrite link) and read-only; the manifest is written last, write-once, with a self hash and
   `dataset_id`; `verify_dataset` re-derives hashes, counts, contiguity and the quality report
-  from files alone.
+  from files alone. Only regular files count as chunks; symlinks, directories and FIFOs are problems.
+  One writer owns an output folder (`.writer.lock`); `--out` symlinks are refused.
+- **Trust.** Every dataset is `UNTRUSTED` (development use). `TRUSTED` is never stored in a manifest
+  (a manifest claiming it is rejected); `dataset_status` returns it only against an independently
+  stored anchor (`make_anchor`/`load_anchor`, `scripts/verify_market_history.py`) with clean
+  verification and no hard defects. Anything used as G1-G5 / freeze evidence must pass
+  `require_trusted`.
 - Commission is recorded `unavailable` (not exposed by `symbol_info`), never zero.
 - The quality report has counts and coverage only (no price/spread distributions) so it does not
   breach holdout custody. `max_gap_ms` has no default (Quant decision, OPEN).

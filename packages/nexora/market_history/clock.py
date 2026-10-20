@@ -89,13 +89,9 @@ def check_attestation(
     for lo, hi in attestation.ambiguous_raw_ranges:
         if lo < to_raw_msc and from_raw_msc < hi:
             raise HistoryError("window_touches_ambiguous_raw_range", f"{lo}-{hi}")
-    inside = [
-        s
-        for s in conversion.segments
-        if s.from_raw_msc < to_raw_msc and (s.to_raw_msc is None or s.to_raw_msc > from_raw_msc)
-    ]
-    for prev, nxt in zip(inside, inside[1:], strict=False):
-        if nxt.offset_seconds < prev.offset_seconds:
-            # A falling offset at a boundary is a fall-back: raw time repeats there and a
-            # raw-keyed mapping cannot represent it. Exclude that hour from the window instead.
-            raise HistoryError("fall_back_boundary_in_window", str(nxt.from_raw_msc))
+    # Machine-derived, not operator-declared: every falling offset in the conversion makes the
+    # raw time around its boundary ambiguous, and no attestation can waive that. A window that
+    # touches it must be split so the repeated stretch is excluded.
+    for lo, hi in conversion.derived_fold_ranges():
+        if lo < to_raw_msc and from_raw_msc < hi:
+            raise HistoryError("window_touches_derived_fold_range", f"{lo}-{hi}")
