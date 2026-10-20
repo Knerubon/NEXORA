@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Literal
 
+from nexora.edge.arithmetic import deterministic_arithmetic
+
 CostState = Literal["known", "unknown", "unavailable"]
 COMPONENTS = ("spread", "commission", "slippage", "swap")
 
@@ -71,6 +73,7 @@ class CostBreakdown:
         return not self.unknown and not self.unavailable
 
 
+@deterministic_arithmetic
 def compute_costs(
     model: CostModel,
     *,
