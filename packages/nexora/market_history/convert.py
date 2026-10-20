@@ -8,10 +8,9 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
-from decimal import Decimal
 from typing import Any
 
-from nexora.market_history.models import HistoryError, NormalizedTick, RawTick
+from nexora.market_history.models import HistoryError, NormalizedTick, RawTick, exact_sub
 
 CONVERSION_VERSION = "nexora.time-conversion/1"
 _BASES = ("operator_declared", "documented_by_source")
@@ -89,5 +88,6 @@ class TimeConversion:
 def normalize(ticks: Iterable[RawTick], conversion: TimeConversion) -> Iterator[NormalizedTick]:
     """Order-preserving; drops nothing, reorders nothing (quality checks report disorder)."""
     for t in ticks:
-        spread: Decimal = t.ask - t.bid
-        yield NormalizedTick(conversion.to_utc_msc(t.time_msc), t.time_msc, t.bid, t.ask, spread)
+        yield NormalizedTick(
+            conversion.to_utc_msc(t.time_msc), t.time_msc, t.bid, t.ask, exact_sub(t.ask, t.bid)
+        )

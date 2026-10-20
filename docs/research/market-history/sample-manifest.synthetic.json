@@ -42,7 +42,7 @@
       "to_raw_msc": 6000
     }
   ],
-  "dataset_id": "44b829199270e25be03025268d79b65e526134006f65047c43071ec20d9ddb07",
+  "dataset_id": "979d52aac224cbc823282e3b9af517642f5fa9869b0bb3d8ffe003d13667a20c",
   "immutable": true,
   "instrument": {
     "fields": [
@@ -59,9 +59,10 @@
     ],
     "symbol": "SYN"
   },
-  "manifest_sha256": "395577162a6cbea050b06f1b8a7d3bba86c26a10109183bf69fbb643eebdba7c",
+  "manifest_sha256": "0db3977a796c28e9c5284c7119bbb349bbd85248502c2c374ae702ef7c609a1c",
+  "max_chunk_ticks": 1000000,
   "provenance": {
-    "extractor": "nexora.market-history-extractor/1",
+    "extractor": "nexora.market-history-extractor/2",
     "orders_submitted": 0,
     "read_only_source_allowlist": true,
     "retrieval_note": "historical_retrieval: retrieved_at is when this extraction ran, not when ticks were originally received; it must never be used as point-in-time knowledge time",
@@ -80,6 +81,7 @@
     "gaps_utc_msc": [],
     "last_utc_msc": -10794500,
     "non_monotonic_count": 0,
+    "nonfinite_quote_count": 0,
     "nonpositive_price_count": 0,
     "note": "counts and coverage only; no price/spread distributions (holdout custody)",
     "same_timestamp_different_quote_count": 0,
