@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Market-history Windows readiness evidence record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "record_id", "package_version", "extractor_sha", "checkout_clean", "head_equals_sha",
+    "node", "terminal", "people", "window", "source_provenance", "dataset", "execution",
+    "cases", "overall_result", "timestamps", "not_verified"
+  ],
+  "$defs": {
+    "value": {
+      "description": "A real value or the literal NOT VERIFIED. Blank is invalid.",
+      "anyOf": [
+        {"type": "string", "minLength": 1},
+        {"type": "number"},
+        {"type": "boolean"},
+        {"type": "array"},
+        {"type": "object"}
+      ]
+    },
+    "section": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {"$ref": "#/$defs/value"}
+    },
+    "result": {"enum": ["PASS", "FAIL", "NOT_RUN"]}
+  },
+  "properties": {
+    "record_id": {"$ref": "#/$defs/value"},
+    "package_version": {"$ref": "#/$defs/value"},
+    "extractor_sha": {
+      "description": "Full 40-char lowercase hex SHA, or NOT VERIFIED",
+      "anyOf": [{"const": "NOT VERIFIED"}, {"type": "string", "pattern": "^[0-9a-f]{40}$"}]
+    },
+    "checkout_clean": {"$ref": "#/$defs/value"},
+    "head_equals_sha": {"$ref": "#/$defs/value"},
+    "node": {"$ref": "#/$defs/section"},
+    "terminal": {"$ref": "#/$defs/section"},
+    "people": {"$ref": "#/$defs/section"},
+    "window": {"$ref": "#/$defs/section"},
+    "source_provenance": {"$ref": "#/$defs/section"},
+    "dataset": {"$ref": "#/$defs/section"},
+    "execution": {"$ref": "#/$defs/section"},
+    "cases": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["1", "2", "3", "4", "5", "6", "7"],
+      "patternProperties": {
+        "^[1-7]$": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["result", "evidence_fields", "notes"],
+          "properties": {
+            "result": {"$ref": "#/$defs/result"},
+            "evidence_fields": {"$ref": "#/$defs/value"},
+            "notes": {"type": "string"}
+          }
+        }
+      }
+    },
+    "overall_result": {"$ref": "#/$defs/result"},
+    "timestamps": {"$ref": "#/$defs/section"},
+    "not_verified": {"type": "array", "items": {"type": "string", "minLength": 1}}
+  }
+}

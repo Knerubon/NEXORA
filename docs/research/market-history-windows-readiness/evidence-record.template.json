@@ -1,0 +1,89 @@
+{
+  "record_id": "NOT VERIFIED",
+  "package_version": "NOT VERIFIED",
+  "extractor_sha": "NOT VERIFIED",
+  "checkout_clean": "NOT VERIFIED",
+  "head_equals_sha": "NOT VERIFIED",
+  "node": {
+    "hostname_class": "NOT VERIFIED",
+    "os_build": "NOT VERIFIED",
+    "filesystem_type": "NOT VERIFIED",
+    "volume_ref": "NOT VERIFIED",
+    "antivirus_indexer_state": "NOT VERIFIED",
+    "python_version": "NOT VERIFIED",
+    "uv_version": "NOT VERIFIED",
+    "metatrader5_version": "NOT VERIFIED",
+    "numpy_version": "NOT VERIFIED"
+  },
+  "terminal": {
+    "company": "NOT VERIFIED",
+    "name": "NOT VERIFIED",
+    "build": "NOT VERIFIED",
+    "server_name": "NOT VERIFIED",
+    "account_kind": "NOT VERIFIED"
+  },
+  "people": {
+    "operator": "NOT VERIFIED",
+    "second_person_verifier": "NOT VERIFIED",
+    "reviewer": "NOT VERIFIED"
+  },
+  "window": {
+    "symbol": "NOT VERIFIED",
+    "window_raw_msc": "NOT VERIFIED",
+    "window_utc_msc": "NOT VERIFIED",
+    "preregistration_ref": "NOT VERIFIED",
+    "preregistered_at_utc": "NOT VERIFIED",
+    "protected_ranges_ref": "NOT VERIFIED",
+    "protected_margin_ms": "NOT VERIFIED"
+  },
+  "source_provenance": {
+    "source_descriptor": "NOT VERIFIED",
+    "broker_clock_evidence_ref": "NOT VERIFIED",
+    "broker_clock_evidence_kind": "NOT VERIFIED",
+    "time_conversion_sha256": "NOT VERIFIED",
+    "clock_attestation_sha256": "NOT VERIFIED",
+    "dst_rule_evidence_ref": "NOT VERIFIED"
+  },
+  "dataset": {
+    "dataset_id": "NOT VERIFIED",
+    "content_sha256": "NOT VERIFIED",
+    "manifest_sha256": "NOT VERIFIED",
+    "anchor_ref": "NOT VERIFIED",
+    "development_status": "NOT VERIFIED"
+  },
+  "execution": {
+    "commands_run": "NOT VERIFIED",
+    "raw_output_refs": "NOT VERIFIED",
+    "exit_codes": "NOT VERIFIED"
+  },
+  "cases": {
+    "1": {"result": "NOT_RUN", "evidence_fields": "NOT VERIFIED", "notes": ""},
+    "2": {"result": "NOT_RUN", "evidence_fields": "NOT VERIFIED", "notes": ""},
+    "3": {"result": "NOT_RUN", "evidence_fields": "NOT VERIFIED", "notes": ""},
+    "4": {"result": "NOT_RUN", "evidence_fields": "NOT VERIFIED", "notes": ""},
+    "5": {"result": "NOT_RUN", "evidence_fields": "NOT VERIFIED", "notes": ""},
+    "6": {"result": "NOT_RUN", "evidence_fields": "NOT VERIFIED", "notes": ""},
+    "7": {"result": "NOT_RUN", "evidence_fields": "NOT VERIFIED", "notes": ""}
+  },
+  "overall_result": "NOT_RUN",
+  "timestamps": {
+    "started_at_utc": "NOT VERIFIED",
+    "finished_at_utc": "NOT VERIFIED",
+    "clock_source": "NOT VERIFIED"
+  },
+  "not_verified": [
+    "windows_ntfs_atomicity_and_hardlink_behaviour",
+    "reparse_point_and_junction_handling",
+    "antivirus_and_indexer_interaction",
+    "network_share_behaviour",
+    "power_loss_durability",
+    "terminal_history_determinism_between_fetches",
+    "broker_clock_rule_truth",
+    "dst_fold_truth_for_single_segment_conversions",
+    "account_is_read_only_or_demo",
+    "no_other_process_trades_on_account",
+    "tick_completeness",
+    "documented_tick_dtype_matches_terminal_build",
+    "independent_store_integrity"
+  ]
+}
