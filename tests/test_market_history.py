@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from nexora.market_history.clock import ClockAttestation
 from nexora.market_history.convert import TimeConversion, TimeSegment, normalize
 from nexora.market_history.extract import (
     ExtractionRequest,
@@ -35,6 +36,10 @@ NOW = datetime(2026, 1, 1, tzinfo=UTC)
 OFF = 10800
 
 
+def att(lo: int = 0, hi: int = 10**13) -> ClockAttestation:
+    return ClockAttestation("synthetic-test", "synthetic-test", lo, hi)
+
+
 def conv(offset: int = OFF, lo: int = 0, hi: int | None = None) -> TimeConversion:
     return TimeConversion((TimeSegment(lo, hi, offset, "operator_declared", "synthetic-test"),))
 
@@ -60,13 +65,18 @@ class FakeSource:
             ),
         )
 
-    def ticks(self, symbol: str, from_raw_msc: int, to_raw_msc: int) -> list[RawTick]:
+    def ticks(
+        self, symbol: str, from_raw_msc: int, to_raw_msc: int, *, max_ticks: int
+    ) -> list[RawTick]:
         self.calls += 1
         if self.fail > 0:
             self.fail -= 1
             raise TransientSourceError("busy")
         # deliberately over-returns one tick on each side to test window clipping
-        return [t for t in self._ticks if from_raw_msc - 1 <= t.time_msc <= to_raw_msc]
+        out = [t for t in self._ticks if from_raw_msc - 1 <= t.time_msc <= to_raw_msc]
+        if len(out) > max_ticks:
+            raise HistoryError("chunk_exceeds_max_ticks")
+        return out
 
 
 def mk(t: int, bid: str = "100.00", ask: str = "100.10") -> RawTick:
@@ -85,6 +95,8 @@ def run(tmp: Path, ticks: list[RawTick] = TICKS, **kw: Any) -> dict[str, Any]:
         QualityConfig(max_gap_ms=5000),
         tmp,
         retrieved_at=NOW,
+        clock_attestation=att(),
+        protected_utc_ranges=(),
         sleep=lambda _s: None,
         **kw,
     )
@@ -187,6 +199,8 @@ def test_retrieved_at_changes_manifest_hash_not_dataset_id(tmp_path: Path) -> No
         QualityConfig(5000),
         tmp_path / "b",
         retrieved_at=datetime(2026, 2, 2, tzinfo=UTC),
+        clock_attestation=att(),
+        protected_utc_ranges=(),
         sleep=lambda _s: None,
     )
     assert a["dataset_id"] == b["dataset_id"] and a["manifest_sha256"] != b["manifest_sha256"]
@@ -202,7 +216,7 @@ def test_naive_retrieved_at_rejected(tmp_path: Path) -> None:
     with pytest.raises(HistoryError, match="retrieved_at_must_be_tz_aware"):
         extract(
             FakeSource(TICKS), REQ, conv(), QualityConfig(5000), tmp_path,
-            retrieved_at=datetime(2026, 1, 1),
+            retrieved_at=datetime(2026, 1, 1), clock_attestation=att(), protected_utc_ranges=(),
         )  # fmt: skip
 
 
@@ -232,16 +246,20 @@ def test_resume_accepts_identical_existing_chunk(tmp_path: Path) -> None:
 
 def test_transient_errors_retried_then_recorded(tmp_path: Path) -> None:
     src = FakeSource(TICKS, fail_first=2)
-    m = extract(src, REQ, conv(), QualityConfig(5000), tmp_path, retrieved_at=NOW,
-                sleep=lambda _s: None)  # fmt: skip
+    m = extract(
+        src, REQ, conv(), QualityConfig(5000), tmp_path, retrieved_at=NOW,
+        clock_attestation=att(), protected_utc_ranges=(), sleep=lambda _s: None,
+    )  # fmt: skip
     assert m["chunks"][0]["attempts"] == 3
 
 
 def test_retries_exhausted_raises_and_writes_no_manifest(tmp_path: Path) -> None:
     src = FakeSource(TICKS, fail_first=99)
     with pytest.raises(TransientSourceError):
-        extract(src, REQ, conv(), QualityConfig(5000), tmp_path, retrieved_at=NOW,
-                sleep=lambda _s: None)  # fmt: skip
+        extract(
+            src, REQ, conv(), QualityConfig(5000), tmp_path, retrieved_at=NOW,
+            clock_attestation=att(), protected_utc_ranges=(), sleep=lambda _s: None,
+        )  # fmt: skip
     assert not (tmp_path / "manifest.json").exists()
 
 
@@ -396,7 +414,7 @@ def test_mt5_source_metadata_and_no_secrets() -> None:
     with pytest.raises(HistoryError, match="symbol_not_found"):
         src.instrument("NOPE")
     with pytest.raises(TransientSourceError):
-        src.ticks("SYN", 0, 1000)
+        src.ticks("SYN", 0, 1000, max_ticks=10)
 
 
 def test_mt5_source_initialize_failure() -> None:

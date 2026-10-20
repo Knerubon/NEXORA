@@ -39,18 +39,38 @@ are your choice, write them down). Interpret:
   evidence.
 Write `time_conversion.json`: `{"segments":[{"from_raw_msc":..,"to_raw_msc":..,"offset_seconds":..,
 "basis":"operator_declared","evidence_ref":"<report id / ticket>"}]}`. Segments are in RAW time and must
-cover the whole window; extraction refuses otherwise. Windows that contain a DST change are best split
-at the change and run as two datasets; a repeated raw hour shows up as `non_monotonic_count` and the
-dataset is then NOT usable until an operator-reviewed split is made.
+cover the whole window; extraction refuses otherwise. A segment boundary where the offset FALLS (DST fall-back) is refused: raw time repeats there and a
+raw-keyed mapping cannot represent it.
+
+### 3b. Clock attestation (mandatory, fail closed)
+A range query on raw time cannot separate the two passes of a repeated hour, and a provider that
+returns ticks in ascending order hides the repeat completely (nothing in the data shows it). So the
+tool does not try to detect it; it refuses to run without a recorded claim. Write
+`clock_attestation.json`:
+`{"claim": "<exact text from nexora.market_history.clock.CLAIM>", "evidence_ref": "<report/ticket>",
+"attested_by": "<name>", "window_from_raw_msc": A, "window_to_raw_msc": B,
+"ambiguous_raw_ranges": [[lo, hi], ...]}`.
+- The attested window must cover the extraction window; `ambiguous_raw_ranges` lists known repeated
+  hours (from the broker's DST rules) and the extraction window must not touch them: choose windows
+  that stop before and start after the repeated hour.
+- The attestation is stored in the manifest and in the dataset identity; `verify_dataset` re-checks it
+  against the conversion. It is **not proof**: a false attestation cannot be detected from the data.
+  The evidence must show the broker's clock rule for the window (not just "I looked at the chart").
 
 ## 4. Run
 ```powershell
 uv run --no-sync python scripts/extract_market_history.py `
   --symbol <SYMBOL AS SHOWN IN MARKET WATCH> --from-raw-msc <A> --to-raw-msc <B> `
   --chunk-ms 3600000 --max-chunk-ticks 1000000 --max-gap-ms <Quant value, unset = do not run> `
-  --time-conversion time_conversion.json --out D:\nexora-data\<dataset-name>
+  --time-conversion time_conversion.json --clock-attestation clock_attestation.json `
+  (--protected-utc-ranges ranges.json | --no-protected-ranges) --protected-margin-ms <ms> `
+  --out D:\nexora-data\<dataset-name>
 ```
-- Choose `--chunk-ms` so one chunk is far below `--max-chunk-ticks`; a chunk over the limit is refused.
+- Every input above is validated BEFORE the tool attaches to the terminal; a bad range, attestation or
+  conversion exits without touching MT5.
+- Choose `--chunk-ms` so one chunk is far below `--max-chunk-ticks`. A chunk over the limit is refused
+  before tick objects are built, but the terminal's own array for the window is already allocated
+  (about 8x smaller than the Python objects) and cannot be bounded by this tool.
 - Output lives outside Git. Do not commit raw chunks (size, and broker data terms).
 - Exit code 0 only if verification is clean **and** there are no usability blockers.
 - The JSON printed at the end contains `manifest_sha256`. **Copy it into the PR/ticket now** (outside
@@ -64,7 +84,10 @@ source history changed under you or the file was tampered with).
 
 ## 6. Holdout custody
 Reading a window is itself an access. If a split plan exists, pass its locked ranges as
-`--protected-utc-ranges ranges.json` (UTC ms, `[start, end)`); overlap is refused. No spread/price
+`--protected-utc-ranges ranges.json` (UTC ms, `[start, end)`); overlap is refused. Malformed ranges
+(inverted, empty, non-integer, wrong shape) are refused, never skipped, and one of
+`--protected-utc-ranges` / `--no-protected-ranges` is required. Because protection relies on the
+declared offset, set `--protected-margin-ms` to at least the offset uncertainty. No spread/price
 statistics are produced by the quality report. Do not open chunk files for the locked segment.
 
 ## 7. Independent verification
@@ -73,8 +96,8 @@ A second person on a clean checkout of the same SHA runs
 `usability_blockers(<folder>, expected_manifest_sha256=<anchor>)`; both must be empty.
 
 ## 8. Evidence to report back to the PR (no raw data)
-SHA, node/terminal build, operator, window and its pre-registration reference, `dataset_id`,
-`manifest_sha256`, tick count, gap count (threshold used), hard defects (must be none), offset
+SHA, node/terminal build, operator, window and its pre-registration reference, `dataset_id` (content identity), `content_sha256`,
+`manifest_sha256`, the clock attestation reference, tick count, gap count (threshold used), hard defects (must be none), offset
 investigation report id, and any deviation. Missing commission/swap history stays `unavailable`.
 
 ## STOP conditions

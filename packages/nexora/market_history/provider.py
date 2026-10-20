@@ -27,8 +27,13 @@ class HistoricalTickSource(Protocol):
     def descriptor(self) -> SourceDescriptor: ...
     def capability_profile(self) -> CapabilityProfile: ...
     def instrument(self, symbol: str) -> InstrumentSpec: ...
-    def ticks(self, symbol: str, from_raw_msc: int, to_raw_msc: int) -> Sequence[RawTick]:
-        """Ticks in the half-open RAW-clock window [from_raw_msc, to_raw_msc)."""
+    def ticks(
+        self, symbol: str, from_raw_msc: int, to_raw_msc: int, *, max_ticks: int
+    ) -> Sequence[RawTick]:
+        """Ticks in the half-open RAW-clock window [from_raw_msc, to_raw_msc).
+
+        Must raise HistoryError("chunk_exceeds_max_ticks") BEFORE building more than `max_ticks`
+        tick objects, so the memory bound holds before materialisation."""
         ...
 
 
@@ -144,7 +149,9 @@ class Mt5ReadOnlyHistorySource:
         fields.append(MetaField("commission", "unavailable"))
         return InstrumentSpec(symbol, tuple(fields))
 
-    def ticks(self, symbol: str, from_raw_msc: int, to_raw_msc: int) -> Sequence[RawTick]:
+    def ticks(
+        self, symbol: str, from_raw_msc: int, to_raw_msc: int, *, max_ticks: int
+    ) -> Sequence[RawTick]:
         # The MT5 API treats datetimes as UTC epoch seconds; here the integers are RAW broker-clock
         # values, so they are passed through unchanged (no offset is applied at retrieval).
         start = datetime.fromtimestamp(from_raw_msc // 1000, tz=UTC)
@@ -152,6 +159,11 @@ class Mt5ReadOnlyHistorySource:
         rows = self._mt5.copy_ticks_range(symbol, start, end, self._mt5.COPY_TICKS_ALL)
         if rows is None:
             raise TransientSourceError(f"copy_ticks_failed:{self._mt5.last_error()}")
+        # Refuse BEFORE converting to Python objects (about 8x the size of the terminal's array).
+        # The terminal's own array for this window is already allocated and cannot be bounded here:
+        # choose chunk_ms so that it stays small.
+        if len(rows) > max_ticks:
+            raise HistoryError("chunk_exceeds_max_ticks", f"{len(rows)} > {max_ticks}")
         out: list[RawTick] = []
         for r in rows:
             names = getattr(getattr(r, "dtype", None), "names", None) or ()
