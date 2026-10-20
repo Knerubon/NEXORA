@@ -42,7 +42,6 @@ ALLOWED_MT5_CALLS = frozenset(
         "version",
         "terminal_info",
         "symbol_info",
-        "symbol_select",
         "copy_ticks_range",
         "COPY_TICKS_ALL",
     }
@@ -90,7 +89,14 @@ class ReadOnlyMt5:
     def __getattr__(self, name: str) -> Any:
         if name not in ALLOWED_MT5_CALLS:
             raise HistoryError("mt5_call_not_allowlisted", name)
-        return getattr(_MODULES[self], name)
+        target = getattr(_MODULES[self], name)
+        if name == "initialize":
+            # Attach to the already-running terminal only: no path/login/password/server.
+            def initialize_no_credentials() -> Any:
+                return target()
+
+            return initialize_no_credentials
+        return target
 
     def __setattr__(self, name: str, value: Any) -> None:
         raise HistoryError("read_only_gate_is_immutable")

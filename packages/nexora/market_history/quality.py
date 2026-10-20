@@ -35,7 +35,7 @@ def _day(utc_msc: int) -> str:
 
 def quality_report(ticks: Iterable[NormalizedTick], config: QualityConfig) -> dict[str, Any]:
     total = non_monotonic = same_ts_diff_quote = exact_dups = 0
-    crossed = nonpositive = zero_spread = 0
+    crossed = nonpositive = zero_spread = nonfinite = 0
     first: int | None = None
     last: int | None = None
     prev: NormalizedTick | None = None
@@ -48,6 +48,9 @@ def quality_report(ticks: Iterable[NormalizedTick], config: QualityConfig) -> di
         last = t.utc_msc if last is None else max(last, t.utc_msc)
         d = _day(t.utc_msc)
         per_day[d] = per_day.get(d, 0) + 1
+        if not (t.bid.is_finite() and t.ask.is_finite()):
+            nonfinite += 1  # counted; never compared (NaN ordering raises)
+            continue
         if t.bid <= 0 or t.ask <= 0:
             nonpositive += 1
         if t.ask < t.bid:
@@ -77,6 +80,7 @@ def quality_report(ticks: Iterable[NormalizedTick], config: QualityConfig) -> di
         "exact_duplicate_count": exact_dups,
         "same_timestamp_different_quote_count": same_ts_diff_quote,
         "crossed_quote_count": crossed,
+        "nonfinite_quote_count": nonfinite,
         "nonpositive_price_count": nonpositive,
         "zero_spread_count": zero_spread,
         "gap_count": gap_count,
@@ -91,7 +95,12 @@ def quality_report(ticks: Iterable[NormalizedTick], config: QualityConfig) -> di
 def hard_defects(report: dict[str, Any]) -> list[str]:
     """Defects that make a dataset unusable as-is; gaps are reported, not judged, here."""
     out = []
-    for key in ("non_monotonic_count", "crossed_quote_count", "nonpositive_price_count"):
+    for key in (
+        "non_monotonic_count",
+        "crossed_quote_count",
+        "nonpositive_price_count",
+        "nonfinite_quote_count",
+    ):
         if report[key]:
             out.append(key)
     return out

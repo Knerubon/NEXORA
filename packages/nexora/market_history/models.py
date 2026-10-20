@@ -25,12 +25,50 @@ def sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+_MAX_DIGITS = 64
+_MAX_EXPONENT = 64
+
+
+def _parts(value: Decimal) -> tuple[int, int, int]:
+    """(sign, integer digits, exponent) read from the Decimal's own tuple: exact, and independent
+    of the ambient decimal context (unlike normalize(), quantize() and arithmetic)."""
+    sign, digits, exp = value.as_tuple()
+    if not isinstance(exp, int) or len(digits) > _MAX_DIGITS or abs(exp) > _MAX_EXPONENT:
+        raise HistoryError("decimal_out_of_range")
+    return sign, int("".join(map(str, digits))), exp
+
+
 def decimal_str(value: Decimal) -> str:
-    """Stable text for a Decimal: no exponent, no trailing zeros, '0' for zero."""
+    """Stable text for a FINITE Decimal: no exponent, no trailing zeros, '0' for zero.
+
+    Pure integer/string work, so the result never depends on the caller's decimal context."""
     if not value.is_finite():
         raise HistoryError("non_finite_decimal")
-    text = format(value.normalize(), "f")
-    return "0" if text in ("-0", "") else text
+    sign, n, exp = _parts(value)
+    if n == 0:
+        return "0"
+    while n % 10 == 0:
+        n //= 10
+        exp += 1
+    text = str(n)
+    if exp >= 0:
+        text += "0" * exp
+    elif len(text) <= -exp:
+        text = "0." + "0" * (-exp - len(text)) + text
+    else:
+        text = text[:exp] + "." + text[exp:]
+    return ("-" if sign else "") + text
+
+
+def exact_sub(a: Decimal, b: Decimal) -> Decimal:
+    """a - b without rounding and without consulting the ambient context. Non-finite -> NaN."""
+    if not (a.is_finite() and b.is_finite()):
+        return Decimal("NaN")
+    sa, na, ea = _parts(a)
+    sb, nb, eb = _parts(b)
+    exp = min(ea, eb)
+    diff = (-na if sa else na) * 10 ** (ea - exp) - (-nb if sb else nb) * 10 ** (eb - exp)
+    return Decimal((1 if diff < 0 else 0, tuple(int(c) for c in str(abs(diff))), exp))
 
 
 @dataclass(frozen=True, slots=True)

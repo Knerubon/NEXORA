@@ -260,6 +260,7 @@ def _tamper(tmp: Path, fn: Any) -> list[str]:
 def test_verify_detects_chunk_edit(tmp_path: Path) -> None:
     def edit(d: Path) -> None:
         p = d / "chunk-1000-3000.jsonl"
+        p.chmod(0o644)  # chunks are created read-only
         p.write_bytes(p.read_bytes().replace(b"100.1", b"100.2", 1))
 
     assert "chunk_hash_mismatch:chunk-1000-3000.jsonl" in _tamper(tmp_path, edit)
@@ -281,6 +282,7 @@ def test_verify_detects_manifest_edit(tmp_path: Path) -> None:
     def edit(d: Path) -> None:
         m = json.loads((d / "manifest.json").read_text())
         m["symbol"] = "OTHER"
+        (d / "manifest.json").chmod(0o644)
         (d / "manifest.json").write_text(json.dumps(m))
 
     probs = _tamper(tmp_path, edit)

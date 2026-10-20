@@ -1,6 +1,7 @@
 # Market history extraction (EDGE-VALIDATION-1, Agent B)
 
-Status: tooling complete; **real extraction BLOCKED** (no MT5 host in cloud sessions).
+Status: tooling complete (data-integrity fix wave applied, see `RISK-REVIEW.md`; operator steps in
+`WINDOWS-MT5-RUNBOOK.md`); **real extraction BLOCKED** (no MT5 host in cloud sessions).
 Package `nexora.market_history`, CLI `scripts/extract_market_history.py` (operator-started,
 WINDOWS-INTEGRATION, read-only, no credentials, no orders).
 
@@ -9,9 +10,9 @@ WINDOWS-INTEGRATION, read-only, no credentials, no orders).
   operator-declared segments with a mandatory `evidence_ref`. No default offset, no auto-detection,
   no application outside a segment's raw-time interval; uncovered windows are refused.
 - MT5 access passes a call allowlist (`initialize/shutdown/last_error/version/terminal_info/
-  symbol_info/symbol_select/copy_ticks_range`); trade calls are refused and the gate exposes no
+  symbol_info/copy_ticks_range`; `initialize()` takes no arguments); trade calls are refused and the gate exposes no
   raw-module attribute. Terminal `path` and account fields are not captured.
-- Chunks are write-once; the manifest is written last, write-once, with a self hash and
+- Chunks are write-once, created atomically (temp + fsync + no-overwrite link) and read-only; the manifest is written last, write-once, with a self hash and
   `dataset_id`; `verify_dataset` re-derives hashes, counts, contiguity and the quality report
   from files alone.
 - Commission is recorded `unavailable` (not exposed by `symbol_info`), never zero.
