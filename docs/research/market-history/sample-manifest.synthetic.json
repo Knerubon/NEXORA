@@ -1,0 +1,117 @@
+{
+  "LABEL": "SYNTHETIC_FIXTURE_NOT_REAL_MARKET_DATA",
+  "capability_profile": {
+    "fields": [
+      {
+        "name": "name",
+        "state": "known",
+        "value": "FakeTerminal"
+      }
+    ]
+  },
+  "chunk_ms": 2000,
+  "chunks": [
+    {
+      "attempts": 1,
+      "empty": false,
+      "file": "chunk-1000-3000.jsonl",
+      "from_raw_msc": 1000,
+      "out_of_window_dropped": 1,
+      "sha256": "95ebd16e9355ba0ed529f3dce813613a2201b1cb882dbfdcd3ed18c5e3975f53",
+      "tick_count": 4,
+      "to_raw_msc": 3000
+    },
+    {
+      "attempts": 1,
+      "empty": false,
+      "file": "chunk-3000-5000.jsonl",
+      "from_raw_msc": 3000,
+      "out_of_window_dropped": 1,
+      "sha256": "8cb8791f75c78eba850be8405379d2de858d24e036330cef27aabe6014d5556f",
+      "tick_count": 4,
+      "to_raw_msc": 5000
+    },
+    {
+      "attempts": 1,
+      "empty": false,
+      "file": "chunk-5000-6000.jsonl",
+      "from_raw_msc": 5000,
+      "out_of_window_dropped": 0,
+      "sha256": "10c582edb55f4b7793df4238d95043ce6a5980d365aac5152d06ecf567b2d20e",
+      "tick_count": 2,
+      "to_raw_msc": 6000
+    }
+  ],
+  "dataset_id": "44b829199270e25be03025268d79b65e526134006f65047c43071ec20d9ddb07",
+  "immutable": true,
+  "instrument": {
+    "fields": [
+      {
+        "name": "commission",
+        "state": "unavailable",
+        "value": null
+      },
+      {
+        "name": "trade_tick_size",
+        "state": "known",
+        "value": "0.01"
+      }
+    ],
+    "symbol": "SYN"
+  },
+  "manifest_sha256": "395577162a6cbea050b06f1b8a7d3bba86c26a10109183bf69fbb643eebdba7c",
+  "provenance": {
+    "extractor": "nexora.market-history-extractor/1",
+    "orders_submitted": 0,
+    "read_only_source_allowlist": true,
+    "retrieval_note": "historical_retrieval: retrieved_at is when this extraction ran, not when ticks were originally received; it must never be used as point-in-time knowledge time",
+    "retrieved_at": "2026-01-01T00:00:00+00:00"
+  },
+  "quality": {
+    "config": {
+      "max_gap_ms": 5000
+    },
+    "crossed_quote_count": 0,
+    "distribution_statistics_included": false,
+    "exact_duplicate_count": 0,
+    "first_utc_msc": -10799000,
+    "gap_count": 0,
+    "gaps_truncated": false,
+    "gaps_utc_msc": [],
+    "last_utc_msc": -10794500,
+    "non_monotonic_count": 0,
+    "nonpositive_price_count": 0,
+    "note": "counts and coverage only; no price/spread distributions (holdout custody)",
+    "same_timestamp_different_quote_count": 0,
+    "tick_count": 10,
+    "ticks_per_utc_day": {
+      "1969-12-31": 10
+    },
+    "version": "nexora.tick-quality/1",
+    "zero_spread_count": 0
+  },
+  "quality_hard_defects": [],
+  "schema": "nexora.market-history/1",
+  "source": {
+    "kind": "fixture",
+    "notes": "synthetic_fixture",
+    "version": "1"
+  },
+  "symbol": "SYN",
+  "time_conversion": {
+    "segments": [
+      {
+        "basis": "operator_declared",
+        "evidence_ref": "synthetic-test",
+        "from_raw_msc": 0,
+        "offset_seconds": 10800,
+        "to_raw_msc": null
+      }
+    ],
+    "version": "nexora.time-conversion/1"
+  },
+  "window_raw_msc": [
+    1000,
+    6000
+  ]
+}
