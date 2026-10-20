@@ -70,6 +70,8 @@ uv run --no-sync python scripts/extract_market_history.py `
   --chunk-ms 3600000 --max-chunk-ticks 1000000 --max-gap-ms <Quant value, unset = do not run> `
   --time-conversion time_conversion.json --clock-attestation clock_attestation.json `
   (--protected-utc-ranges ranges.json | --no-protected-ranges) --protected-margin-ms <ms> `
+  --operator "<your declared identity>" `
+  --candidate-out D:\nexora-evidence-staging\<dataset-name>.candidate.json `
   --out D:\nexora-data\<dataset-name>
 ```
 - Every input above is validated BEFORE the tool attaches to the terminal; a bad range, attestation or
@@ -79,15 +81,29 @@ uv run --no-sync python scripts/extract_market_history.py `
   (about 8x smaller than the Python objects) and cannot be bounded by this tool.
 - Output lives outside Git. Do not commit raw chunks (size, and broker data terms).
 - Exit code 0 only if verification is clean **and** there are no usability blockers.
-- Only ONE extraction may own an output folder: a `.writer.lock` file (pid/host/token, `O_EXCL`) is
-  taken first. A second run fails with `writer_lock_held`. A lock is removed automatically only if
-  its owner is provably dead on the same host; otherwise investigate and remove it yourself.
-- `--out` must be a real directory (a symlink is refused).
-- Every dataset is born **UNTRUSTED** (`development_status`). To make it TRUSTED, add
-  `--anchor-out <file outside --out> --anchor-recorded-by <name> --anchor-storage-ref "<where it is kept>"`
-  and then **store that anchor file independently** (PR/ticket comment, another host). The anchor
-  carries `manifest_sha256`, `dataset_id`, `content_sha256`, `symbol`. A copy left next to the data on
-  the same disk is not independent.
+- Only ONE extraction may own an output folder. Ownership is an OS advisory lock held on an open
+  descriptor of `.writer.lock` (`msvcrt.locking` on Windows; `flock` on Linux). The OS drops it when the
+  process exits or crashes, so a crashed run never needs manual unlocking and **nothing is ever
+  reaped or renamed**. A second run fails with `writer_lock_held`; so does any lock file whose owner
+  cannot be verified (garbage, partial, foreign-host or V3-format record): then check by hand that no
+  extraction is running on that folder, and remove `.writer.lock` yourself. Do not run V3 and V4
+  tooling on the same folder.
+- `--out` is opened once with no-follow semantics; a symlink (or junction) at the folder **or any
+  parent** is refused. Give the real path.
+- The tool probes the output filesystem under the lock (hard links without overwrite, no-follow open,
+  link counts, advisory-lock exclusion, directory fsync, local vs network class) and records the result
+  as `filesystem_capabilities` in the manifest. Extraction on a filesystem without hard links stops with
+  `filesystem_cannot_hardlink` (FAT/exFAT/some shares).
+  **Windows/NTFS is currently UNVERIFIED**: this tool records the probe, but a dataset extracted on
+  Windows (or on a network share) is `UNTRUSTED` for evidence purposes until a recorded
+  WINDOWS-INTEGRATION run proves the guarantees on that configuration (Rin/Architect decision; see
+  `THREAT-MODEL-V4.md`). It remains fully usable for development.
+- Every dataset is born **UNTRUSTED** (`development_status`) and the extractor can never make it
+  anything else. `--operator` records who ran the extraction (a dataset without one can never be
+  trusted). `--candidate-out` (outside `--out`) writes an anchor CANDIDATE: a record of the dataset
+  hashes plus the extractor identity and a nonce. A candidate grants nothing. Hand the candidate file
+  and the dataset to an authorized custodian (section 7). The old `--anchor-out` V3 anchor still works
+  but is not custody evidence: it can never produce `TRUSTED`.
 
 ## 5. If the run is interrupted
 Re-run the identical command. Final files are only ever complete (atomic create); leftover
@@ -103,16 +119,43 @@ Reading a window is itself an access. If a split plan exists, pass its locked ra
 declared offset, set `--protected-margin-ms` to at least the offset uncertainty. No spread/price
 statistics are produced by the quality report. Do not open chunk files for the locked segment.
 
-## 7. Independent verification
-A second person on a clean checkout of the same SHA runs
-`uv run --no-sync python scripts/verify_market_history.py --dataset <folder> --anchor <anchor file
-fetched from the independent store> --require-trusted` (exit 0 only if `TRUSTED`). `TRUSTED` needs: a
-clean verification, no hard defects, and an anchor whose manifest hash, `dataset_id`, `content_sha256`
-and symbol all match. Without an anchor the result is `UNTRUSTED` (development use only).
+## 7. Custody: independent approval, then verification
+**Who:** an authorized custodian, a different identity from the operator and from the candidate creator,
+on a machine they control, from a clean checkout of the same SHA. **Where the approval lives:** an
+append-only evidence store outside the dataset folder (`EvidenceStore`; the reference
+`LocalAppendOnlyStore` is for tests/single-host use; production needs a store with real immutability
+such as object lock or a ledger, which you must provide: no provider is hard-coded).
+```powershell
+# custodian registry: JSON allowlist kept OUTSIDE the dataset, maintained by whoever owns custody
+#   {"schema":"nexora.market-history-custodians/1","custodians":[{"id":"carol","aliases":["carol@corp"]}]}
+uv run --no-sync python scripts/custody_market_history.py approve --dataset <folder> `
+  --candidate <candidate.json> --store <evidence-store-dir> --registry <registry.json> `
+  --custodian carol --evidence-ref "<ticket / PR comment where the decision is recorded>"
+uv run --no-sync python scripts/custody_market_history.py head --store <evidence-store-dir>
+```
+`approve` re-verifies the dataset, refuses it when it has blockers, hard defects, no operator, a
+non-custodian approver, or an approver that is the operator or candidate creator (compared after
+Unicode NFKC + case folding, including registry aliases), and otherwise appends a hash-chained entry.
+Record the printed `head` (`SEQ:SHA256`) in a place the verifier trusts independently of the store.
+`revoke` withdraws trust (an authorized custodian; any later revoke entry fails closed).
+
+A second person verifies:
+`uv run --no-sync python scripts/verify_market_history.py --dataset <folder> --store <dir>
+--registry <registry.json> --store-head <SEQ:SHA256> --require-trusted` (exit 0 only if `TRUSTED`).
+`TRUSTED` needs ALL of: clean verification; no hard defects; schema `/4`; a recorded
+`filesystem_capabilities` that proves a supported configuration (linux, local filesystem, every probe
+true) and a verifier on a supported platform; a recorded operator; a verifying approval chain; an
+approval bound to this exact dataset id, content hash, manifest hash, symbol and window; an approver
+in the registry (validity window respected) independent of operator and creator; sane timestamps; no
+later revocation. Without `--store-head` a rollback of the store tail (including a revocation) is not
+detectable: always pin it.
+Process controls this code cannot prove: that a declared identity is truthful, that the registry is
+maintained by the right people, that the store really is append-only, and that the head pin comes from
+an independent channel.
 
 ## 8. Evidence to report back to the PR (no raw data)
 SHA, node/terminal build, operator, window and its pre-registration reference, `dataset_id` (content identity), `content_sha256`,
-`manifest_sha256`, the clock attestation reference, tick count, gap count (threshold used), hard defects (must be none), offset
+`manifest_sha256`, the operator identity, the clock attestation reference, the `filesystem_capabilities` record, the candidate hash, the custody approval `seq`/`entry_sha256`/store head,  tick count, gap count (threshold used), hard defects (must be none), offset
 investigation report id, and any deviation. Missing commission/swap history stays `unavailable`.
 
 ## STOP conditions

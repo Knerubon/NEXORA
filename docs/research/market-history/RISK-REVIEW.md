@@ -33,3 +33,24 @@ Dukascopy: retrieval stays **BLOCKED** (PR #90): lawful access for automated ret
 | F5 symlinks | `out_dir_is_symlink`, `out_dir_not_a_directory`, dangling links at chunk/manifest names -> `HistoryError` | symlinked parent directories above `--out` are not inspected |
 | F6 stress counts | injected defects built non-interacting; dup / same-ts / non-monotonic / crossed / gap / non-positive asserted `==` for 3 seeds | gap threshold remains Quant MD-6 |
 | Fuzz | re-sealed structure-aware mutants (1500): never `verify_internal_error`, never TRUSTED against an anchor; stale-id edits to identity fields always detected. Found and fixed: unvalidated window order/coverage, non-int segment values, unvalidated `quality`, non-mapping anchors | a competent forger who recomputes every self-hash passes internal checks by construction: the anchor is the control (asserted in the test) |
+
+
+## V4 corrective wave (PR #93 follow-up; self-authored by the same lineage as earlier reviewers; independent review pending)
+Full threat model, platform matrix and residual risks: `THREAT-MODEL-V4.md`.
+
+| Area | V3 weakness (reproduced on e74ad03) | V4 change | Residual risk |
+|---|---|---|---|
+| Lock: stale read, then live owner's NEW lock | reaper read "dead", live owner replaced the file, reaper's rename-by-name removed the live lock (R1); A and B then both owned the folder (R2) | no reaping at all: ownership = OS advisory lock on a held descriptor; unlink only while holding the lock and only the inode held; waiter re-checks the inode after locking | network/FUSE filesystems and Windows are not proven; V3 and V4 writers must not share a folder |
+| Lock: empty file (crash between create and write) | wedged forever (R3) | empty = free (the OS proves no holder); partial/garbage/foreign-host/V3 record = fail closed (`writer_lock_held`, operator acts) | an operator must clear a V3-format or corrupt record |
+| Lock: PID reuse / foreign host | pid liveness heuristic | pid/host are informational only; foreign-host record fails closed | none known on POSIX |
+| Filesystem: symlinked parents | only the final component was checked | every ancestor opened `O_NOFOLLOW` from `/`; later I/O via `dir_fd`; verify pins the dataset directory the same way | no `dir_fd`/`O_NOFOLLOW` on Windows: lstat + reparse-point checks with a check-then-use window, so TRUSTED is blocked |
+| Filesystem: hard links / immutability | not checked | chunks/manifest/store entries must have link count 1; read-only mode; write-once via no-overwrite link | file mode is advisory (root/admin; copies lose bits): the manifest hash + custody approval are the control |
+| Filesystem capabilities | assumed | probe (dir_fd, no-follow, hard link no-overwrite, link count, lock exclusion, dir fsync, fs class) recorded in the manifest; `dataset_status` re-derives the verdict and refuses TRUSTED when unproven; verifier platform also checked | the probe is an extractor claim; a hostile extractor can lie (custody approval is the control) |
+| Anchor custody | the extractor could store its own anchor; a matching hash granted TRUSTED | candidate (extractor) -> approval by an independent authorized custodian in an append-only hash-chained store; registry from the verifier; self-approval refused; binding to dataset/content/manifest/symbol/window; revocation; head pin | authenticity of declared identities, registry upkeep, store immutability and head-pin custody are process controls; no signatures |
+| V3 compatibility | n/a | V3 datasets verify (integrity) but are never TRUSTED; V3 anchors never grant trust; schema `/4` | re-extract to migrate |
+
+Test changes to existing suites (reviewed for meaning, not weakened): the V3 tests that encoded the
+reaper and "matching anchor => TRUSTED" were rewritten to the V4 semantics (V3-style/legacy locks fail
+closed; V4 records of dead owners are free by OS state; hash-only anchor => UNTRUSTED); the two
+`os.link` fault-injection tests now ignore the filesystem probe's own links; the sample manifest was
+regenerated.
