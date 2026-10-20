@@ -7,4 +7,4 @@ broker timestamps are always kept; UTC is derived only through an explicit, oper
 `TimeConversion` and is never auto-detected or applied globally.
 """
 
-SCHEMA_VERSION = "nexora.market-history/1"
+SCHEMA_VERSION = "nexora.market-history/2"

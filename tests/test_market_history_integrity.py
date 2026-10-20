@@ -38,7 +38,7 @@ from nexora.market_history.models import (
 from nexora.market_history.provider import ALLOWED_MT5_CALLS, ReadOnlyMt5
 from nexora.market_history.quality import QualityConfig
 
-from tests.test_market_history import FakeSource, conv, mk
+from tests.test_market_history import FakeSource, att, conv, mk
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
 MODES = [
@@ -56,7 +56,9 @@ MODES = [
 def run(out: Path, source: Any, req: ExtractionRequest, **kw: Any) -> dict[str, Any]:
     return extract(
         source, req, kw.pop("conversion", conv()), QualityConfig(kw.pop("gap", 5000)), out,
-        retrieved_at=NOW, sleep=lambda _s: None, **kw,
+        retrieved_at=NOW, sleep=lambda _s: None,
+        clock_attestation=kw.pop("clock_attestation", att()),
+        protected_utc_ranges=kw.pop("protected_utc_ranges", ()), **kw,
     )  # fmt: skip
 
 
@@ -165,7 +167,9 @@ class GenSource:
     def instrument(self, symbol: str) -> InstrumentSpec:
         return InstrumentSpec(symbol, ())
 
-    def ticks(self, symbol: str, a: int, b: int) -> Sequence[RawTick]:
+    def ticks(self, symbol: str, a: int, b: int, *, max_ticks: int) -> Sequence[RawTick]:
+        if b - a > max_ticks:  # one tick per ms: refuse BEFORE building anything
+            raise HistoryError("chunk_exceeds_max_ticks")
         return [
             RawTick(t, Decimal(2000000 + t % 977).scaleb(-3, decimal.Context(prec=30)),
                     Decimal(2000100 + t % 977).scaleb(-3, decimal.Context(prec=30)))
@@ -217,7 +221,10 @@ def test_quality_independent_of_chunking_and_runs(tmp_path: Path) -> None:
     b = run(tmp_path / "b", src, ExtractionRequest("SYN", 0, 30_000, 7000), gap=10_000)
     c = run(tmp_path / "c", src, ExtractionRequest("SYN", 0, 30_000, 2000), gap=10_000)
     assert a["quality"] == b["quality"] == c["quality"]
-    assert a["dataset_id"] == c["dataset_id"] != b["dataset_id"]
+    # dataset_id is CONTENT identity: chunk layout does not change it, the manifest hash does
+    assert a["dataset_id"] == b["dataset_id"] == c["dataset_id"]
+    assert a["content_sha256"] == b["content_sha256"]
+    assert a["manifest_sha256"] != b["manifest_sha256"]
 
 
 def test_stress_injected_defects_counted_exactly(tmp_path: Path) -> None:
@@ -270,7 +277,7 @@ CRASH_SCRIPT = textwrap.dedent(
     from datetime import UTC, datetime
     from pathlib import Path
     sys.path.insert(0, sys.argv[1]); sys.path.insert(0, sys.argv[2])
-    from tests.test_market_history import FakeSource, TICKS, conv
+    from tests.test_market_history import FakeSource, TICKS, conv, att
     from nexora.market_history import extract as ex
     from nexora.market_history.quality import QualityConfig
     mode, out = sys.argv[3], Path(sys.argv[4])
@@ -286,14 +293,15 @@ CRASH_SCRIPT = textwrap.dedent(
     src = FakeSource(TICKS)
     if mode == "mid_fetch":
         real_ticks = src.ticks
-        def ticks(sym, a, b):
+        def ticks(sym, a, b, **kw):
             calls["n"] += 1
             if calls["n"] == 3:
                 os._exit(9)
-            return real_ticks(sym, a, b)
+            return real_ticks(sym, a, b, **kw)
         src.ticks = ticks
     ex.extract(src, ex.ExtractionRequest("SYN", 1000, 6000, 2000), conv(), QualityConfig(5000), out,
-               retrieved_at=datetime(2026, 1, 1, tzinfo=UTC), sleep=lambda s: None)
+               retrieved_at=datetime(2026, 1, 1, tzinfo=UTC), sleep=lambda s: None,
+               clock_attestation=att(), protected_utc_ranges=())
     """
 )
 
@@ -361,8 +369,12 @@ def test_external_anchor_detects_self_consistent_forgery(tmp_path: Path) -> None
     mm = json.loads(mp.read_text())
     mm.pop("manifest_sha256")
     mm["chunks"][0]["sha256"] = sha256_hex(p.read_bytes())
-    body = {k: v for k, v in mm.items() if k not in ("dataset_id", "immutable", "provenance")}
-    mm["dataset_id"] = sha256_hex(canonical_json(body))
+    from nexora.market_history.extract import _identity
+
+    mm["content_sha256"] = sha256_hex(
+        b"".join((tmp_path / c["file"]).read_bytes() for c in mm["chunks"])
+    )
+    mm["dataset_id"] = sha256_hex(canonical_json(_identity(mm)))
     mm["manifest_sha256"] = sha256_hex(canonical_json(mm))
     mp.chmod(0o644)
     mp.write_text(json.dumps(mm))
@@ -372,7 +384,7 @@ def test_external_anchor_detects_self_consistent_forgery(tmp_path: Path) -> None
 
 def test_provenance_fields_present(tmp_path: Path) -> None:
     m = run(tmp_path, FakeSource([mk(1000)]), ExtractionRequest("SYN", 1000, 2000, 1000))
-    assert m["provenance"]["orders_submitted"] == 0 and m["provenance"]["extractor"].endswith("/2")
+    assert m["provenance"]["orders_submitted"] == 0 and m["provenance"]["extractor"].endswith("/3")
     assert (
         m["max_chunk_ticks"] == 1_000_000
         and "not when ticks were" in m["provenance"]["retrieval_note"]

@@ -12,7 +12,7 @@ WINDOWS-INTEGRATION, read-only, no credentials, no orders).
 - MT5 access passes a call allowlist (`initialize/shutdown/last_error/version/terminal_info/
   symbol_info/copy_ticks_range`; `initialize()` takes no arguments); trade calls are refused and the gate exposes no
   raw-module attribute. Terminal `path` and account fields are not captured.
-- Chunks are write-once, created atomically (temp + fsync + no-overwrite link) and read-only; the manifest is written last, write-once, with a self hash and
+- `dataset_id` is a content identity (retries/layout excluded). Extraction needs a recorded clock attestation and an explicit protected-range declaration (both validated before any provider access). Chunks are write-once, created atomically (temp + fsync + no-overwrite link) and read-only; the manifest is written last, write-once, with a self hash and
   `dataset_id`; `verify_dataset` re-derives hashes, counts, contiguity and the quality report
   from files alone.
 - Commission is recorded `unavailable` (not exposed by `symbol_info`), never zero.

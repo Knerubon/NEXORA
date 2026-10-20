@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import time
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
@@ -19,7 +20,13 @@ from pathlib import Path
 from typing import Any
 
 from nexora.market_history import SCHEMA_VERSION
+from nexora.market_history.clock import ClockAttestation, check_attestation
 from nexora.market_history.convert import TimeConversion, TimeSegment, normalize
+from nexora.market_history.guards import (
+    overlaps,
+    validate_margin,
+    validate_protected_ranges,
+)
 from nexora.market_history.models import (
     HistoryError,
     NormalizedTick,
@@ -31,7 +38,8 @@ from nexora.market_history.models import (
 from nexora.market_history.provider import HistoricalTickSource, TransientSourceError
 from nexora.market_history.quality import QualityConfig, hard_defects, quality_report
 
-EXTRACTOR_VERSION = "nexora.market-history-extractor/2"
+EXTRACTOR_VERSION = "nexora.market-history-extractor/3"
+CHUNK_NAME = re.compile(r"chunk-(\d+)-(\d+)\.jsonl")
 MANIFEST_NAME = "manifest.json"
 TMP_MARKER = ".tmp-"
 DEFAULT_MAX_CHUNK_TICKS = 1_000_000
@@ -52,8 +60,14 @@ class ExtractionRequest:
     max_chunk_ticks: int = DEFAULT_MAX_CHUNK_TICKS
 
     def __post_init__(self) -> None:
+        ints = (self.from_raw_msc, self.to_raw_msc, self.chunk_ms, self.max_retries)
+        if not all(type(v) is int for v in (*ints, self.max_chunk_ticks)) or not (
+            isinstance(self.symbol, str) and self.symbol.strip()
+        ):
+            raise HistoryError("invalid_extraction_request")
         if (
-            self.to_raw_msc <= self.from_raw_msc
+            self.from_raw_msc < 0
+            or self.to_raw_msc <= self.from_raw_msc
             or self.chunk_ms <= 0
             or self.max_retries < 0
             or self.max_chunk_ticks < 1
@@ -141,6 +155,26 @@ def _utc_span(conversion: TimeConversion, lo: int, hi: int) -> tuple[int, int]:
     return min(points), max(points)
 
 
+def preflight(
+    request: ExtractionRequest,
+    conversion: TimeConversion,
+    clock_attestation: ClockAttestation | None,
+    protected_utc_ranges: Any,
+    protected_margin_ms: Any,
+) -> tuple[tuple[tuple[int, int], ...], int]:
+    """Every check that needs no provider. Callers (the CLI) run this BEFORE attaching to a
+    terminal; `extract` runs it again. Raises HistoryError; returns validated (ranges, margin)."""
+    protected = validate_protected_ranges(protected_utc_ranges)
+    margin = validate_margin(protected_margin_ms)
+    if not conversion.covers(request.from_raw_msc, request.to_raw_msc):
+        raise HistoryError("time_conversion_does_not_cover_window")
+    check_attestation(clock_attestation, conversion, request.from_raw_msc, request.to_raw_msc)
+    lo, hi = _utc_span(conversion, request.from_raw_msc, request.to_raw_msc)
+    if overlaps(lo, hi, protected, margin):
+        raise HistoryError("window_overlaps_protected_range")
+    return protected, margin
+
+
 def extract(
     source: HistoricalTickSource,
     request: ExtractionRequest,
@@ -149,22 +183,23 @@ def extract(
     out_dir: Path,
     *,
     retrieved_at: datetime,
-    protected_utc_ranges: Sequence[tuple[int, int]] = (),
+    clock_attestation: ClockAttestation | None,
+    protected_utc_ranges: Sequence[tuple[int, int]],
+    protected_margin_ms: int = 0,
     sleep: Callable[[float], None] = time.sleep,
 ) -> dict[str, Any]:
     """Pull ticks chunk by chunk, write each chunk once, and write the manifest last.
 
-    Fails closed: refuses when the conversion does not cover the window, when the window overlaps
-    a protected (e.g. holdout) UTC range supplied by the caller, and never overwrites a chunk or
-    manifest. Nothing the source returned is edited. Resident memory is one chunk."""
+    ALL refusals below happen before the first call into `source`. `clock_attestation` and
+    `protected_utc_ranges` have no defaults: omitting them is an error, and `()` is the explicit
+    statement that nothing is protected. Nothing the source returned is edited; resident memory
+    is one chunk."""
     if retrieved_at.tzinfo is None:
         raise HistoryError("retrieved_at_must_be_tz_aware")
-    if not conversion.covers(request.from_raw_msc, request.to_raw_msc):
-        raise HistoryError("time_conversion_does_not_cover_window")
-    lo, hi = _utc_span(conversion, request.from_raw_msc, request.to_raw_msc)
-    for p_lo, p_hi in protected_utc_ranges:  # inclusive-exclusive [p_lo, p_hi)
-        if lo < p_hi and p_lo <= hi:
-            raise HistoryError("window_overlaps_protected_range")
+    protected, margin = preflight(
+        request, conversion, clock_attestation, protected_utc_ranges, protected_margin_ms
+    )
+    assert clock_attestation is not None
     out_dir.mkdir(parents=True, exist_ok=True)
     if (out_dir / MANIFEST_NAME).exists():
         raise HistoryError("manifest_exists_dataset_is_immutable")
@@ -173,6 +208,8 @@ def extract(
     instrument = source.instrument(request.symbol)
     profile = source.capability_profile()
     chunks: list[dict[str, Any]] = []
+    content = hashlib.sha256()
+    total = 0
     for a, b in _windows(request):
         ticks, attempts = _fetch(source, request, a, b, sleep)
         if len(ticks) > request.max_chunk_ticks:
@@ -187,6 +224,8 @@ def extract(
         except FileExistsError:
             if _file_sha256(path) != sha256_hex(body):
                 raise HistoryError("chunk_exists_with_different_content", name) from None
+        content.update(body)
+        total += len(inside)
         chunks.append(
             {
                 "file": name,
@@ -202,39 +241,55 @@ def extract(
         del ticks, inside, body
 
     report = quality_report(_normalized_stream(out_dir, chunks, conversion), quality)
-    defects = hard_defects(report)
-    body_for_id: dict[str, Any] = {
+    manifest: dict[str, Any] = {
         "schema": SCHEMA_VERSION,
         "symbol": request.symbol,
         "window_raw_msc": [request.from_raw_msc, request.to_raw_msc],
-        "chunk_ms": request.chunk_ms,
-        "max_chunk_ticks": request.max_chunk_ticks,
+        "time_conversion": conversion.to_json(),
+        "clock_attestation": clock_attestation.to_json(),
+        "content_sha256": content.hexdigest(),
+        "tick_count": total,
         "source": source.descriptor().to_json(),
         "capability_profile": profile.to_json(),
         "instrument": instrument.to_json(),
-        "time_conversion": conversion.to_json(),
+        "chunk_ms": request.chunk_ms,
+        "max_chunk_ticks": request.max_chunk_ticks,
         "chunks": chunks,
         "quality": report,
-        "quality_hard_defects": defects,
+        "quality_hard_defects": hard_defects(report),
     }
-    dataset_id = sha256_hex(canonical_json(body_for_id))
-    manifest = {
-        **body_for_id,
-        "dataset_id": dataset_id,
-        "immutable": True,
-        "provenance": {
-            "extractor": EXTRACTOR_VERSION,
-            "retrieved_at": retrieved_at.isoformat(),
-            "retrieval_note": RETRIEVAL_NOTE,
-            "orders_submitted": 0,
-            "read_only_source_allowlist": True,
-        },
+    manifest["dataset_id"] = sha256_hex(canonical_json(_identity(manifest)))
+    manifest["immutable"] = True
+    manifest["provenance"] = {
+        "extractor": EXTRACTOR_VERSION,
+        "retrieved_at": retrieved_at.isoformat(),
+        "retrieval_note": RETRIEVAL_NOTE,
+        "orders_submitted": 0,
+        "read_only_source_allowlist": True,
+        "protected_utc_ranges": [list(r) for r in protected],
+        "protected_margin_ms": margin,
     }
     manifest["manifest_sha256"] = sha256_hex(canonical_json(manifest))
     write_once(
         out_dir / MANIFEST_NAME, json.dumps(manifest, sort_keys=True, indent=2).encode() + b"\n"
     )
     return manifest
+
+
+def _identity(manifest: dict[str, Any]) -> dict[str, Any]:
+    """What the dataset IS: its ticks and how raw time maps to UTC. Retries, chunk layout,
+    out-of-window drops, source version, terminal state and instrument metadata (all of which can
+    differ between two extractions of the same ticks) are in the manifest hash, not here."""
+    return {
+        "schema": manifest["schema"],
+        "symbol": manifest["symbol"],
+        "window_raw_msc": manifest["window_raw_msc"],
+        "time_conversion": manifest["time_conversion"],
+        "clock_attestation": manifest["clock_attestation"],
+        "content_sha256": manifest["content_sha256"],
+        "tick_count": manifest["tick_count"],
+        "source_kind": manifest["source"]["kind"],
+    }
 
 
 def _file_sha256(path: Path) -> str:
@@ -263,7 +318,7 @@ def _fetch(
     while True:
         attempts += 1
         try:
-            return list(source.ticks(req.symbol, a, b)), attempts
+            return list(source.ticks(req.symbol, a, b, max_ticks=req.max_chunk_ticks)), attempts
         except TransientSourceError:
             if attempts > req.max_retries:
                 raise
@@ -285,64 +340,235 @@ def conversion_from_manifest(manifest: dict[str, Any]) -> TimeConversion:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class Problem:
+    """One structured verification failure. `str(problem)` is the stable text form."""
+
+    code: str
+    subject: str = ""
+    detail: str = ""
+
+    def __str__(self) -> str:
+        return f"{self.code}:{self.subject}" if self.subject else self.code
+
+
+_REQUIRED = (
+    "schema",
+    "symbol",
+    "window_raw_msc",
+    "time_conversion",
+    "clock_attestation",
+    "content_sha256",
+    "tick_count",
+    "source",
+    "chunks",
+    "quality",
+    "quality_hard_defects",
+    "dataset_id",
+    "provenance",
+)
+_CHUNK_KEYS = {
+    "file": str,
+    "from_raw_msc": int,
+    "to_raw_msc": int,
+    "tick_count": int,
+    "sha256": str,
+}
+
+
+def verify_dataset_report(
+    directory: Path,
+    conversion_check: bool = True,
+    *,
+    expected_manifest_sha256: str | None = None,
+) -> list[Problem]:
+    """Independent re-verification from files alone. NEVER raises: malformed manifests, malformed
+    chunks and unexpected errors all come back as structured problems (fail closed)."""
+    try:
+        return _verify(directory, conversion_check, expected_manifest_sha256)
+    except Exception as exc:  # defensive: a verifier must not crash on hostile input
+        return [Problem("verify_internal_error", type(exc).__name__, str(exc)[:200])]
+
+
 def verify_dataset(
     directory: Path,
     conversion_check: bool = True,
     *,
     expected_manifest_sha256: str | None = None,
 ) -> list[str]:
-    """Independent re-verification from files alone, streaming (memory = one line).
+    """Text form of `verify_dataset_report`. Empty list = consistent."""
+    report = verify_dataset_report(
+        directory, conversion_check, expected_manifest_sha256=expected_manifest_sha256
+    )
+    return [str(p) for p in report]
 
-    Checks manifest self-hash, optional EXTERNAL anchor, dataset_id, every chunk hash/count/window,
-    absence of unlisted files, contiguity, and recomputes the quality report. A self-consistent
-    forgery is only detectable through `expected_manifest_sha256` recorded outside the directory."""
-    problems: list[str] = []
+
+def _verify(
+    directory: Path, conversion_check: bool, expected_manifest_sha256: str | None
+) -> list[Problem]:
     mpath = directory / MANIFEST_NAME
     if not mpath.exists():
-        return ["manifest_missing"]
-    manifest = json.loads(mpath.read_text())
+        return [Problem("manifest_missing")]
+    try:
+        manifest = json.loads(mpath.read_text())
+    except (OSError, ValueError, UnicodeDecodeError) as exc:
+        return [Problem("manifest_unreadable", type(exc).__name__)]
+    if not isinstance(manifest, dict):
+        return [Problem("manifest_malformed", "not_an_object")]
+    missing = [k for k in _REQUIRED if k not in manifest]
+    if missing:
+        return [Problem("manifest_malformed", f"missing_{k}") for k in missing]
+    if manifest["schema"] != SCHEMA_VERSION:
+        return [Problem("schema_unsupported", str(manifest["schema"])[:60])]
+    shape = _check_shape(manifest)
+    if shape:
+        return shape
+
+    problems: list[Problem] = []
     stored = manifest.pop("manifest_sha256", None)
     if stored != sha256_hex(canonical_json(manifest)):
-        problems.append("manifest_hash_mismatch")
+        problems.append(Problem("manifest_hash_mismatch"))
     if expected_manifest_sha256 is not None and stored != expected_manifest_sha256:
-        problems.append("manifest_anchor_mismatch")
-    body = {k: v for k, v in manifest.items() if k not in ("dataset_id", "immutable", "provenance")}
-    if manifest.get("dataset_id") != sha256_hex(canonical_json(body)):
-        problems.append("dataset_id_mismatch")
-    listed = {c["file"] for c in manifest["chunks"]}
+        problems.append(Problem("manifest_anchor_mismatch"))
+    if manifest["dataset_id"] != sha256_hex(canonical_json(_identity(manifest))):
+        problems.append(Problem("dataset_id_mismatch"))
+
+    chunks = manifest["chunks"]
+    listed = {c["file"] for c in chunks}
     present = {p.name for p in directory.glob("chunk-*.jsonl")}
-    problems += [f"chunk_missing:{n}" for n in sorted(listed - present)]
-    problems += [f"chunk_unlisted:{n}" for n in sorted(present - listed)]
-    problems += [f"stale_temp_file:{p.name}" for p in sorted(directory.glob(f"*{TMP_MARKER}*"))]
+    problems += [Problem("chunk_missing", n) for n in sorted(listed - present)]
+    problems += [Problem("chunk_unlisted", n) for n in sorted(present - listed)]
+    problems += [
+        Problem("stale_temp_file", p.name) for p in sorted(directory.glob(f"*{TMP_MARKER}*"))
+    ]
+
     cursor = manifest["window_raw_msc"][0]
-    for c in manifest["chunks"]:
+    content = hashlib.sha256()
+    total = 0
+    parse_ok = True
+    for c in chunks:
+        name = c["file"]
+        m = CHUNK_NAME.fullmatch(name)
+        if not m or (int(m.group(1)), int(m.group(2))) != (c["from_raw_msc"], c["to_raw_msc"]):
+            problems.append(Problem("chunk_name_invalid", name[:80]))
+            parse_ok = False
+            continue
         if c["from_raw_msc"] != cursor:
-            problems.append(f"chunk_not_contiguous:{c['file']}")
+            problems.append(Problem("chunk_not_contiguous", name))
         cursor = c["to_raw_msc"]
-        path = directory / c["file"]
-        if not path.exists():
+        path = directory / name
+        if not path.is_file() or path.is_symlink():
+            parse_ok = False
+            if path.is_symlink():
+                problems.append(Problem("chunk_is_symlink", name))
             continue
-        if _file_sha256(path) != c["sha256"]:
-            problems.append(f"chunk_hash_mismatch:{c['file']}")
+        digest = hashlib.sha256()
+        with path.open("rb") as fh:
+            for block in iter(lambda: fh.read(1 << 20), b""):
+                digest.update(block)
+                content.update(block)
+        if digest.hexdigest() != c["sha256"]:
+            problems.append(Problem("chunk_hash_mismatch", name))
+            parse_ok = False
             continue
-        count = 0
-        outside = False
-        for t in read_chunk(path):
-            count += 1
-            outside = outside or not (c["from_raw_msc"] <= t.time_msc < c["to_raw_msc"])
+        count, outside, error = _scan_chunk(path, c["from_raw_msc"], c["to_raw_msc"])
+        total += count
+        if error:
+            problems.append(Problem("chunk_malformed", name, error))
+            parse_ok = False
+            continue
         if count != c["tick_count"]:
-            problems.append(f"chunk_count_mismatch:{c['file']}")
+            problems.append(Problem("chunk_count_mismatch", name))
         if outside:
-            problems.append(f"chunk_tick_outside_window:{c['file']}")
+            problems.append(Problem("chunk_tick_outside_window", name))
     if cursor != manifest["window_raw_msc"][1]:
-        problems.append("chunks_do_not_cover_window")
-    if conversion_check and not problems:
+        problems.append(Problem("chunks_do_not_cover_window"))
+    if parse_ok and not problems:
+        if content.hexdigest() != manifest["content_sha256"]:
+            problems.append(Problem("content_sha256_mismatch"))
+        if total != manifest["tick_count"]:
+            problems.append(Problem("tick_count_mismatch"))
+
+    try:
         conv = conversion_from_manifest(manifest)
-        cfg = QualityConfig(manifest["quality"]["config"]["max_gap_ms"])
-        recomputed = quality_report(_normalized_stream(directory, manifest["chunks"], conv), cfg)
-        if canonical_json(recomputed) != canonical_json(manifest["quality"]):
-            problems.append("quality_report_not_reproducible")
+        att = ClockAttestation.from_json(manifest["clock_attestation"])
+        check_attestation(att, conv, *manifest["window_raw_msc"])
+    except (HistoryError, KeyError, TypeError, ValueError) as exc:
+        code = getattr(exc, "code", type(exc).__name__)
+        problems.append(Problem("clock_attestation_invalid", code))
+        return problems
+    try:
+        prot = validate_protected_ranges(manifest["provenance"].get("protected_utc_ranges"))
+        margin = validate_margin(manifest["provenance"].get("protected_margin_ms"))
+    except HistoryError as exc:
+        problems.append(Problem("protected_ranges_invalid", exc.code))
+        return problems
+    lo, hi = _utc_span(conv, *manifest["window_raw_msc"])
+    if overlaps(lo, hi, prot, margin):
+        problems.append(Problem("window_overlaps_recorded_protected_range"))
+
+    if conversion_check and parse_ok and not problems:
+        try:
+            cfg = QualityConfig(manifest["quality"]["config"]["max_gap_ms"])
+            recomputed = quality_report(_normalized_stream(directory, chunks, conv), cfg)
+        except (HistoryError, KeyError, TypeError, ValueError) as exc:
+            problems.append(Problem("quality_recompute_failed", type(exc).__name__))
+        else:
+            if canonical_json(recomputed) != canonical_json(manifest["quality"]):
+                problems.append(Problem("quality_report_not_reproducible"))
     return problems
+
+
+def _check_shape(manifest: dict[str, Any]) -> list[Problem]:
+    out: list[Problem] = []
+    w = manifest["window_raw_msc"]
+    if not (isinstance(w, list) and len(w) == 2 and all(type(x) is int for x in w)):
+        out.append(Problem("manifest_malformed", "window_raw_msc"))
+    if not isinstance(manifest["chunks"], list) or not manifest["chunks"]:
+        out.append(Problem("manifest_malformed", "chunks"))
+    else:
+        for i, c in enumerate(manifest["chunks"]):
+            if not isinstance(c, dict) or any(
+                type(c.get(k)) is not t for k, t in _CHUNK_KEYS.items()
+            ):
+                out.append(Problem("chunk_entry_malformed", str(i)))
+    for key, kind in (
+        ("content_sha256", str),
+        ("tick_count", int),
+        ("dataset_id", str),
+        ("symbol", str),
+        ("time_conversion", dict),
+        ("clock_attestation", dict),
+        ("source", dict),
+        ("quality", dict),
+        ("provenance", dict),
+        ("quality_hard_defects", list),
+    ):
+        if type(manifest[key]) is not kind:
+            out.append(Problem("manifest_malformed", key))
+    if not out and not isinstance(manifest["source"].get("kind"), str):
+        out.append(Problem("manifest_malformed", "source.kind"))
+    return out
+
+
+def _scan_chunk(path: Path, lo: int, hi: int) -> tuple[int, bool, str]:
+    """(rows, any row outside [lo, hi), error text). Streams; a bad row stops the scan."""
+    count = 0
+    outside = False
+    try:
+        with path.open("rb") as fh:
+            for lineno, line in enumerate(fh, 1):
+                row = json.loads(line)
+                t = RawTick(row["t"], Decimal(row["b"]), Decimal(row["a"]), row.get("f"))
+                if type(t.time_msc) is not int or (
+                    t.flags is not None and type(t.flags) is not int
+                ):
+                    return count, outside, f"line {lineno}: bad field type"
+                count += 1
+                outside = outside or not (lo <= t.time_msc < hi)
+    except (ValueError, KeyError, TypeError, ArithmeticError, UnicodeDecodeError) as exc:
+        return count, outside, f"line {count + 1}: {type(exc).__name__}"
+    return count, outside, ""
 
 
 def usability_blockers(

@@ -42,7 +42,16 @@
       "to_raw_msc": 6000
     }
   ],
-  "dataset_id": "979d52aac224cbc823282e3b9af517642f5fa9869b0bb3d8ffe003d13667a20c",
+  "clock_attestation": {
+    "ambiguous_raw_ranges": [],
+    "attested_by": "synthetic-test",
+    "claim": "every raw broker-clock instant in the attested window maps to exactly one UTC instant: no repeated (fall-back) hour and no ambiguous raw time",
+    "evidence_ref": "synthetic-test",
+    "window_from_raw_msc": 0,
+    "window_to_raw_msc": 10000000000000
+  },
+  "content_sha256": "87702c0d63f3ad47e5d69f7036eea6f222dbe18f16faf406ce48a978dc4bb60a",
+  "dataset_id": "8c2b0c608d3f667693a3b6ce7ce6353ed22afc3a9ce5a0829425b1d9af23efd4",
   "immutable": true,
   "instrument": {
     "fields": [
@@ -59,11 +68,13 @@
     ],
     "symbol": "SYN"
   },
-  "manifest_sha256": "0db3977a796c28e9c5284c7119bbb349bbd85248502c2c374ae702ef7c609a1c",
+  "manifest_sha256": "e08116ca9d87f78b532d8beca13b63f271f194acbb9a8e4925cd0aee3fbedd6e",
   "max_chunk_ticks": 1000000,
   "provenance": {
-    "extractor": "nexora.market-history-extractor/2",
+    "extractor": "nexora.market-history-extractor/3",
     "orders_submitted": 0,
+    "protected_margin_ms": 0,
+    "protected_utc_ranges": [],
     "read_only_source_allowlist": true,
     "retrieval_note": "historical_retrieval: retrieved_at is when this extraction ran, not when ticks were originally received; it must never be used as point-in-time knowledge time",
     "retrieved_at": "2026-01-01T00:00:00+00:00"
@@ -93,13 +104,14 @@
     "zero_spread_count": 0
   },
   "quality_hard_defects": [],
-  "schema": "nexora.market-history/1",
+  "schema": "nexora.market-history/2",
   "source": {
     "kind": "fixture",
     "notes": "synthetic_fixture",
     "version": "1"
   },
   "symbol": "SYN",
+  "tick_count": 10,
   "time_conversion": {
     "segments": [
       {
