@@ -1,5 +1,8 @@
 # EDGE-VALIDATION-1 (#77) / SYSTEM-READINESS-1 (#78) — Master readiness report, 2026-10-20
 
+> **Update 2026-10-20 (later in session):** D-1 and D-2 below are now addressed by stacked PR #88 (head 47f9ea8); Agent B tooling is PR #89. See `MASTER-REPORT-V2.md` for the P0 report. This text is otherwise unchanged.
+
+
 Status: **READY FOR RIN REVIEW. Nothing is frozen, merged or authorized.** Author: Claude MASTER session (orchestrator; independent of the authors of PR #79, #80, #81). This is review input, not an APPROVE; no review verdict is issued on any PR.
 
 Base: `origin/main` = `36c90c59e2aa4f0d221c9c468a8379c5f57cbb87` (verified with `git ls-remote origin HEAD refs/heads/main` on 2026-10-20; unchanged since the 2026-10-15 readiness wave). Branch `claude/edge-readiness-master-20261020-v1`, created from that SHA with a clean tree. Session: cloud (no MT5 terminal, no PROD, no `D:` access).
