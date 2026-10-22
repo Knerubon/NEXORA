@@ -1,0 +1,316 @@
+{
+  "schema_version": "nexora.windows-readiness-evidence/2",
+  "evidence_class": "SYNTHETIC_FIXTURE",
+  "identity_basis": "declared_not_authenticated",
+  "identity": {
+    "record_id": "SYNTHETIC-0001",
+    "package_version": "0123456789abcdef0123456789abcdef01234567",
+    "extractor_sha": "0123456789abcdef0123456789abcdef01234567",
+    "extractor_version": "nexora.market-history-extractor/5",
+    "manifest_schema": "nexora.market-history/4"
+  },
+  "checkout": {
+    "head": "0123456789abcdef0123456789abcdef01234567",
+    "status_short": "",
+    "status_ref": {
+      "path": "synthetic/git-status.txt",
+      "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "checkout_clean": true,
+    "head_equals_sha": true
+  },
+  "node": {
+    "hostname_class": "SYNTHETIC-hostname_class",
+    "os_build": "SYNTHETIC-os_build",
+    "filesystem_type": "SYNTHETIC-filesystem_type",
+    "volume_ref": "SYNTHETIC-volume_ref",
+    "antivirus_indexer_state": "SYNTHETIC-antivirus_indexer_state",
+    "python_version": "SYNTHETIC-python_version",
+    "uv_version": "SYNTHETIC-uv_version",
+    "metatrader5_version": "SYNTHETIC-metatrader5_version",
+    "numpy_version": "SYNTHETIC-numpy_version"
+  },
+  "terminal": {
+    "company": "SYNTHETIC-company",
+    "name": "SYNTHETIC-terminal",
+    "build": "SYNTHETIC-0",
+    "server_name": "SYNTHETIC-server",
+    "account_kind": "demo"
+  },
+  "people": {
+    "operator": "synthetic-operator",
+    "second_person_verifier": "synthetic-verifier",
+    "custodian": "synthetic-custodian",
+    "reviewer": "synthetic-reviewer",
+    "verifier_attestation_ref": {
+      "path": "synthetic/verifier.txt",
+      "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+    },
+    "custodian_attestation_ref": {
+      "path": "synthetic/custodian.txt",
+      "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+    }
+  },
+  "window": {
+    "symbol": "SYN",
+    "window_raw_msc": [
+      1700000000000,
+      1700000005000
+    ],
+    "window_utc_msc": [
+      1699992800000,
+      1699992805000
+    ],
+    "preregistration_ref": "SYNTHETIC-PREREG-1",
+    "preregistered_at_utc": "2026-01-01T00:00:00Z",
+    "protected_ranges_ref": "SYNTHETIC-no-protected-ranges",
+    "protected_margin_ms": 0
+  },
+  "source_provenance": {
+    "source_descriptor": "SYNTHETIC-source",
+    "broker_clock_evidence_ref": "SYNTHETIC-EVIDENCE-1",
+    "broker_clock_evidence_kind": "synthetic",
+    "time_conversion_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+    "clock_attestation_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+    "dst_rule_evidence_ref": "SYNTHETIC-EVIDENCE-2"
+  },
+  "dataset": {
+    "dataset_id": "6666666666666666666666666666666666666666666666666666666666666666",
+    "content_sha256": "7777777777777777777777777777777777777777777777777777777777777777",
+    "manifest_sha256": "8888888888888888888888888888888888888888888888888888888888888888",
+    "candidate_sha256": "9999999999999999999999999999999999999999999999999999999999999999",
+    "development_status": "UNTRUSTED"
+  },
+  "custody": {
+    "store_ref": "SYNTHETIC-store",
+    "registry_ref": {
+      "path": "synthetic/registry.json",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "approval_seq": 1,
+    "approval_entry_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "store_head": "1:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "store_head_channel_ref": "SYNTHETIC-head-channel",
+    "revocations_after_approval": 0,
+    "verifier_command": "SYNTHETIC: no verifier was run",
+    "verifier_exit_code": 1,
+    "verifier_status": "UNTRUSTED",
+    "verifier_status_reasons": [
+      "capability:platform_unproven:win32"
+    ]
+  },
+  "execution": {
+    "commands_run": [
+      "SYNTHETIC: no command was run"
+    ],
+    "raw_output_refs": [
+      {
+        "path": "synthetic/out.txt",
+        "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      }
+    ],
+    "exit_codes": [
+      0
+    ]
+  },
+  "timestamps": {
+    "started_at_utc": "2026-01-01T00:00:01Z",
+    "finished_at_utc": "2026-01-01T00:00:02Z",
+    "clock_source": "SYNTHETIC"
+  },
+  "cases": {
+    "1": {
+      "result": "PASS",
+      "evidence": {
+        "descr": {
+          "synthetic": true
+        },
+        "names": [
+          "SYNTHETIC"
+        ],
+        "len": 3,
+        "empty_behaviour": "SYNTHETIC",
+        "last_error": "SYNTHETIC",
+        "numpy_version": "SYNTHETIC",
+        "terminal_build": "SYNTHETIC",
+        "first_last_time_msc_in_window": true
+      },
+      "evidence_refs": [
+        {
+          "path": "synthetic/case1.json",
+          "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        }
+      ],
+      "notes": "SYNTHETIC fixture: exercises the rules; not a run, not Windows-verified."
+    },
+    "2": {
+      "result": "PASS",
+      "evidence": {
+        "vector_results": {
+          "synthetic": true
+        },
+        "hostile_context_identical": true,
+        "quality_counts": {
+          "synthetic": true
+        },
+        "independent_counts": {
+          "synthetic": true
+        },
+        "counts_equal": true
+      },
+      "evidence_refs": [
+        {
+          "path": "synthetic/case2.json",
+          "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        }
+      ],
+      "notes": "SYNTHETIC fixture: exercises the rules; not a run, not Windows-verified."
+    },
+    "3": {
+      "result": "PASS",
+      "evidence": {
+        "evidence_ref": "SYNTHETIC",
+        "evidence_kind": "SYNTHETIC",
+        "segments": {
+          "synthetic": true
+        },
+        "refusals_observed": [
+          "SYNTHETIC"
+        ],
+        "terminal_contacted_before_validation": false
+      },
+      "evidence_refs": [
+        {
+          "path": "synthetic/case3.json",
+          "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        }
+      ],
+      "notes": "SYNTHETIC fixture: exercises the rules; not a run, not Windows-verified."
+    },
+    "4": {
+      "result": "PASS",
+      "evidence": {
+        "dst_rule_evidence_ref": "SYNTHETIC",
+        "transitions": {
+          "synthetic": true
+        },
+        "derived_fold_ranges": {
+          "synthetic": true
+        },
+        "independent_fold_ranges": {
+          "synthetic": true
+        },
+        "ranges_equal": true,
+        "refusals_observed": [
+          "SYNTHETIC"
+        ],
+        "split_windows": {
+          "synthetic": true
+        }
+      },
+      "evidence_refs": [
+        {
+          "path": "synthetic/case4.json",
+          "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        }
+      ],
+      "notes": "SYNTHETIC fixture: exercises the rules; not a run, not Windows-verified."
+    },
+    "5": {
+      "result": "PASS",
+      "evidence": {
+        "run_a_content_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "run_b_content_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "chunk_ms_variants": {
+          "synthetic": true
+        },
+        "variant_content_sha256": {
+          "synthetic": true
+        },
+        "order_counts": {
+          "synthetic": true
+        },
+        "tamper_refusal": "SYNTHETIC"
+      },
+      "evidence_refs": [
+        {
+          "path": "synthetic/case5.json",
+          "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        }
+      ],
+      "notes": "SYNTHETIC fixture: exercises the rules; not a run, not Windows-verified."
+    },
+    "6": {
+      "result": "PASS",
+      "evidence": {
+        "probe_json_ref": {
+          "path": "synthetic/case.json",
+          "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        },
+        "fs_type": "SYNTHETIC",
+        "volume_info_ref": "SYNTHETIC",
+        "av_indexer_state": "SYNTHETIC",
+        "reparse_results": {
+          "synthetic": true
+        },
+        "crash_results": {
+          "synthetic": true
+        },
+        "lock_results": {
+          "synthetic": true
+        },
+        "probe_error_count": 0,
+        "probe_manual_unresolved_count": 0
+      },
+      "evidence_refs": [
+        {
+          "path": "synthetic/case6.json",
+          "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        }
+      ],
+      "notes": "SYNTHETIC fixture: exercises the rules; not a run, not Windows-verified."
+    },
+    "7": {
+      "result": "PASS",
+      "evidence": {
+        "observed_mt5_names": [
+          "SYNTHETIC"
+        ],
+        "initialize_args": {
+          "synthetic": true
+        },
+        "shutdown_paths": {
+          "synthetic": true
+        },
+        "forbidden_names_observed": 0
+      },
+      "evidence_refs": [
+        {
+          "path": "synthetic/case7.json",
+          "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        }
+      ],
+      "notes": "SYNTHETIC fixture: exercises the rules; not a run, not Windows-verified."
+    }
+  },
+  "overall_result": "NOT_RUN",
+  "not_verified": [
+    "windows_ntfs_atomicity_and_hardlink_behaviour",
+    "reparse_point_and_junction_handling",
+    "antivirus_and_indexer_interaction",
+    "network_share_behaviour",
+    "power_loss_durability",
+    "terminal_history_determinism_between_fetches",
+    "broker_clock_rule_truth",
+    "dst_fold_truth_for_single_segment_conversions",
+    "account_is_read_only_or_demo",
+    "no_other_process_trades_on_account",
+    "tick_completeness",
+    "documented_tick_dtype_matches_terminal_build",
+    "independent_store_integrity",
+    "terminal_request_bound_clock_interpretation",
+    "custodian_identity_authenticity",
+    "windows_msvcrt_lock_exclusivity"
+  ],
+  "claim_evidence": {}
+}

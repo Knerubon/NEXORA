@@ -1,9 +1,21 @@
 {
-  "record_id": "NOT VERIFIED",
-  "package_version": "NOT VERIFIED",
-  "extractor_sha": "NOT VERIFIED",
-  "checkout_clean": "NOT VERIFIED",
-  "head_equals_sha": "NOT VERIFIED",
+  "schema_version": "nexora.windows-readiness-evidence/2",
+  "evidence_class": "TEMPLATE",
+  "identity_basis": "declared_not_authenticated",
+  "identity": {
+    "record_id": "NOT VERIFIED",
+    "package_version": "NOT VERIFIED",
+    "extractor_sha": "NOT VERIFIED",
+    "extractor_version": "NOT VERIFIED",
+    "manifest_schema": "NOT VERIFIED"
+  },
+  "checkout": {
+    "head": "NOT VERIFIED",
+    "status_short": "NOT VERIFIED",
+    "status_ref": "NOT VERIFIED",
+    "checkout_clean": "NOT VERIFIED",
+    "head_equals_sha": "NOT VERIFIED"
+  },
   "node": {
     "hostname_class": "NOT VERIFIED",
     "os_build": "NOT VERIFIED",
@@ -25,7 +37,10 @@
   "people": {
     "operator": "NOT VERIFIED",
     "second_person_verifier": "NOT VERIFIED",
-    "reviewer": "NOT VERIFIED"
+    "custodian": "NOT VERIFIED",
+    "reviewer": "NOT VERIFIED",
+    "verifier_attestation_ref": "NOT VERIFIED",
+    "custodian_attestation_ref": "NOT VERIFIED"
   },
   "window": {
     "symbol": "NOT VERIFIED",
@@ -48,29 +63,128 @@
     "dataset_id": "NOT VERIFIED",
     "content_sha256": "NOT VERIFIED",
     "manifest_sha256": "NOT VERIFIED",
-    "anchor_ref": "NOT VERIFIED",
+    "candidate_sha256": "NOT VERIFIED",
     "development_status": "NOT VERIFIED"
+  },
+  "custody": {
+    "store_ref": "NOT VERIFIED",
+    "registry_ref": "NOT VERIFIED",
+    "approval_seq": "NOT VERIFIED",
+    "approval_entry_sha256": "NOT VERIFIED",
+    "store_head": "NOT VERIFIED",
+    "store_head_channel_ref": "NOT VERIFIED",
+    "revocations_after_approval": "NOT VERIFIED",
+    "verifier_command": "NOT VERIFIED",
+    "verifier_exit_code": "NOT VERIFIED",
+    "verifier_status": "NOT VERIFIED",
+    "verifier_status_reasons": "NOT VERIFIED"
   },
   "execution": {
     "commands_run": "NOT VERIFIED",
     "raw_output_refs": "NOT VERIFIED",
     "exit_codes": "NOT VERIFIED"
   },
-  "cases": {
-    "1": {"result": "NOT_RUN", "evidence_fields": "NOT VERIFIED", "notes": ""},
-    "2": {"result": "NOT_RUN", "evidence_fields": "NOT VERIFIED", "notes": ""},
-    "3": {"result": "NOT_RUN", "evidence_fields": "NOT VERIFIED", "notes": ""},
-    "4": {"result": "NOT_RUN", "evidence_fields": "NOT VERIFIED", "notes": ""},
-    "5": {"result": "NOT_RUN", "evidence_fields": "NOT VERIFIED", "notes": ""},
-    "6": {"result": "NOT_RUN", "evidence_fields": "NOT VERIFIED", "notes": ""},
-    "7": {"result": "NOT_RUN", "evidence_fields": "NOT VERIFIED", "notes": ""}
-  },
-  "overall_result": "NOT_RUN",
   "timestamps": {
     "started_at_utc": "NOT VERIFIED",
     "finished_at_utc": "NOT VERIFIED",
     "clock_source": "NOT VERIFIED"
   },
+  "cases": {
+    "1": {
+      "result": "NOT_RUN",
+      "evidence": {
+        "descr": "NOT VERIFIED",
+        "names": "NOT VERIFIED",
+        "len": "NOT VERIFIED",
+        "empty_behaviour": "NOT VERIFIED",
+        "last_error": "NOT VERIFIED",
+        "numpy_version": "NOT VERIFIED",
+        "terminal_build": "NOT VERIFIED",
+        "first_last_time_msc_in_window": "NOT VERIFIED"
+      },
+      "evidence_refs": "NOT VERIFIED",
+      "notes": ""
+    },
+    "2": {
+      "result": "NOT_RUN",
+      "evidence": {
+        "vector_results": "NOT VERIFIED",
+        "hostile_context_identical": "NOT VERIFIED",
+        "quality_counts": "NOT VERIFIED",
+        "independent_counts": "NOT VERIFIED",
+        "counts_equal": "NOT VERIFIED"
+      },
+      "evidence_refs": "NOT VERIFIED",
+      "notes": ""
+    },
+    "3": {
+      "result": "NOT_RUN",
+      "evidence": {
+        "evidence_ref": "NOT VERIFIED",
+        "evidence_kind": "NOT VERIFIED",
+        "segments": "NOT VERIFIED",
+        "refusals_observed": "NOT VERIFIED",
+        "terminal_contacted_before_validation": "NOT VERIFIED"
+      },
+      "evidence_refs": "NOT VERIFIED",
+      "notes": ""
+    },
+    "4": {
+      "result": "NOT_RUN",
+      "evidence": {
+        "dst_rule_evidence_ref": "NOT VERIFIED",
+        "transitions": "NOT VERIFIED",
+        "derived_fold_ranges": "NOT VERIFIED",
+        "independent_fold_ranges": "NOT VERIFIED",
+        "ranges_equal": "NOT VERIFIED",
+        "refusals_observed": "NOT VERIFIED",
+        "split_windows": "NOT VERIFIED"
+      },
+      "evidence_refs": "NOT VERIFIED",
+      "notes": ""
+    },
+    "5": {
+      "result": "NOT_RUN",
+      "evidence": {
+        "run_a_content_sha256": "NOT VERIFIED",
+        "run_b_content_sha256": "NOT VERIFIED",
+        "chunk_ms_variants": "NOT VERIFIED",
+        "variant_content_sha256": "NOT VERIFIED",
+        "order_counts": "NOT VERIFIED",
+        "tamper_refusal": "NOT VERIFIED"
+      },
+      "evidence_refs": "NOT VERIFIED",
+      "notes": ""
+    },
+    "6": {
+      "result": "NOT_RUN",
+      "evidence": {
+        "probe_json_ref": "NOT VERIFIED",
+        "fs_type": "NOT VERIFIED",
+        "volume_info_ref": "NOT VERIFIED",
+        "av_indexer_state": "NOT VERIFIED",
+        "reparse_results": "NOT VERIFIED",
+        "crash_results": "NOT VERIFIED",
+        "lock_results": "NOT VERIFIED",
+        "probe_error_count": "NOT VERIFIED",
+        "probe_manual_unresolved_count": "NOT VERIFIED"
+      },
+      "evidence_refs": "NOT VERIFIED",
+      "notes": ""
+    },
+    "7": {
+      "result": "NOT_RUN",
+      "evidence": {
+        "observed_mt5_names": "NOT VERIFIED",
+        "initialize_args": "NOT VERIFIED",
+        "shutdown_paths": "NOT VERIFIED",
+        "forbidden_names_observed": "NOT VERIFIED"
+      },
+      "evidence_refs": "NOT VERIFIED",
+      "notes": ""
+    }
+  },
+  "overall_result": "NOT_RUN",
   "not_verified": [
     "windows_ntfs_atomicity_and_hardlink_behaviour",
     "reparse_point_and_junction_handling",
@@ -84,6 +198,10 @@
     "no_other_process_trades_on_account",
     "tick_completeness",
     "documented_tick_dtype_matches_terminal_build",
-    "independent_store_integrity"
-  ]
+    "independent_store_integrity",
+    "terminal_request_bound_clock_interpretation",
+    "custodian_identity_authenticity",
+    "windows_msvcrt_lock_exclusivity"
+  ],
+  "claim_evidence": {}
 }
