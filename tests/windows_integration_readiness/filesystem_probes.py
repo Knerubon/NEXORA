@@ -3,8 +3,11 @@ nexora imports, nothing outside `root`. Safe to run on the CURRENT platform; the
 same module on the Windows node (`python -m tests.windows_integration_readiness.filesystem_probes
 <empty scratch dir on the target volume>`) and attaches the JSON to the evidence record.
 
-Each probe returns {"outcome": <observed|unsupported|error>, "detail": str}. A probe never fails the
-run: the point is to RECORD what this platform/volume does, so unsupported guarantees are explicit.
+Each probe returns {"outcome": <observed|unsupported|manual_required|error>, "detail": str}.
+A probe never aborts the run: the point is to RECORD what this platform/volume does. But the run's
+`stop_required` is true when any probe is `error` or `manual_required`, or the hard-link probe is
+`unsupported`: the checklist (B2) STOPS on it until the operator attaches evidence that resolves
+each one. `verified_on_windows_ntfs` is always the boolean False: no probe here verifies NTFS.
 """
 
 from __future__ import annotations
@@ -30,12 +33,16 @@ def probe_hard_link(root: Path) -> dict[str, str]:
         os.link(a, b)
     except OSError as exc:
         return _r("unsupported", type(exc).__name__)
+    sa, sb = os.stat(a), os.stat(b)
+    if sa.st_nlink != 2 or sb.st_nlink != 2 or (sa.st_dev, sa.st_ino) != (sb.st_dev, sb.st_ino):
+        # e.g. a share or sync layer that "links" by copying: the no-overwrite design is void
+        return _r("error", f"link not a true hard link (nlink={sa.st_nlink}/{sb.st_nlink})")
     try:
         os.link(a, b)  # a second link onto the same name must refuse to overwrite
     except FileExistsError:
-        return _r("observed", f"link ok; second link refused (nlink={os.stat(a).st_nlink})")
+        return _r("observed", "true hard link (nlink=2, same inode); second link refused")
     except OSError as exc:
-        return _r("observed", f"link ok; second link raised {type(exc).__name__}")
+        return _r("observed", f"true hard link; second link raised {type(exc).__name__}")
     return _r("error", "second os.link overwrote or silently succeeded")
 
 
@@ -133,7 +140,7 @@ def probe_fsync_directory(root: Path) -> dict[str, str]:
     return _r("observed", "fsync(dir) ok (durability of the entry still unproven)")
 
 
-def probe_case_and_trailing(root: Path) -> dict[str, str]:
+def probe_case_sensitivity(root: Path) -> dict[str, str]:
     (root / "Case").write_bytes(b"1")
     try:
         (root / "case").write_bytes(b"2")
@@ -143,13 +150,40 @@ def probe_case_and_trailing(root: Path) -> dict[str, str]:
     return _r("observed", "case-INSENSITIVE volume" if same else "case-sensitive volume")
 
 
+def probe_trailing_dot_space(root: Path) -> dict[str, str]:
+    """Win32 path normalization strips a trailing dot or space, so `x.` and `x ` can alias `x`."""
+    (root / "x").write_bytes(b"0")
+    aliased = []
+    for name in ("x.", "x "):
+        try:
+            (root / name).write_bytes(b"1")
+        except OSError as exc:
+            aliased.append(f"{name!r}:{type(exc).__name__}")
+            continue
+        if (root / "x").read_bytes() == b"1":
+            aliased.append(f"{name!r}:aliases x")
+            (root / "x").write_bytes(b"0")
+    if aliased:
+        return _r("observed", "trailing dot/space NOT preserved: " + ", ".join(aliased))
+    return _r("observed", "trailing dot/space preserved as distinct names")
+
+
 def probe_reparse_point_note(root: Path) -> dict[str, str]:
     if os.name != "nt":
         return _r("unsupported", "not Windows: junction/reparse behaviour cannot be probed here")
     return _r(
-        "observed",
-        "MANUAL: create a junction with `mklink /J` and attach the output; "
-        "os.lstat does not report junctions as symlinks on all Python builds",
+        "manual_required",
+        "NOT PROBED: create a junction with `mklink /J` per INTEGRATION-MATRIX case 6 step 3 and "
+        "attach the output; os.lstat does not report junctions as symlinks on all Python builds",
+    )
+
+
+def probe_filesystem_type(root: Path) -> dict[str, str]:
+    """Not detectable portably from Python without platform calls this harness does not make."""
+    return _r(
+        "manual_required",
+        "NOT PROBED: attach `fsutil fsinfo volumeinfo <drive>:` (Windows) or `findmnt -T <dir>` "
+        "(Linux); network shares and synced folders are STOP (checklist B2)",
     )
 
 
@@ -162,9 +196,12 @@ PROBES: dict[str, Callable[[Path], dict[str, str]]] = {
     "unlink_open_file": probe_unlink_open_file,
     "readonly_attribute": probe_readonly_attribute,
     "fsync_directory": probe_fsync_directory,
-    "case_sensitivity": probe_case_and_trailing,
+    "case_sensitivity": probe_case_sensitivity,
+    "trailing_dot_space": probe_trailing_dot_space,
     "reparse_point_junction": probe_reparse_point_note,
+    "filesystem_type": probe_filesystem_type,
 }
+OUTCOMES = ("observed", "unsupported", "manual_required", "error")
 
 
 def run_probes(root: Path) -> dict[str, Any]:
@@ -178,12 +215,20 @@ def run_probes(root: Path) -> dict[str, Any]:
             results[name] = fn(sub)
         except Exception as exc:  # recorded, never hidden
             results[name] = _r("error", f"{type(exc).__name__}: {exc}")
+    count = {o: sum(r["outcome"] == o for r in results.values()) for o in OUTCOMES}
+    stop = (
+        count["error"] > 0
+        or count["manual_required"] > 0
+        or results["hard_link"]["outcome"] == "unsupported"
+    )
     return {
         "platform": platform.platform(),
         "python": sys.version.split()[0],
         "os_name": os.name,
         "probes": results,
-        "verified_on_windows_ntfs": False if os.name != "nt" else "operator_must_confirm_volume",
+        "outcome_counts": count,
+        "stop_required": stop,
+        "verified_on_windows_ntfs": False,
     }
 
 

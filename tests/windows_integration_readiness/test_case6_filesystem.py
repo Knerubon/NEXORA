@@ -11,7 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from tests.windows_integration_readiness.filesystem_probes import PROBES, run_probes
+from tests.windows_integration_readiness import filesystem_probes as fp
+from tests.windows_integration_readiness.filesystem_probes import OUTCOMES, PROBES, run_probes
 
 TMP = ".tmp-"
 
@@ -36,9 +37,72 @@ def test_case6_every_probe_runs_and_reports_a_structured_outcome(tmp_path: Path)
     result = run_probes(tmp_path)
     assert set(result["probes"]) == set(PROBES)
     for name, r in result["probes"].items():
-        assert r["outcome"] in {"observed", "unsupported"}, (name, r)
-    assert result["verified_on_windows_ntfs"] in (False, "operator_must_confirm_volume")
+        assert r["outcome"] in OUTCOMES, (name, r)
+        assert r["outcome"] != "error", (name, r)
+    assert result["verified_on_windows_ntfs"] is False
+    # filesystem type is never auto-detected: the run always asks for manual evidence
+    assert result["probes"]["filesystem_type"]["outcome"] == "manual_required"
+    assert result["stop_required"] is True
+    assert sum(result["outcome_counts"].values()) == len(PROBES)
     json.dumps(result)  # evidence must be JSON-serialisable
+
+
+def test_case6_verified_on_windows_ntfs_is_never_truthy_on_windows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(os, "name", "nt")
+    result = run_probes(tmp_path)
+    assert result["verified_on_windows_ntfs"] is False
+    assert result["probes"]["reparse_point_junction"]["outcome"] == "manual_required"
+    assert result["stop_required"] is True
+
+
+def test_case6_emulated_hard_link_is_an_error_not_observed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import shutil
+
+    def copy_not_link(src: Path, dst: Path) -> None:
+        if Path(dst).exists():
+            raise FileExistsError(dst)
+        shutil.copyfile(src, dst)
+
+    monkeypatch.setattr(os, "link", copy_not_link)
+    r = fp.probe_hard_link(tmp_path)
+    assert r["outcome"] == "error" and "not a true hard link" in r["detail"]
+
+
+def test_case6_probe_error_forces_stop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    real_open = os.open
+
+    def deny(path: object, flags: int, *a: int) -> int:
+        if str(path).endswith("excl"):
+            raise PermissionError("synthetic")
+        return real_open(path, flags, *a)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(os, "open", deny)
+    result = run_probes(tmp_path)
+    assert result["probes"]["exclusive_create"]["outcome"] == "error"
+    assert result["outcome_counts"]["error"] == 1 and result["stop_required"] is True
+
+
+def test_case6_unsupported_hard_link_forces_stop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def no_link(*_a: object) -> None:
+        raise OSError("synthetic: filesystem cannot hard link")
+
+    monkeypatch.setattr(os, "link", no_link)
+    result = run_probes(tmp_path)
+    assert result["probes"]["hard_link"]["outcome"] == "unsupported"
+    assert result["stop_required"] is True
+
+
+def test_case6_trailing_dot_and_space_probe_reports_this_platform(tmp_path: Path) -> None:
+    r = fp.probe_trailing_dot_space(tmp_path)
+    assert r["outcome"] == "observed"
+    if os.name != "nt":
+        assert r["detail"] == "trailing dot/space preserved as distinct names"
 
 
 def test_case6_probe_refuses_non_empty_directory(tmp_path: Path) -> None:
