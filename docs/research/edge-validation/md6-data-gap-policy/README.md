@@ -28,6 +28,12 @@ Worked examples, where present, use SYNTHETIC numbers and are labelled as such; 
 | [OPEN-QUESTIONS.md](OPEN-QUESTIONS.md) | Questions for Quant / Rin / Architect / Operator |
 | [SIGNOFF-PACKAGE.md](SIGNOFF-PACKAGE.md) | Reviewer reading list, checklist, record-of-decision template (all PENDING) |
 | [PREREGISTRATION-TEMPLATE.md](PREREGISTRATION-TEMPLATE.md) | Template fixed before any strategy evaluation; forbids post-hoc change |
+| [GAP-INTERVAL-PARTITION.md](GAP-INTERVAL-PARTITION.md) | Gap partition into verified open, verified closed and unknown time; boundary, time-zone, calendar-conflict and disconnect precedence rules (D03, D04, D12, D17) |
+| [EVALUATION-EXPOSURE-LINEAGE.md](EVALUATION-EXPOSURE-LINEAGE.md) | Preregistration and evaluation-lineage policy: exposure ledger, gate-eligibility outcomes, disclosure (D13, D15, D16) |
+| [QUARANTINE-IDENTITY.md](QUARANTINE-IDENTITY.md) | Content-addressed quarantine register, re-entry outcomes and requalification (D09, D13) |
+
+Executable specifications (test-only reference models, not runtime enforcement; synthetic fixtures only):
+`tests/test_md6_gap_partition.py`, `tests/test_md6_exposure_lineage.py`, `tests/test_md6_quarantine_identity.py`.
 
 Reading order: this README, the register, the acceptance criteria, open questions, then the sign-off package.
 
@@ -64,12 +70,18 @@ This proposal does not import or assume behaviour of any unmerged V4 branch. Whe
    capped at 200 with a truncation flag, ticks per UTC day) and no price or spread distributions.
 2. `hard_defects` = non_monotonic, crossed, nonpositive, nonfinite. Gaps are reported, not judged.
 3. A gap is counted when the delta between consecutive ticks is strictly greater than `max_gap_ms`.
+   This strict `>` is a property of the cited tooling, not an approved policy choice: the comparison
+   direction is OPEN (MD6-D01, Q2).
    Only inter-tick gaps are measured: the report has no window bounds, so leading and trailing gaps
    (window start to first tick, last tick to window end) are not measured. See decision MD6-D06.
 4. Non-finite ticks are counted and skipped without updating the previous-tick reference, so a gap across
    a non-finite tick is measured from the last finite tick. See MD6-D11.
 5. Same-timestamp comparisons use the previous tick only, so exact duplicates that are not adjacent are not
    detected. See MD6-D10.
+7. After a non-monotonic (backwards) tick the previous-tick reference moves to that earlier timestamp, so one
+   real gap can be counted twice (SYNTHETIC: ticks at 0, 5000, 10, 5010 ms with a 1000 ms probe value give
+   `gap_count = 2`). The run is already blocked by the `non_monotonic` hard defect, but the gap list for such
+   a window is not the D01 measurement. See MD6-D01 and MD6-D18.
 6. Time conversion uses operator-declared segments with mandatory `evidence_ref`; the +10800 s offset is
    UNVERIFIED and not applied; derived fold ranges are excluded by rule. See MD6-D07.
 

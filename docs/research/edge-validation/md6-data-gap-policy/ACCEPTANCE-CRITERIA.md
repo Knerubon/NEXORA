@@ -19,10 +19,10 @@ capability profile, preregistration), by an independent reviewer, with no strate
 | A-02 | Gap list recomputes exactly | Count and listed pairs from chunk files equal report; truncation flag honoured | D01 | none |
 | A-03 | Threshold parameterization and values exist in preregistration before first strategy evaluation | Commit order; hash of file equals cited hash | D02, D15 | `max_gap_ms` OPEN |
 | A-04 | Reference distribution disjoint from evaluation and protected windows | Interval overlap check = empty; reference quantile recomputes from reference manifest | D17 | quantile level OPEN |
-| A-05 | Every over-threshold gap has a class: expected_closed, source_fault_evidenced or unexplained, with evidence id and hash | Classification output complete; invariant when strategy files are added | D03 | none |
-| A-06 | Unexplained-gap coverage within registered limit | Sum of unexplained gap duration / window duration compared with limit | D03, D09 | limit OPEN |
+| A-05 | Every gap has a partition (VERIFIED_OPEN / VERIFIED_CLOSED / UNKNOWN with calendar and offset-rule identity) and a class: unverified, expected_closed, within_threshold, source_fault_evidenced or unexplained, with evidence id and hash | Classification output complete; invariant when strategy files are added | D03, GAP-INTERVAL-PARTITION | open measure OPEN |
+| A-06 | Unexplained-gap coverage within registered limit | Sum of VERIFIED_OPEN time of unexplained gaps / VERIFIED_OPEN time of the window compared with limit; any UNKNOWN time gives UNVERIFIED | D03, D09 | limit OPEN |
 | A-07 | Calendar artifact present, hashed, non-overlapping, source and evidence recorded | Schema and overlap checks; missing calendar disables per-session option | D04 | n/a |
-| A-08 | Disconnect evidence present or declared absent | Artifact schema and hash; absent artifact makes gaps unexplained | D05 | tolerance OPEN |
+| A-08 | Disconnect evidence present or declared absent | Artifact schema and hash; absent artifact means no gap can be source_fault_evidenced | D05 | tolerance OPEN |
 | A-09 | Windows half-open in UTC; leading and trailing gaps measured | Tiling test: each tick once; durations sum to `to - from` | D06 | edge tolerance OPEN |
 | A-10 | Offset and effective dates evidenced for every window tick range | Each range covered by a segment with `evidence_ref`; otherwise status UNVERIFIED and gate use refused | D07 | offset never assumed |
 | A-11 | No accepted-window tick lies in a derived fold range | Raw-time range check | D07 | none |
@@ -32,11 +32,13 @@ capability profile, preregistration), by an independent reviewer, with no strate
 | A-15 | Same-timestamp order preserved as stored; tie-break independent of price | Permutation test shows hash change; price-independence test | D10 | consumer collapse rule OPEN |
 | A-16 | Quote validity predicates per tick match counters | Fixture per state: NaN, inf, 0, negative, crossed, zero spread | D11 | zero-spread tolerance, spread cap OPEN |
 | A-17 | Non-finite ticks have a registered effect on gap measurement | Fixture with non-finite tick inside long gap | D11 | rule OPEN |
-| A-18 | Incomplete windows excluded and listed; none dropped silently | planned = accepted + quarantined + incomplete | D12, D13 | minimum coverage OPEN |
-| A-19 | Quarantine register hashed, with decider, criteria id, timestamp | Register hash equals recorded; entries precede first evaluation or labelled post-evaluation | D13 | none |
+| A-18 | Incomplete windows excluded and listed; none dropped silently; excluded windows disclosed with UTC bounds and reason in every result family | planned = accepted + quarantined + incomplete; excluded-window list present and equal to the register | D12, D13 | minimum coverage OPEN |
+| A-19 | Quarantine register content-addressed, append-only, hash-chained and anchored; dataset-level and window-level entries carry content identity, dataset_id, aliases, lineage, criteria id, evidence, timestamp, decider, requalification history | Chain and anchor verify; entries precede first evaluation or labelled post-evaluation; missing or corrupt register gives UNVERIFIED | D09, D13 | none |
 | A-20 | Capability profile hashed per instrument and source; policy output independent of broker label | Two profiles differing only in label give identical output | D14 | none |
-| A-21 | No price/spread distribution in any report for a protected range; protected-range access log empty before preregistration | Schema check; log check | D16 | none |
+| A-21 | No price/spread distribution in any report for a protected range; every protected-range access is an exposure ledger entry | Schema check; ledger check | D16 | none |
 | A-22 | Inclusion set hash recorded with each result family | Hash present and equal to recomputed set | D13 | none |
+| A-23 | Gap partition sums to `next - prev`, is deterministic, and fails closed on UNKNOWN | `tests/test_md6_gap_partition.py` cases A1 to A10 | D03, D04, D07 | open measure OPEN |
+| A-24 | Every candidate dataset passes the content re-entry check (not QUARANTINED_MATCH, DERIVED_FROM_QUARANTINED, CANONICALIZATION_CONFLICT or UNVERIFIED); NOT_KNOWN or REQUALIFIED never implies trust | Recompute content identity from chunks and check against the anchored register; `tests/test_md6_quarantine_identity.py` C1 to C10 | D13 | none |
 
 A dataset is `acceptable for evaluation` only if every applicable Part A criterion passes and the dataset passes
 the trust rule of the tooling (independently stored anchor). A failing criterion produces an explicit
@@ -54,16 +56,17 @@ Firewall rules:
 |---|---|---|
 | B-01 | No Part A parameter may be chosen, changed or justified by any Part B quantity (P/L, win rate, expectancy, drawdown, trade list, signal output) | Preregistration cites only Part A evidence; reviewer greps the decision record for outcome references |
 | B-02 | No Part B decision may rely on a Part A value being "good enough because results look fine" | Part B records cite the signed Part A record id, not results |
-| B-03 | Part A decisions are signed and committed before Part B evaluation begins on the same instruments and windows | Commit ordering |
-| B-04 | A change to Part A after evaluation invalidates dependent Part B results for gate use (exploratory only) | Labelled in results |
-| B-05 | Holdout and backtest outputs were not consulted to derive any Part A value | Attestation in the sign-off record, plus access log |
+| B-03 | Part A decisions are signed and committed before Part B evaluation begins on the same instruments and windows | Commit ordering and exposure-ledger position: the registration precedes every exposure of its footprint and the evaluation |
+| B-04 | A change to Part A or to the strategy configuration after any exposure makes every later result on the exposed instruments, intervals or content EXPLORATORY permanently, regardless of new preregistration id, family id or dataset id; exploratory evidence can never be relabelled independent | Outcome recomputed from the exposure ledger (EVALUATION-EXPOSURE-LINEAGE.md); `tests/test_md6_exposure_lineage.py` B1 to B10 |
+| B-05 | Holdout and backtest outputs, and protected-range statistics observed at any time, were not consulted to derive any Part A value; every such observation is an exposure ledger entry | Attestation in the sign-off record, plus exposure ledger |
+| B-06 | Each result family discloses every preregistration (active, superseded, abandoned) touching its instruments and windows, with count | Recomputed from ledger; mismatch makes the family UNVERIFIED |
 
 ## Threats to validity
 
 | Threat | Mechanism | Mitigation in this proposal |
 |---|---|---|
-| Look-ahead through threshold tuning | Adjusting `max_gap_ms` or defect tolerances until a strategy looks better or a window passes | Preregistration before evaluation (D15); B-01 to B-05; reference set disjoint (D17) |
-| Survivorship by excluding windows | Quarantining windows that hurt results, keeping those that help | Criteria fixed in advance; quarantine register with independent applier; planned = accepted + quarantined + incomplete (A-18, A-19); excluded fraction reported |
+| Look-ahead through threshold tuning | Adjusting `max_gap_ms` or defect tolerances until a strategy looks better or a window passes | Preregistration before evaluation (D15); B-01 to B-05; reference set disjoint (D17); exposure ledger (EVALUATION-EXPOSURE-LINEAGE.md) |
+| Survivorship by excluding windows | Quarantining windows that hurt results, keeping those that help | Criteria fixed in advance; quarantine register with independent applier; planned = accepted + quarantined + incomplete (A-18, A-19); excluded fraction and excluded-window UTC list reported, so regime-correlated exclusion is visible |
 | Holdout leakage through quality statistics | Gap counts, tick rates or spreads on protected ranges reveal event days or regimes | D16; counts-and-coverage only; no use of protected ranges for thresholds; access log |
 | Circular calendar or reference | Calendar or reference inferred from data under test | D04, D17 forbid inference from the evaluated data |
 | Evidence selection | Classifying gaps as "quiet" using price behaviour | D03 uses calendar, heartbeat, reference rates only; determinism test with strategy files present or absent |
@@ -82,7 +85,7 @@ A reviewer can recompute from files alone, with no network, no broker, no termin
 3. Over-threshold gap list and classification from calendar, heartbeat and reference artifacts, each with hash.
 4. Time conversion segments, `evidence_ref` presence and the derived fold ranges.
 5. Preregistration file hash and commit order relative to evaluation artifacts.
-6. Quarantine register hash and inclusion set hash.
+6. Quarantine register chain and anchor, each dataset's content identity, and inclusion set hash.
 7. Capability profile hash.
 
 Not recomputable from files (must be attested and labelled): original source behaviour, whether a gap is a real

@@ -15,10 +15,18 @@ No value is proposed for any item marked OPEN.
 | Q6 | Tolerance and treatment for zero spread, same-timestamp-different-quote and exact duplicates: OPEN | D08, D10, D11 |
 | Q7 | Does a non-finite tick count as activity for gap measurement? | D11 |
 | Q8 | Consumer-side collapse rule for several quotes at one timestamp (none, first, last, reject): OPEN | D10 |
-| Q9 | Edge tolerance for leading/trailing gaps, and minimum coverage for a complete window: OPEN | D06, D12 |
+| Q9 | Edge tolerance for leading/trailing gaps, and minimum coverage for a complete window: OPEN. Also: accept or reject the structural default that edges use the same threshold as inter-tick gaps unless the preregistration says otherwise | D06, D12 |
 | Q10 | Heartbeat tolerance and what counts as admissible disconnect evidence: OPEN | D05 |
 | Q11 | Spread cap policy, if any: OPEN | D11 |
 | Q12 | Treatment of bar-only sources: out of tick gap policy, or a separate quality definition? | D14 |
+| Q14 | Per-gap open measure compared with the threshold: total VERIFIED_OPEN time (recommended structural default, because it is never smaller than the longest run) or longest contiguous VERIFIED_OPEN run? | D03, GAP-INTERVAL-PARTITION |
+| Q15 | Is a tick exactly at a session close instant a calendar contradiction (half-open default), or does a source need a closing-quote convention? | D04, GAP-INTERVAL-PARTITION |
+| QE-3 | Are Part A count-and-coverage statistics on non-protected evaluation windows exempt from exposure? Current proposal: yes (EVALUATION-EXPOSURE-LINEAGE.md X5) | D15 |
+| QE-4 | May one registration pre-declare a finite set of evaluations? Currently only the first evaluation is INDEPENDENT; repeats are EXPLORATORY | D15 |
+| QI-1 | May a superset or partially overlapping dataset be used with the quarantined windows excluded? Default until decided: blocked | D13 |
+| QI-4 | Must refused requalification attempts be logged? (Quant with Rin) | D13 |
+| QI-5 | Procedure for coincidental identical records across instruments | D13 |
+| Q13 | Stale or frozen quotes (ticks keep arriving with an unchanged quote) and quote bursts are not detected by any gap or validity rule. Should they be in MD-6 scope, and with what definition? No value proposed; until answered they are outside this policy and must not be assumed checked | D08, D11 |
 
 ## For Rin / Architect
 
@@ -27,9 +35,15 @@ No value is proposed for any item marked OPEN.
 | R1 | Calendar source (MD-5 / Q-B03): broker-published sessions, venue calendar, or other; who maintains it? | D04 |
 | R2 | Who is the independent data reviewer who applies quarantine criteria, separate from strategy authors? | D13 |
 | R3 | Which contract (ADR or architecture review) carries the quality-policy fields (policy version, preregistration id, classification fields) in the dataset manifest and quality report? Any change to frozen contracts follows AGENTS.md section 3. | D18 |
-| R4 | Does the custodian procedure for protected ranges need amendment so that gap statistics for protected ranges are produced only after preregistration? | D16 |
-| R5 | Should relation to ADR-036 Data Quality Guard thresholds (Q-DQ01) be unified with MD-6, or kept as separate research-time vs runtime policies? | D02 |
+| R4 | Does the custodian procedure for protected ranges need amendment so that every observation of protected-range statistics is appended to the exposure ledger (EVALUATION-EXPOSURE-LINEAGE.md)? | D16 |
+| R5 | Should relation to the Data Quality Guard thresholds (Q-DQ01; cited elsewhere as ADR-036, which is not present in `docs/decisions/` at base `36c90c5`, so it is a reference to unmerged material only) be unified with MD-6, or kept as separate research-time vs runtime policies? | D02 |
 | R6 | Reconcile terminology with ADR-012 completeness states (`complete|partial|unknown`). | D12 |
+| QE-1 | Where the exposure ledger lives, how its anchor is stored (signed commit or custodian store), and the final entry-hash serialization | D15 |
+| QE-2 | Who appends protected-statistics views to the ledger (custodian), and how views outside tooling get logged | D16 |
+| QE-5 | History that predates the ledger: no grandfathering is proposed, so it is UNVERIFIED. Accept? (with Quant) | D15 |
+| QI-2 | Mapping from the stored chunk format to canonical tokens (decimal string or binary float, flags format) (with Market data) | D13, D18 |
+| QI-3 | Where the quarantine register anchor is stored and who holds custody | D13 |
+| QI-6 | Canonicalization-version migration and retention of quarantined bytes (with Operator) | D13 |
 
 ## For the Operator / Market data
 
@@ -46,7 +60,9 @@ No value is proposed for any item marked OPEN.
 - MD-2 offset evidence: BLOCKED. D07 stays UNVERIFIED.
 - MD-5 calendar: BLOCKED. D04 stays OPEN.
 - MD-7 capability discovery: UNKNOWN until real extraction.
-- Tooling gaps in D18 are not authorized as code work by this proposal.
+- Tooling gaps in D18 are not authorized as code work by this proposal. This includes runtime enforcement of
+  the gap partition, exposure ledger and content-addressed quarantine register: the `tests/test_md6_*`
+  reference models are executable specifications only.
 
 ## Not decided here (belongs elsewhere)
 

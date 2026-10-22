@@ -17,7 +17,7 @@ Conventions:
 
 | ID | Topic | Class | Status | Numeric value | Sign-off |
 |---|---|---|---|---|---|
-| MD6-D01 | Definition and measurement of a gap | DQ | PROPOSED | none needed | PENDING |
+| MD6-D01 | Definition and measurement of a gap | DQ | PROPOSED | comparison direction OPEN | PENDING |
 | MD6-D02 | Parameterization of the maximum permitted gap | DQ | OPEN | `max_gap_ms` OPEN | PENDING |
 | MD6-D03 | Missing data vs legitimate low activity | DQ | PROPOSED | quiet-period bound OPEN | PENDING |
 | MD6-D04 | Session calendar source and boundaries | DQ | OPEN | n/a | PENDING |
@@ -100,16 +100,19 @@ in the master reports) are outside MD-6 and must not be inferred from it.
 - **Question:** How can a missing-data interval be told apart from a real quiet market without using P/L?
 - **Options for evidence (none sufficient alone):**
   1. Per-instrument tick-rate history from approved non-holdout reference data (D17).
-  2. Session calendar and holiday calendar (D04): a gap fully inside a closed interval is expected.
+  2. Session calendar and holiday calendar (D04): closed time inside a gap is expected and never counts as unexplained.
   3. Source heartbeat / connection logs (D05): terminal connected status, connection loss and
      reconnect records, extraction retry records.
   4. Cross-instrument concurrency: simultaneous gaps across many instruments from the same source
      suggest a source or connection fault; a gap in one instrument only suggests quiet or illiquidity.
      Use only as annotation, because correlated quiet periods exist (for example holidays).
   5. Source-reported sequence or flags, where the source provides them (capability dependent, D14).
-- **Proposed rule:** Classify each over-threshold gap into one of `expected_closed` (inside a verified
-  closed interval), `source_fault_evidenced` (overlaps a recorded disconnect or heartbeat loss),
-  `unexplained` (neither). `unexplained` gaps are never assumed to be quiet markets and never assumed
+- **Proposed rule:** First partition each gap `[prev, next)` into VERIFIED_OPEN, VERIFIED_CLOSED and
+  UNKNOWN sub-intervals per [GAP-INTERVAL-PARTITION.md](GAP-INTERVAL-PARTITION.md). Then classify it on its
+  VERIFIED_OPEN time only: `unverified` (any UNKNOWN time; no gate use), `expected_closed` (no open time),
+  `within_threshold`, `source_fault_evidenced` (a recorded disconnect overlaps the VERIFIED_OPEN part), or
+  `unexplained`. The open measure compared with the threshold (total VERIFIED_OPEN time or longest
+  contiguous VERIFIED_OPEN run) is OPEN (Q14). `unexplained` gaps are never assumed to be quiet markets and never assumed
   to be faults: they are retained as annotations and counted. Classification uses only calendar,
   heartbeat and reference-rate evidence. It must never use price movement, spread behaviour after the gap,
   signals, trades or P/L.
@@ -121,7 +124,7 @@ in the master reports) are outside MD-6 and must not be inferred from it.
   added to or removed from the input (determinism test: hash of classification output equal). Each
   classified gap cites the evidence artifact id and its hash.
 - **Data needed to decide:** a real calendar source (MD-5), heartbeat artifacts (D05), reference tick rates.
-- **Dependency:** D02, D04, D05, D17.
+- **Dependency:** D02, D04, D05, D17, GAP-INTERVAL-PARTITION.md.
 - **Owner:** Quant (rule), Market data (evidence availability).
 - **Status:** PROPOSED (maximum tolerated `unexplained` coverage = OPEN). **Sign-off:** PENDING.
 
@@ -134,13 +137,16 @@ in the master reports) are outside MD-6 and must not be inferred from it.
 - **Proposed rule:** Use an explicit, versioned, hashed calendar artifact per instrument whose source and
   evidence reference are recorded; the calendar is data, not code. A calendar inferred from the same ticks
   being judged is not allowed (circular). Session boundaries are interpreted in UTC after the verified time
-  conversion (D07). A missing or unverified calendar means gaps are classified `unexplained` and the
-  per-session option of D02 is unavailable. Calendar changes (holidays, effective dates) are versioned.
+  conversion (D07). A missing, partial, invalid or conflicting calendar makes the affected time UNKNOWN (gap
+  `unverified`, never `expected_closed`), and the per-session option of D02 is unavailable. Boundary
+  straddling, versions, venue-local conversion, overlaps and ticks inside closed time follow
+  [GAP-INTERVAL-PARTITION.md](GAP-INTERVAL-PARTITION.md). Calendar changes (holidays, effective dates) are versioned.
 - **Rationale:** Calendar source is itself an unresolved dependency (MD-5, Q-B03). Inference from the data
   under test would pass any outage as a closure.
 - **Measurable test:** Calendar artifact has a content hash recorded in the manifest or preregistration;
   recomputing from the file matches; a check that every calendar interval has start < end and no overlaps
-  per instrument; boundary instants are half-open (D06).
+  per instrument; boundary instants are half-open (D06). Overlapping open sessions are reported as a
+  calendar finding and unioned for measurement; zero-length or reversed entries reject the calendar version.
 - **Data needed to decide:** calendar source, coverage dates, DST and holiday handling per instrument.
 - **Dependency:** MD-5, Q-B03, D07.
 - **Owner:** Quant and Market data; Rin if the calendar source implies a new data adapter.
@@ -155,7 +161,8 @@ in the master reports) are outside MD-6 and must not be inferred from it.
 - **Proposed rule:** Disconnect evidence is recorded as an append-only, hashed artifact with UTC
   intervals, source id and collection method, and is referenced from the manifest or preregistration.
   Historical bulk retrieval may have no heartbeat at all: in that case the artifact is declared absent and
-  every over-threshold gap remains `unexplained` (D03); absence of evidence is never evidence of continuity.
+  no over-threshold gap can be `source_fault_evidenced` (D03). Disconnect evidence applies only to the
+  VERIFIED_OPEN part of a gap; absence of evidence is never evidence of continuity.
   Heartbeat evidence collected later than the data is labelled as such ("retrieval time, not original
   knowledge time").
 - **Rationale:** Retrieved history cannot reveal its own outages; fail-closed labelling avoids false
@@ -221,8 +228,10 @@ in the master reports) are outside MD-6 and must not be inferred from it.
   informational.
 - **Proposed rule:** Three classes. **Hard:** defects that invalidate ordering or arithmetic and cannot be
   interpreted safely: non-monotonic timestamps, crossed quotes (ask < bid), nonpositive prices, non-finite
-  quotes. These start from the existing `hard_defects` set as an observation, and no tolerance (count 0) is
-  proposed because tolerance would itself be a numeric decision (any tolerance: OPEN). **Soft:** defects
+  quotes. These start from the existing `hard_defects` set as an observation. The structural proposal is
+  that any single hard defect triggers the D09 disposition, which is equivalent to a tolerance of zero. That
+  zero is itself a numeric value: it is a PROPOSED value pending Quant answer to Q5, not an approved or frozen
+  one, and any other tolerance is OPEN. **Soft:** defects
   with a plausible benign cause whose tolerance is a Quant value: over-threshold gaps (`unexplained`),
   same-timestamp-different-quote, zero spread, exact duplicates. **Annotate:** facts recorded but not
   judged (ticks per day, `expected_closed` gaps, `source_fault_evidenced` gaps below any rejection rule).
@@ -244,8 +253,10 @@ in the master reports) are outside MD-6 and must not be inferred from it.
 - **Options:** (a) reject whole dataset on any defect; (b) reject only affected windows; (c) repair
   (interpolate, de-duplicate, sort); (d) annotate only.
 - **Proposed rule:** No repair, interpolation, sorting or silent de-duplication of stored ticks. Hard
-  defect: the affected dataset is not accepted as evidence; windows containing it are quarantined and the
-  dataset status stays `UNTRUSTED`. Soft defect over its registered tolerance (OPEN): window quarantined.
+  defect: the scope is the whole dataset. The dataset is not accepted as evidence, its status stays
+  `UNTRUSTED`, a dataset-level rejection entry (scope `DATASET`, keyed by content identity per
+  [QUARANTINE-IDENTITY.md](QUARANTINE-IDENTITY.md)) is appended to the quarantine register (D13), and every window
+  drawn from that dataset is recorded as quarantined (none is silently dropped). Soft defect over its registered tolerance (OPEN): window quarantined.
   Soft defect within tolerance: annotated and carried into results as a covariate field of the run, not
   hidden. Decisions are produced by a documented deterministic procedure and listed in a quarantine register
   (D13), never decided per run by inspecting results.
@@ -255,7 +266,7 @@ in the master reports) are outside MD-6 and must not be inferred from it.
   the number of excluded windows and excluded coverage fraction are reported; accepted plus quarantined
   windows equals the planned windows (no window vanishes).
 - **Data needed to decide:** tolerances (OPEN).
-- **Dependency:** D08, D13.
+- **Dependency:** D08, D13, QUARANTINE-IDENTITY.md.
 - **Owner:** Quant (policy), Rin if governance is affected.
 - **Status:** PROPOSED. **Sign-off:** PENDING.
 
@@ -301,6 +312,8 @@ in the master reports) are outside MD-6 and must not be inferred from it.
 - **Owner:** Quant.
 - **Status:** PROPOSED (zero-spread tolerance, spread cap, non-finite-activity rule: OPEN).
   **Sign-off:** PENDING.
+- **Not covered:** stale/frozen quotes and quote bursts are outside this rule set (no gap or validity check
+  detects them). Scope and definition are deferred to the Quant as Q13 in [OPEN-QUESTIONS.md](OPEN-QUESTIONS.md).
 
 ## MD6-D12 Incomplete windows
 
@@ -309,13 +322,18 @@ in the master reports) are outside MD-6 and must not be inferred from it.
   minimum coverage.
 - **Proposed rule:** A window is `complete` only if it has a verified manifest, contiguous chunks, no
   truncated gap list affecting classification (or the full list is recomputed from files), edges measured
-  per D06, and coverage above a registered minimum (OPEN). Otherwise it is `incomplete` and is excluded
+  per D06, and coverage above a registered minimum (OPEN). Coverage is `(verified_open_ms - open time of
+  gaps classified unexplained or source_fault_evidenced) / verified_open_ms` for the window; any UNKNOWN time
+  makes coverage UNVERIFIED, and a zero denominator is `NO_VERIFIED_OPEN_TIME` (GAP-INTERVAL-PARTITION.md). Otherwise it is `incomplete` and is excluded
   from performance evaluation, never filled, extrapolated or truncated to a clean subperiod after seeing
   results. The end-of-window rule (Q-B02 in master reports) is a separate, trading-side decision and is not
   decided here.
 - **Rationale:** Choosing the usable subperiod after seeing outcomes is the classic survivorship path.
 - **Measurable test:** `verify_dataset` equivalent (files only) recomputation yields the same status;
-  planned windows vs completed windows listed; excluded fraction reported by instrument.
+  planned windows vs completed windows listed; excluded fraction reported by instrument; every result family
+  carries the list of excluded windows with their UTC bounds and exclusion reason, so a reviewer can see
+  whether exclusions cluster in particular market periods (outcome-blind rules can still be
+  regime-correlated). The list is disclosed, never used to re-select windows.
 - **Data needed to decide:** minimum coverage (OPEN).
 - **Dependency:** D06, D09, D13.
 - **Owner:** Quant.
@@ -325,17 +343,27 @@ in the master reports) are outside MD-6 and must not be inferred from it.
 
 - **Question:** By what criteria is a dataset or window excluded, and who is authorized to decide?
 - **Proposed rule:** Exclusion criteria are exactly those in preregistration (D15). A quarantine register
-  (hashed, append-only, committed) records window id, instrument, defect class, evidence ids, decision date
-  and decider. The deciding authority is the Quant approver for criteria and the independent data reviewer
+  (append-only, hash-chained, anchored by entry count and head hash stored independently, committed)
+  records dataset-level and window-level decisions keyed by canonical `content_identity` (canonicalization
+  version, SHA-256, ordered content hash, multiset fingerprint, record count) and per-record hashes, plus
+  `dataset_id`, previous aliases, declared lineage, window id, instrument, defect class and preregistered
+  criteria id, evidence ids, decision timestamp, post-evaluation label, decider and requalification history,
+  as specified in [QUARANTINE-IDENTITY.md](QUARANTINE-IDENTITY.md). Labels alone never key an entry. The deciding authority is the Quant approver for criteria and the independent data reviewer
   (not the strategy author) for application; the author of a strategy run may not add or remove register
   entries. Decisions after the first strategy evaluation are labelled `post-evaluation` and any result
   computed on a changed inclusion set is invalid for gates G4/G5 and must be reported as exploratory.
-  Release from quarantine requires new evidence (new retrieval, calendar, or offset evidence) and a new
-  dataset identity, not reinterpretation.
+  A new dataset identity never releases quarantined content: re-entry is checked by content
+  (QUARANTINED_MATCH, DERIVED_FROM_QUARANTINED). Release is only by an appended requalification entry with
+  new evidence (new retrieval, calendar or offset evidence), decided by the independent data reviewer or
+  Quant approver who is neither the submitter nor a strategy author; it applies to one specific content
+  identity and never grants TRUSTED. A missing or corrupt register makes every check UNVERIFIED. Release
+  from quarantine does not reset exposure: exposure follows instrument, interval and content identity
+  through lineage ([EVALUATION-EXPOSURE-LINEAGE.md](EVALUATION-EXPOSURE-LINEAGE.md) X1 to X3).
 - **Rationale:** Separation of duties and a visible register prevent silent cherry-picking.
 - **Measurable test:** Register entries reference preregistered criteria ids; every register entry's
   decision timestamp precedes the first strategy-evaluation timestamp or is labelled post-evaluation;
-  inclusion set hash is recorded with every result.
+  inclusion set hash is recorded with every result; the reference tests in
+  `tests/test_md6_quarantine_identity.py` (C1 to C10) pass.
 - **Data needed to decide:** none; governance only.
 - **Dependency:** D09, D15; AGENTS.md review independence.
 - **Owner:** Quant (criteria), independent data reviewer (application), Rin (authority questions).
@@ -367,14 +395,24 @@ in the master reports) are outside MD-6 and must not be inferred from it.
 - **Question:** When and how are the thresholds and rules fixed?
 - **Proposed rule:** All MD-6 parameters and rules above are written into a preregistration record
   ([template](PREREGISTRATION-TEMPLATE.md)) and committed with a hash/commit reference before the first
-  strategy evaluation on the affected instruments and windows. After that, changes are forbidden; a
-  change requires a new preregistration id, a new dataset identity or evaluation family, and labels
-  all earlier results superseded.
+  strategy evaluation on the affected instruments and windows. After that, changes are forbidden. A change
+  requires a new preregistration id and labels all earlier results superseded. A new preregistration id,
+  dataset identity or evaluation family never resets exposure. Gate eligibility (INDEPENDENT / EXPLORATORY /
+  UNVERIFIED / REJECTED_RETROSPECTIVE) is computed from the hash-chained exposure ledger in
+  [EVALUATION-EXPOSURE-LINEAGE.md](EVALUATION-EXPOSURE-LINEAGE.md). Evidence is INDEPENDENT only if the
+  preregistration was committed, by ledger position, before any exposure of any part of its windows or
+  content (including overlapping windows and lineage-related datasets), and before the evaluation.
+  Otherwise it is EXPLORATORY permanently. Missing or conflicting exposure history is UNVERIFIED. Every
+  result family lists all preregistrations touching its instruments and windows, including superseded and
+  abandoned ones, with a count.
 - **Rationale:** Prevents threshold tuning toward desired results.
 - **Measurable test:** Git ordering shows the preregistration commit precedes every evaluation artifact
-  that cites it; the cited hash equals the hash of the committed file.
+  that cites it; the cited hash equals the hash of the committed file. The exposure ledger verifies (hash
+  chain, contiguous positions, independent anchor, copies agree); the outcome of each evaluation is
+  recomputed from the ledger and lineage alone; family disclosure equals the ledger-derived list and count.
 - **Data needed to decide:** none.
-- **Dependency:** G3 baseline freeze ordering (config hash before holdout).
+- **Dependency:** G3 baseline freeze ordering (config hash before holdout);
+  EVALUATION-EXPOSURE-LINEAGE.md; QUARANTINE-IDENTITY.md (content identity, lineage).
 - **Owner:** Quant, Architect; Rin for freeze authority (this proposal does not freeze).
 - **Status:** PROPOSED. **Sign-off:** PENDING.
 
@@ -383,13 +421,16 @@ in the master reports) are outside MD-6 and must not be inferred from it.
 - **Question:** Can quality statistics on a protected holdout leak information?
 - **Proposed rule:** For any protected range, only the existing count-and-coverage fields may be produced,
   and only by the custodian procedure; no price, spread or return distributions. Gap threshold values and
-  reference distributions are never computed from protected-range data. Gap statistics for protected ranges
-  are not consulted before preregistration of thresholds. Any new report field must be reviewed for holdout
+  reference distributions are never computed from protected-range data. Any observation of any statistic on a
+  protected range, at any time, including after a preregistration, is an exposure event in the exposure
+  ledger and makes every later preregistration touching that range EXPLORATORY for that range
+  ([EVALUATION-EXPOSURE-LINEAGE.md](EVALUATION-EXPOSURE-LINEAGE.md) X4). Any new report field must be reviewed for holdout
   leakage before use (D18).
 - **Rationale:** Even gap counts per day reveal volatility regimes and event days; thresholds set after
   seeing them carry information.
-- **Measurable test:** Report schema check: no price-derived key; protected-range access log empty before
-  preregistration timestamp; reference-distribution input manifest excludes protected ranges.
+- **Measurable test:** Report schema check: no price-derived key; every protected-range access is a ledger
+  entry; no protected-range access precedes, in ledger position, any preregistration whose evidence is
+  labelled INDEPENDENT; reference-distribution input manifest excludes protected ranges.
 - **Data needed to decide:** the protected-range declaration (exists in tooling as a required input).
 - **Dependency:** G3, D15.
 - **Owner:** Custodian / Rin; Quant (acceptance).
@@ -403,7 +444,7 @@ in the master reports) are outside MD-6 and must not be inferred from it.
 - **Proposed rule:** The reference must be a named, hashed, non-holdout period disjoint from every
   evaluation window, with its own manifest and passing hard-defect checks, from the same source and a
   comparable calendar regime. Quantile definition (estimator), level, minimum sample size and per-session
-  stratification are OPEN. Reference gaps are computed on `expected_open` intervals only.
+  stratification are OPEN. Reference gaps are computed on `expected_open` (= VERIFIED_OPEN, GAP-INTERVAL-PARTITION.md) time only.
 - **Rationale:** Separation of the calibration set from the evaluation set.
 - **Measurable test:** Interval-disjointness check between reference and evaluation windows; reproducibility
   of the reference quantile from the reference manifest alone.
@@ -419,7 +460,8 @@ in the master reports) are outside MD-6 and must not be inferred from it.
   window bounds and leading/trailing gaps; non-adjacent duplicate detection; explicit treatment of
   non-finite ticks in gap measurement; gap classification fields (D03) with evidence references;
   uncapped or separately stored full gap list for verification; policy version and preregistration id in the
-  report.
+  report; no gap measurement across a non-monotonic tick (README observed fact 7: the cited tooling measures
+  from the regressed tick and can double-count).
 - **Rationale:** The policy cannot be tested end to end without them, and none may be assumed to exist.
 - **Measurable test:** Each field is covered by a SYNTHETIC fixture before use for any gate.
 - **Dependency:** any tooling change is its own task under AGENTS.md workflow; this proposal does not

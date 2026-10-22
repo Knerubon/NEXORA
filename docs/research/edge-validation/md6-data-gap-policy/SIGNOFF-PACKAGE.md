@@ -18,9 +18,11 @@ has no standing under this policy.
 3. [ACCEPTANCE-CRITERIA.md](ACCEPTANCE-CRITERIA.md): Part A criteria, Part B firewall, threats, reproducibility.
 4. [OPEN-QUESTIONS.md](OPEN-QUESTIONS.md).
 5. [PREREGISTRATION-TEMPLATE.md](PREREGISTRATION-TEMPLATE.md).
-6. Repository authority: `docs/requirements.md`, `docs/architecture.md`, `AGENTS.md` sections 0, 3, 9, 11;
+6. [GAP-INTERVAL-PARTITION.md](GAP-INTERVAL-PARTITION.md), [EVALUATION-EXPOSURE-LINEAGE.md](EVALUATION-EXPOSURE-LINEAGE.md),
+   [QUARANTINE-IDENTITY.md](QUARANTINE-IDENTITY.md) and their `tests/test_md6_*` executable specifications.
+7. Repository authority: `docs/requirements.md`, `docs/architecture.md`, `AGENTS.md` sections 0, 3, 9, 11;
    ADR-012, ADR-014, ADR-019.
-7. References only (not authority): PR #93 head `e74ad035e7f21aa07528965da6ebe190c0512793`
+8. References only (not authority): PR #93 head `e74ad035e7f21aa07528965da6ebe190c0512793`
    (`packages/nexora/market_history/quality.py`, `clock.py`, `convert.py`, market-history README) and the master
    readiness reports on `origin/claude/edge-readiness-master-20261020-v1`.
 
@@ -33,19 +35,19 @@ has no standing under this policy.
 | 3 | Data-quality (Part A) and trading-performance (Part B) decisions are separate; no outcome input to Part A | PENDING |
 | 4 | Gap definition, comparison direction, edge semantics acceptable (D01, D06) | PENDING |
 | 5 | Parameterization structure acceptable (D02, D17) | PENDING |
-| 6 | Missing-vs-quiet evidence hierarchy acceptable and free of P/L (D03, D04, D05) | PENDING |
+| 6 | Missing-vs-quiet evidence hierarchy and gap interval partition acceptable and free of P/L (D03, D04, D05, GAP-INTERVAL-PARTITION.md) | PENDING |
 | 7 | UTC / offset / fold treatment fail-closed; +10800 s still UNVERIFIED (D07) | PENDING |
 | 8 | Severity classes and dispositions acceptable (D08, D09, D10, D11) | PENDING |
-| 9 | Incomplete window and quarantine governance acceptable, separation of duties (D12, D13) | PENDING |
+| 9 | Incomplete window and quarantine governance acceptable, separation of duties, content-addressed quarantine and requalification (D12, D13, QUARANTINE-IDENTITY.md) | PENDING |
 | 10 | Capability profile broker-agnostic (D14) | PENDING |
-| 11 | Preregistration and holdout custody acceptable (D15, D16) | PENDING |
+| 11 | Preregistration, holdout custody and exposure lineage acceptable (D15, D16, EVALUATION-EXPOSURE-LINEAGE.md) | PENDING |
 | 12 | Tooling requirements (D18) correctly separated from this proposal | PENDING |
 | 13 | Reviewer attests no holdout or backtest output was used to evaluate this proposal | PENDING |
 | 14 | Independence: reviewer is not the author's lineage | PENDING |
 
 ## Questions the reviewer must answer
 
-At minimum Q1 to Q12 of [OPEN-QUESTIONS.md](OPEN-QUESTIONS.md), plus: for each decision D01 to D18, accept,
+At minimum Q1 to Q15, QE-3, QE-4, QI-1, QI-4 and QI-5 of [OPEN-QUESTIONS.md](OPEN-QUESTIONS.md), plus: for each decision D01 to D18, accept,
 accept with change, reject or defer.
 
 ## Record-of-decision template (to be completed by the Quant approver only)
