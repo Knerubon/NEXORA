@@ -2,10 +2,11 @@
 
 | Field | Value |
 |---|---|
-| Status | DRAFT readiness package. Documentation plus an offline fixture/mock harness. Not reviewed independently. |
+| Status | DRAFT readiness package, remediation V1 after Independent Reviewer B (REQUEST CHANGES: 4 MAJOR, 7 MINOR). Documentation plus an offline fixture/mock harness. Remediation is not yet independently re-reviewed. |
 | Class | Docs and CLOUD-SAFE tests. The steps it describes are WINDOWS-INTEGRATION and are **not** authorized by this PR. |
 | Base | `origin/main` `36c90c59e2aa4f0d221c9c468a8379c5f57cbb87` |
-| Extractor read (read-only) | `origin/claude/market-history-fix-v3` at `e74ad035e7f21aa07528965da6ebe190c0512793` (stacked PRs #89, #91, #92, #93) |
+| Extractor read (read-only) | PR #96 `claude/market-history-fix-v4` at `d6a7cda72a88600e2ccf6554605f1c50478893ea`, stacked on `claude/market-history-fix-v3` at `e74ad035e7f21aa07528965da6ebe190c0512793` (PRs #89, #91, #92, #93). Read with `git show` only. |
+| Real-half readiness | **Not declared.** TRUSTED is BLOCKED (DEP-01) and eight real-half steps are BLOCKED (DEP-03); see [DEPENDENCY-REGISTER.md](DEPENDENCY-REGISTER.md). Windows/MT5: UNVERIFIED. |
 | Parent issue | EDGE-VALIDATION-1 (#77) |
 
 ## Purpose
@@ -31,23 +32,29 @@ assertions, and so that every Windows guarantee that is **not** proven is writte
 |---|---|
 | [INTEGRATION-MATRIX.md](INTEGRATION-MATRIX.md) | The seven cases: steps, expected results, evidence fields, pass/fail, what each does NOT prove |
 | [WINDOWS-EXECUTION-CHECKLIST.md](WINDOWS-EXECUTION-CHECKLIST.md) | Operator-controlled step list with go/no-go stops; no step in this wave starts a terminal |
-| [EVIDENCE-TEMPLATE.md](EVIDENCE-TEMPLATE.md) | Evidence record fields, with [evidence-record.template.json](evidence-record.template.json) and [evidence-record.schema.json](evidence-record.schema.json) |
-| [UNSUPPORTED-GUARANTEES.md](UNSUPPORTED-GUARANTEES.md) | What cannot be promised on Windows/NTFS/shares/reparse points/antivirus/locking, and what is Linux-cloud-tested only |
-| `tests/windows_integration_readiness/` | Offline pytest harness (mocks, fixtures, filesystem probes) |
+| [EVIDENCE-TEMPLATE.md](EVIDENCE-TEMPLATE.md) | Evidence record fields and fail-closed rules, with [evidence-record.template.json](evidence-record.template.json) and the generated [evidence-record.schema.json](evidence-record.schema.json); `evidence_validator.py` is authoritative |
+| [V4-CUSTODY-COMPATIBILITY.md](V4-CUSTODY-COMPATIBILITY.md) | The seven V4 custody and writer-lock stages as read in PR #96, and why TRUSTED is unreachable today |
+| [ORACLE-SPEC.md](ORACLE-SPEC.md) | The specification-based duplicate oracle, its golden vectors, and which reference functions are restatements of the extractor |
+| [DEPENDENCY-REGISTER.md](DEPENDENCY-REGISTER.md) | DEP-01..05 and extractor defects that need separate ownership |
+| [UNSUPPORTED-GUARANTEES.md](UNSUPPORTED-GUARANTEES.md) | What cannot be promised on Windows/NTFS/shares/reparse points/antivirus/locking/custody, and what is Linux-cloud-tested only |
+| `tests/windows_integration_readiness/` | Offline pytest harness: mocks, fixtures, filesystem probes, evidence validator, custody gate, execution contract, duplicate oracle. The directory conftest blocks network access and `MetaTrader5` imports. |
 
 ## Dependency and sequencing constraint (read this first)
 
 The extractor under test (`nexora.market_history`, `scripts/extract_market_history.py`,
-`scripts/verify_market_history.py`) is **not on `main`**. It lives in the unmerged stack
-#89 -> #91 -> #92 -> #93 (head `e74ad035...` when read), and Track A is changing it concurrently.
+`scripts/verify_market_history.py`, `scripts/custody_market_history.py`) is **not on `main`**. It
+lives in the unmerged stack #89 -> #91 -> #92 -> #93 (`e74ad035...`) -> #96 (`d6a7cda7...` when
+read), and PR #96 itself has an open REQUEST CHANGES review.
 Consequences:
 
 1. The harness here is self-contained and **does not import `nexora.market_history`**. It carries an
-   independent *reference model* of the contract (the oracle) plus golden vectors. Passing it proves
-   the harness expectations are self-consistent and the probes work; it proves **nothing** about the
-   extractor's code.
+   *reference model* of the contract plus golden vectors. Independence is import-level for the
+   whole model, but several functions RESTATE the extractor's logic; ORACLE-SPEC.md lists which ones
+   and the independent cross-check for each (hand-derived vectors, a brute-force fold simulation,
+   and a specification-based duplicate oracle). Passing it proves the harness expectations are
+   self-consistent and the probes work; it proves **nothing** about the extractor's code.
 2. The API names, allowlist and behaviours quoted in these documents were read from the stacked code
-   at `e74ad035e7f21aa07528965da6ebe190c0512793`. They **must be re-verified against the named SHA**
+   at `d6a7cda72a88600e2ccf6554605f1c50478893ea` (PR #96; unchanged from `e74ad035...` where noted). They **must be re-verified against the named SHA**
    that will actually run (checklist step A3). Where the stack changes, this package must be
    re-pointed before use.
 3. Before real-data execution the stack must be reviewed and merged (or this harness re-pointed to
