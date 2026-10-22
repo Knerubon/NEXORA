@@ -13,9 +13,9 @@ record verifies it.
 | `O_NOFOLLOW` | Does not exist on Windows (`os.O_NOFOLLOW` absent). Refusal of symlinks must rely on `lstat`/`fstat` checks, which leave a check-to-open window. | Linux-cloud-tested only; Windows NOT VERIFIED |
 | Symlinks | Creation needs privilege or Developer Mode; behaviour of the extractor when it is unavailable is untested on Windows. | NOT VERIFIED |
 | Reparse points / junctions | A junction is a reparse point that `lstat` may not report as a symlink on all Python builds; it could redirect `--out`, chunk or lock paths outside the folder. No automated check exists in the cloud. | NOT VERIFIED (manual probe only) |
-| `os.rename` onto existing file | Raises on Windows, replaces on POSIX. Stale-lock reaping and any rename-based claim differ by platform. | Linux-cloud-tested only |
+| `os.rename` onto existing file | Raises on Windows, replaces on POSIX. Any rename-based claim differs by platform. (The V3 rename-based lock reaper is gone at V4.) | Linux-cloud-tested only |
 | Deleting/renaming a file with an open handle | Refused on Windows unless opened with delete-sharing; POSIX allows it. Cleanup and lock release can fail or be deferred. Antivirus/indexer handles make this intermittent. | NOT VERIFIED |
-| File locking | The writer lock is a cooperative `O_EXCL` file, not an OS lock. It does not stop other programs, other users, or a process that ignores it. Pid-liveness on Windows without `psutil` is undecidable and is treated as alive (fail closed), so a stale lock may need manual removal. | Linux-cloud-tested only |
+| File locking (V4, PR #96 `lock.py` at `d6a7cda7...`) | An OS advisory lock on a held descriptor: `flock` on POSIX, a one-byte `msvcrt.locking` range on Windows. Advisory only: it does not stop programs that do not take it. Nothing is ever reaped; an unverifiable or foreign owner is `writer_lock_held` (fail closed). Deleting `.writer.lock` from outside while a run holds it admits a second writer (PR #96 Reviewer A F6), so no procedure here removes a lock while a run could be active. The Windows `msvcrt` path is implemented but has never been executed. | Linux ext4 cloud-tested (PR #96); Windows NOT VERIFIED |
 | Directory `fsync` | A no-op or unsupported on Windows; directory-entry durability after a crash is unproven. | NOT VERIFIED |
 | Power-loss durability | No test removes power or kills the volume; fsync semantics of the storage stack and drive caches are not verified. | NOT VERIFIED |
 | Read-only attribute / `chmod 0o444` | On Windows only toggles the read-only attribute; ACLs and administrators can still modify. Immutability is detection-by-hash, not enforcement. | NOT VERIFIED |
@@ -37,7 +37,10 @@ record verifies it.
 | Read-only account | Operator attestation; the tool cannot see account permissions. |
 | Other processes | The allowlist gate constrains this tool only, not other software using the terminal or account. |
 | `MetaTrader5` package internals | Not audited; the gate limits what this code calls, not what the package does internally. |
-| Independent store | Integrity and independence of the anchor store is the operator's responsibility and is not checked. |
+| Independent store | V4 hash-chains the evidence store, which detects edits but not who appended an entry. Integrity, append-only behaviour and access control of the store are process controls, not checked here. |
+| Custodian identity | Approvals carry a declared identity string; there is no signature (PR #96 Reviewer A F1). A store appender can forge an approval. Distinctness checks catch disguised duplicates of one declared name, not impersonation. |
+| TRUSTED on Windows | At V4 `fsutil.PROVEN_PLATFORMS = {"linux"}`: a dataset extracted on Windows, or verified on Windows, cannot be TRUSTED. BLOCKED (DEP-01), not a defect of this package. |
+| Request-bound clock interpretation | The extractor passes raw broker-clock milliseconds to `copy_ticks_range` as datetimes (Reviewer B I1). If the terminal interprets the bounds differently, every chunk is shifted and the half-open filter silently drops ticks. Case 1 now requires first/last `time_msc` inside the requested raw window. |
 
 ## What the cloud harness does and does not establish
 
