@@ -1,6 +1,17 @@
-"""Independent restatement of the contract the real extractor must meet (from the runbook and the
-documented MT5 behaviour). It is the ORACLE of this harness, not the extractor: passing against it
-proves the harness expectations are self-consistent, nothing about `nexora.market_history`.
+"""Reference model of the contract the real extractor must meet. Passing against it proves the
+harness expectations are self-consistent, nothing about `nexora.market_history`.
+
+Independence is NOT uniform (finding B-M4); ORACLE-SPEC.md section 5 classifies every function:
+  * RESTATED from the extractor (shares its assumptions; a shared error passes both):
+    `decimal_text`, `classify_quote`, `to_utc_msc`, `derived_fold_ranges`, `order_report`.
+    Each has an independent cross-check elsewhere: hand-written vectors (`vectors.py`), the
+    brute-force fold simulation (`test_oracle_independence.py`), and the specification-based
+    duplicate oracle (`duplicate_oracle.py`), which exposes `order_report`'s adjacency blind spot.
+  * SPECIFIED here (behaviour the extractor does not define, or defines differently, so the
+    package states its own rule): `check_window`, `split_around_folds`, `check_time_fields`,
+    the offset bound in `validate_segments`.
+Refusal codes use the extractor's names as read at PR #96 d6a7cda (minor F5) so a real-half
+result can be compared code for code; `basis` (`unsupported_offset_basis`) is not modelled.
 
 Pure Python, no I/O, no MT5, no `nexora` imports.
 """
@@ -83,6 +94,10 @@ def classify_quote(bid: float, ask: float) -> str:
 # ---- cases 3 and 4 --------------------------------------------------------------------------
 Segment = tuple[int, int | None, int, str]  # from_raw, to_raw (excl.)|None, offset_s, evidence_ref
 
+# Python's own bound for a UTC offset (datetime.timezone requires |offset| < 24 h). Not a broker
+# claim and not a quality threshold; the extractor's TimeSegment has no bound (EXT-DEF-2).
+MAX_ABS_OFFSET_S = 86_399
+
 
 def validate_segments(segments: Sequence[Segment]) -> None:
     if not segments:
@@ -94,9 +109,19 @@ def validate_segments(segments: Sequence[Segment]) -> None:
             raise ReadinessError("offset_evidence_required")
         if t is not None and t <= f:
             raise ReadinessError("empty_segment")
+        if abs(off) > MAX_ABS_OFFSET_S:
+            raise ReadinessError("offset_out_of_range", str(off))
     for prev, nxt in zip(segments, segments[1:], strict=False):
-        if prev[1] is None or prev[1] > nxt[0] or nxt[0] < prev[0]:
-            raise ReadinessError("segments_overlap_or_unsorted")
+        if nxt[0] < prev[0]:
+            raise ReadinessError("segments_not_sorted")
+        if prev[1] is None or prev[1] > nxt[0]:
+            raise ReadinessError("segments_overlap")
+
+
+def check_time_fields(time_s: int, time_msc: int) -> None:
+    """MT5 rows carry both `time` (s) and `time_msc` (ms); they must agree (floor division)."""
+    if type(time_s) is not int or type(time_msc) is not int or time_s != time_msc // 1000:
+        raise ReadinessError("time_fields_conflict", f"{time_s}/{time_msc}")
 
 
 def to_utc_msc(raw: int, segments: Sequence[Segment]) -> int:
@@ -119,6 +144,19 @@ def derived_fold_ranges(segments: Sequence[Segment]) -> tuple[tuple[int, int], .
     return tuple(out)
 
 
+def _covered(segments: Sequence[Segment], lo: int, hi: int) -> bool:
+    """[lo, hi) lies inside the union of declared segments (gaps are not covered)."""
+    cursor = lo
+    for f, t, _, _ in segments:
+        if f > cursor:
+            return False
+        if t is None or t > cursor:
+            cursor = hi if t is None else t
+        if cursor >= hi:
+            return True
+    return cursor >= hi
+
+
 def check_window(
     segments: Sequence[Segment],
     lo: int,
@@ -126,17 +164,30 @@ def check_window(
     *,
     attested_ambiguous: Sequence[tuple[int, int]] = (),
 ) -> None:
-    for a, b in (*derived_fold_ranges(segments), *attested_ambiguous):
+    validate_segments(segments)
+    if type(lo) is not int or type(hi) is not int or hi <= lo:
+        raise ReadinessError("invalid_extraction_request", f"{lo}-{hi}")
+    if not _covered(segments, lo, hi):
+        raise ReadinessError("time_conversion_does_not_cover_window", f"{lo}-{hi}")
+    for a, b in derived_fold_ranges(segments):
         if a < hi and lo < b:
-            raise ReadinessError("window_touches_fold_range", f"{a}-{b}")
+            raise ReadinessError("window_touches_derived_fold_range", f"{a}-{b}")
+    for a, b in attested_ambiguous:
+        if a < hi and lo < b:
+            raise ReadinessError("window_touches_ambiguous_raw_range", f"{a}-{b}")
 
 
 def split_around_folds(
-    segments: Sequence[Segment], lo: int, hi: int
+    segments: Sequence[Segment],
+    lo: int,
+    hi: int,
+    *,
+    attested_ambiguous: Sequence[tuple[int, int]] = (),
 ) -> tuple[tuple[int, int], ...]:
-    """Windows covering [lo, hi) minus every derived fold range (repeated stretch excluded)."""
+    """Windows covering [lo, hi) minus every derived fold range and every attested ambiguous
+    range, so each returned window passes `check_window` with the same attestation."""
     cursor, out = lo, []
-    for a, b in sorted(derived_fold_ranges(segments)):
+    for a, b in sorted((*derived_fold_ranges(segments), *attested_ambiguous)):
         if b <= cursor or a >= hi:
             continue
         if a > cursor:
@@ -187,6 +238,10 @@ def content_sha256(bodies: Iterable[bytes]) -> str:
 
 
 def order_report(ticks: Sequence[Tick]) -> dict[str, int]:
+    """RESTATED from the extractor's adjacency-only quality counting (quality.py at e74ad03 and
+    d6a7cda): compares each tick with its predecessor only, and ignores flags. Kept to document
+    the extractor's behaviour; it MISSES non-adjacent duplicates. The oracle for duplicates is
+    `duplicate_oracle.classify` (ORACLE-SPEC.md)."""
     nm = dup = same_ts = 0
     for p, c in zip(ticks, ticks[1:], strict=False):
         if c[0] < p[0]:
@@ -201,16 +256,23 @@ def order_report(ticks: Sequence[Tick]) -> dict[str, int]:
 
 # ---- case 7 ---------------------------------------------------------------------------------
 class ReadOnlyGate:
-    """Attribute gate: only allowlisted names reach the wrapped module; shutdown on every path."""
+    """Attribute gate: only allowlisted names reach the wrapped module; shutdown on every path.
+    The module lives only in a closure, never in an attribute, so no attribute of the gate hands
+    out the raw module (minor F8: the earlier `_m` attribute did)."""
+
+    __slots__ = ("_fetch",)
 
     def __init__(self, module: Any, allowed: frozenset[str]) -> None:
-        object.__setattr__(self, "_m", module)
-        object.__setattr__(self, "_allowed", allowed)
+        def fetch(name: str) -> Any:
+            if name not in allowed:
+                raise ReadinessError("mt5_call_not_allowlisted", name)
+            return getattr(module, name)
+
+        object.__setattr__(self, "_fetch", fetch)
 
     def __getattr__(self, name: str) -> Any:
-        if name not in self._allowed:
-            raise ReadinessError("mt5_call_not_allowlisted", name)
-        return getattr(self._m, name)
+        fetch: Callable[[str], Any] = object.__getattribute__(self, "_fetch")
+        return fetch(name)
 
     def __setattr__(self, name: str, value: Any) -> None:
         raise ReadinessError("read_only_gate_is_immutable")
