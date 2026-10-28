@@ -46,10 +46,25 @@ Because several cases have BLOCKED steps, no case can reach `PASS` and the evide
 `overall_result` cannot be `PASS` until DEP-01 and DEP-03 are resolved. **Real-half readiness is not
 declared by this package.**
 
-Every `scripts/extract_market_history.py` invocation is first checked offline with
-`execution_contract.plan_invocation` (flags as read at `d6a7cda7...`; required flags, exactly one of
-`--protected-utc-ranges`/`--no-protected-ranges`, the symbol verbatim from the pre-registration, an
-absolute, empty `--out` outside the checkout, and the reviewed extractor SHA and version).
+Every `scripts/extract_market_history.py` invocation is first checked offline with the reviewed
+planning CLI below (finding N4). It wraps `execution_contract.plan_invocation` and checks the flags
+as read at `d6a7cda7...`: required flags, exactly one of `--protected-utc-ranges`/
+`--no-protected-ranges`, the symbol verbatim from the pre-registration, the reviewed extractor SHA and
+version, and an absolute, empty `--out` whose canonical path (symlinks and `..` resolved) is outside
+the canonical checkout. `--repo-root` is mandatory. The command prints one JSON object, runs nothing,
+contacts no terminal and exits 0 only for a valid plan. The operator types it; no Python is written.
+
+Planning command (one run per extractor command line; `test_r4_execution_contract.py` runs this exact
+line):
+
+```
+python -m tests.windows_integration_readiness.execution_contract plan --repo-root <checkout> --provider mt5 --preregistered-symbol <symbol> --extractor-sha <head> --expected-extractor-sha <SHA> --extractor-version nexora.market-history-extractor/5 --manifest-schema nexora.market-history/4 -- <extractor-arguments>
+```
+
+`<checkout>` is the disposable checkout of A3, `<head>` its `git rev-parse HEAD`, `<SHA>` the SHA named
+in A1, and `<extractor-arguments>` every argument that will be passed to
+`scripts/extract_market_history.py`. The planning step itself needs no dependency; the extraction it
+plans is still phase C, and every real-half step marked BLOCKED above stays BLOCKED (DEP-03).
 
 ## Phase A - authorization and checkout (no terminal)
 
@@ -70,7 +85,7 @@ absolute, empty `--out` outside the checkout, and the reviewed extractor SHA and
 | B1 | `uv run --no-sync pytest -q tests/windows_integration_readiness` on the node. | STOP on any failure; skips must each have their stated reason. |
 | B2 | `python -m tests.windows_integration_readiness.filesystem_probes <empty dir on the dataset volume>`; attach the JSON (case 6). Resolve each `manual_required` probe by attaching its evidence (`fsutil fsinfo volumeinfo <drive>:` output; the junction probe of matrix case 6 step 3). Record antivirus/indexer state. | STOP while `stop_required` is true and any `manual_required` probe lacks attached evidence; STOP on any `error` outcome; STOP if the hard-link probe is `unsupported`, or the volume is a network share, cloud-synced folder, FAT or exFAT. `verified_on_windows_ntfs` is always `false`: the probes record, they do not verify. |
 | B3 | Obtain the broker clock rule **independently of ticks** (case 3 step 1) and the DST fall-back list (case 4 step 1); assign `evidence_ref`s; write `time_conversion.json` and `clock_attestation.json` per the runbook. | STOP if no independent evidence exists. Never default an offset. |
-| B4 | Check every planned extractor command line with `execution_contract.plan_invocation`. | STOP on any `ContractError`. |
+| B4 | Check every planned extractor command line with the planning command above (`execution_contract plan`); attach each printed JSON. | STOP on any exit code other than 0 (`"ok": false` names the refusal code). |
 
 ## Phase C - terminal contact (FUTURE; each step needs the go-ahead in A1)
 

@@ -16,13 +16,33 @@ at the running SHA, checklist A3):
 `run_mock` executes the same contract against an in-memory synthetic source only. Its output is
 stamped SYNTHETIC_MOCK and can never be promoted to real evidence. Nothing here imports
 `nexora.market_history` or `MetaTrader5`, opens a socket or starts a process.
+
+Reviewed CLI for checklist B4 (finding N4), so the operator never writes Python:
+
+    python -m tests.windows_integration_readiness.execution_contract plan \
+        --repo-root <checkout> --provider mt5 --preregistered-symbol <symbol> \
+        --extractor-sha <sha> --expected-extractor-sha <reviewed sha> \
+        --extractor-version <version> --manifest-schema <schema> \
+        -- <every argument of scripts/extract_market_history.py>
+
+It prints one JSON object and exits 0 when the plan is valid, 1 on a ContractError, 2 on bad usage.
+It only checks the command line; it runs nothing.
+
+Output paths (finding R3-3): `--repo-root` is mandatory; the root and `--out` are canonicalised
+(`os.path.realpath`, so symlinks and `..` are resolved) and compared by path components, never by
+string prefix. `run_mock` re-opens the planned parent directory without following a final symlink,
+checks it is the same directory (device and inode) that was validated, walks its real ancestry by
+descriptor to prove it is not inside the checkout, and writes every file relative to that
+descriptor with O_EXCL and O_NOFOLLOW, so a path swapped after validation is refused.
 """
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import os
+import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -64,6 +84,7 @@ EXTRACTOR_CAPABILITIES: frozenset[str] = frozenset()
 MOCK_CAPABILITIES = frozenset({"inject_source", "fail_on_chunk", "deterministic_bytes"})
 
 MOCK_EVIDENCE_CLASS = "SYNTHETIC_MOCK"
+MOCK_SOURCE = "synthetic in-memory mock (tests/windows_integration_readiness)"
 PROVENANCE_FIELDS = (
     "evidence_class",
     "extractor_sha",
@@ -121,11 +142,14 @@ class ContractError(ValueError):
 @dataclass(frozen=True)
 class Plan:
     argv: tuple[str, ...]
-    out_dir: Path
+    out_dir: Path  # canonical (symlinks and `..` resolved)
     symbol: str
     window_raw_msc: tuple[int, int]
     chunk_ms: int
     provider: str
+    repo_root: Path  # canonical
+    out_parent_id: tuple[int, int] = (0, 0)  # (st_dev, st_ino) of the validated parent
+    repo_root_id: tuple[int, int] = (0, 0)
 
 
 @dataclass
@@ -167,7 +191,7 @@ def plan_invocation(
     extractor_version: str,
     manifest_schema: str,
     required_capabilities: frozenset[str] = frozenset(),
-    repo_root: Path | None = None,
+    repo_root: Path | None,
 ) -> Plan:
     """Fail-closed check of one extractor invocation. Raises ContractError(code)."""
     if provider not in ("mock", "mt5"):
@@ -199,16 +223,99 @@ def plan_invocation(
         raise ContractError("non_integer_argument") from None
     if hi <= lo or chunk <= 0:
         raise ContractError("invalid_window_or_chunk")
-    out = Path(args["--out"])
-    if not out.is_absolute():
+    root, root_id = _canonical_root(repo_root)
+    raw_out = Path(args["--out"])
+    if not raw_out.is_absolute():
         raise ContractError("output_dir_must_be_absolute")  # C4
-    if not out.parent.is_dir() or out.is_symlink() or (out.exists() and not out.is_dir()):
-        raise ContractError("output_dir_invalid")  # C4
-    if repo_root is not None and (out == repo_root or repo_root in out.parents):
+    if raw_out.is_symlink() or (raw_out.exists() and not raw_out.is_dir()):
+        raise ContractError("output_dir_invalid")  # C4: the leaf itself is never a link
+    out = Path(os.path.realpath(raw_out))
+    if not out.parent.is_dir() or out.parent == out:
+        raise ContractError("output_dir_invalid")  # C4: existing parent chain required
+    if _inside(out, root):
         raise ContractError("output_dir_inside_checkout")  # C4: raw ticks never in Git
     if out.exists() and any(out.iterdir()):
         raise ContractError("output_dir_not_empty")  # C5
-    return Plan(tuple(argv), out, args["--symbol"], (lo, hi), chunk, provider)
+    st = os.stat(out.parent)
+    return Plan(
+        tuple(argv),
+        out,
+        args["--symbol"],
+        (lo, hi),
+        chunk,
+        provider,
+        root,
+        (st.st_dev, st.st_ino),
+        root_id,
+    )
+
+
+def _canonical_root(repo_root: Path | None) -> tuple[Path, tuple[int, int]]:
+    if repo_root is None:
+        raise ContractError("repo_root_required")  # R3-3: the inside-checkout check never skips
+    root = Path(repo_root)
+    if not root.is_absolute():
+        raise ContractError("repo_root_must_be_absolute")
+    real = Path(os.path.realpath(root))
+    if not real.is_dir():
+        raise ContractError("repo_root_not_a_directory")
+    st = os.stat(real)
+    return real, (st.st_dev, st.st_ino)
+
+
+def _inside(path: Path, root: Path) -> bool:
+    """Component-wise containment of two canonical paths (no string-prefix comparison)."""
+    return path == root or root in path.parents
+
+
+_DIR_FLAGS = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+
+
+def _fd_inside(dir_fd: int, root_id: tuple[int, int]) -> bool:
+    """Walk the real ancestry of an open directory by descriptor and report whether the checkout
+    root is on it. Independent of any path string, so a symlink or rename cannot disguise it."""
+    fd = os.dup(dir_fd)
+    try:
+        while True:
+            st = os.fstat(fd)
+            if (st.st_dev, st.st_ino) == root_id:
+                return True
+            parent = os.open("..", _DIR_FLAGS, dir_fd=fd)
+            pst = os.fstat(parent)
+            os.close(fd)
+            fd = parent
+            if (pst.st_dev, pst.st_ino) == (st.st_dev, st.st_ino):
+                return False  # reached the filesystem root
+    finally:
+        os.close(fd)
+
+
+def _open_out_dir(plan: Plan) -> int:
+    """Open the planned output directory safely, or raise ContractError (see module docstring)."""
+    if os.open not in os.supports_dir_fd or not _NOFOLLOW:
+        raise ContractError("platform_lacks_descriptor_relative_io")
+    try:
+        parent = os.open(plan.out_dir.parent, _DIR_FLAGS | _NOFOLLOW)
+    except OSError:
+        raise ContractError("output_parent_changed_since_plan") from None
+    try:
+        st = os.fstat(parent)
+        if (st.st_dev, st.st_ino) != plan.out_parent_id:
+            raise ContractError("output_parent_changed_since_plan")
+        if _fd_inside(parent, plan.repo_root_id):
+            raise ContractError("output_dir_inside_checkout")
+        name = plan.out_dir.name
+        try:
+            os.mkdir(name, 0o755, dir_fd=parent)
+        except FileExistsError:
+            pass
+        try:
+            return os.open(name, _DIR_FLAGS | _NOFOLLOW, dir_fd=parent)
+        except OSError:
+            raise ContractError("output_dir_changed_since_plan") from None
+    finally:
+        os.close(parent)
 
 
 def run_mock(
@@ -222,7 +329,28 @@ def run_mock(
     """Execute the contract against the in-memory synthetic source only."""
     if plan.provider != "mock":
         raise ContractError("run_mock_requires_mock_provider")
-    plan.out_dir.mkdir(exist_ok=True)
+    out_fd = _open_out_dir(plan)
+    try:
+        return _run_mock_in(out_fd, plan, ticks, extractor_sha, operator, fail_on_chunk)
+    finally:
+        os.close(out_fd)
+
+
+def _write_new(out_fd: int, name: str, body: bytes) -> None:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NOFOLLOW
+    fd = os.open(name, flags, 0o644, dir_fd=out_fd)
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(body)
+
+
+def _run_mock_in(
+    out_fd: int,
+    plan: Plan,
+    ticks: Sequence[tuple[int, str, str, int]],
+    extractor_sha: str,
+    operator: str,
+    fail_on_chunk: int | None,
+) -> MockResult:
     result = MockResult(status="COMPLETE")
     lo, hi = plan.window_raw_msc
     hashes = hashlib.sha256()
@@ -233,9 +361,7 @@ def run_mock(
             return result
         body = b"".join(encode_tick(t) for t in ticks if a <= t[0] < b)
         name = f"chunk-{i:05d}.jsonl"
-        fd = os.open(plan.out_dir / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
-        with os.fdopen(fd, "wb") as fh:
-            fh.write(body)
+        _write_new(out_fd, name, body)
         hashes.update(body)
         result.chunk_files.append(name)
     result.manifest = {
@@ -243,15 +369,13 @@ def run_mock(
         "extractor_sha": extractor_sha,
         "extractor_version": EXTRACTOR_VERSION,
         "manifest_schema": MANIFEST_SCHEMA,
-        "source": "synthetic in-memory mock (tests/windows_integration_readiness)",
+        "source": MOCK_SOURCE,
         "symbol": plan.symbol,
         "window_raw_msc": [lo, hi],
         "operator": operator,
         "content_sha256": hashes.hexdigest(),
     }
-    (plan.out_dir / "manifest.json").write_text(
-        json.dumps(result.manifest, sort_keys=True), encoding="utf-8"
-    )
+    _write_new(out_fd, "manifest.json", json.dumps(result.manifest, sort_keys=True).encode())
     return result
 
 
@@ -275,5 +399,70 @@ def evidence_class_for(manifest: Mapping[str, Any] | None, requested: str) -> st
     if manifest["evidence_class"] == MOCK_EVIDENCE_CLASS and requested != MOCK_EVIDENCE_CLASS:
         raise ContractError("mock_output_cannot_be_real_evidence")
     if manifest["evidence_class"] != MOCK_EVIDENCE_CLASS:
+        if manifest.get("source") == MOCK_SOURCE:
+            raise ContractError("mock_source_relabelled")  # C9
         raise ContractError("unknown_evidence_class")
     return MOCK_EVIDENCE_CLASS
+
+
+def _cli_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="python -m tests.windows_integration_readiness.execution_contract",
+        description="Offline check of one extractor command line (checklist B4). Runs nothing.",
+    )
+    sub = p.add_subparsers(dest="command", required=True)
+    plan = sub.add_parser("plan", help="validate an extractor invocation; args after --")
+    plan.add_argument("--repo-root", required=True)
+    plan.add_argument("--provider", required=True, choices=("mock", "mt5"))
+    plan.add_argument("--offline", action="store_true")
+    plan.add_argument("--preregistered-symbol", required=True)
+    plan.add_argument("--extractor-sha", required=True)
+    plan.add_argument("--expected-extractor-sha", required=True)
+    plan.add_argument("--extractor-version", required=True)
+    plan.add_argument("--manifest-schema", required=True)
+    plan.add_argument("--require-capability", action="append", default=[])
+    plan.add_argument("extractor_argv", nargs=argparse.REMAINDER)
+    return p
+
+
+def main(argv: Sequence[str]) -> int:
+    try:
+        ns = _cli_parser().parse_args(list(argv))
+    except SystemExit:
+        return 2
+    extractor_argv = list(ns.extractor_argv)
+    if extractor_argv[:1] == ["--"]:
+        extractor_argv = extractor_argv[1:]
+    try:
+        p = plan_invocation(
+            extractor_argv,
+            provider=ns.provider,
+            offline=ns.offline,
+            preregistered_symbol=ns.preregistered_symbol,
+            extractor_sha=ns.extractor_sha,
+            expected_extractor_sha=ns.expected_extractor_sha,
+            extractor_version=ns.extractor_version,
+            manifest_schema=ns.manifest_schema,
+            required_capabilities=frozenset(ns.require_capability),
+            repo_root=Path(ns.repo_root),
+        )
+    except ContractError as exc:
+        print(json.dumps({"ok": False, "error": exc.code}, sort_keys=True))
+        return 1
+    report = {
+        "ok": True,
+        "provider": p.provider,
+        "symbol": p.symbol,
+        "window_raw_msc": list(p.window_raw_msc),
+        "chunk_ms": p.chunk_ms,
+        "out_dir": str(p.out_dir),
+        "repo_root": str(p.repo_root),
+        "executed": False,  # this command only checks; it never runs the extractor
+        "windows_verified": False,
+    }
+    print(json.dumps(report, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

@@ -18,7 +18,8 @@ from tests.windows_integration_readiness import execution_contract as ec
 from tests.windows_integration_readiness.execution_contract import ContractError, plan_invocation
 from tests.windows_integration_readiness.vectors import T0, TICKS_SYNTH, H
 
-DOCS = Path(__file__).resolve().parents[2] / "docs" / "research"
+REPO = Path(__file__).resolve().parents[2]
+DOCS = REPO / "docs" / "research"
 CHECKLIST = DOCS / "market-history-windows-readiness" / "WINDOWS-EXECUTION-CHECKLIST.md"
 SHA = "0123456789abcdef0123456789abcdef01234567"
 SYMBOL = "SYN-PREREGISTERED"
@@ -54,6 +55,7 @@ def plan(out: Path, args: list[str] | None = None, **kw: Any) -> ec.Plan:
         "expected_extractor_sha": SHA,
         "extractor_version": ec.EXTRACTOR_VERSION,
         "manifest_schema": ec.MANIFEST_SCHEMA,
+        "repo_root": REPO,
     }
     params.update(kw)
     return plan_invocation(args if args is not None else argv(out), **params)
@@ -232,6 +234,10 @@ def test_c10_mock_output_cannot_be_classified_as_real_evidence(tmp_path: Path) -
     assert r.manifest is not None
     relabelled = {**r.manifest, "evidence_class": "REAL_WINDOWS_RUN"}
     assert _code(lambda: ec.evidence_class_for(relabelled, "REAL_WINDOWS_RUN")) == (
+        "mock_source_relabelled"
+    )
+    forged = {**relabelled, "source": "terminal"}
+    assert _code(lambda: ec.evidence_class_for(forged, "REAL_WINDOWS_RUN")) == (
         "unknown_evidence_class"
     )
 
