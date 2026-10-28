@@ -284,11 +284,12 @@ CRASH_SCRIPT = textwrap.dedent(
     calls = {"n": 0}
     if mode == "before_link":
         real = os.link
-        def link(a, b):
-            calls["n"] += 1
-            if calls["n"] == 2:
-                os._exit(9)   # temp written, final name never created
-            return real(a, b)
+        def link(a, b, **kw):
+            if str(b).startswith("chunk-"):  # V4: the filesystem probe links too, ignore it
+                calls["n"] += 1
+                if calls["n"] == 2:
+                    os._exit(9)   # temp written, final name never created
+            return real(a, b, **kw)
         os.link = link
     src = FakeSource(TICKS)
     if mode == "mid_fetch":
@@ -345,13 +346,18 @@ def test_outputs_are_read_only(tmp_path: Path) -> None:
 def test_os_link_failure_leaves_no_final_and_no_temp(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def boom(a: Any, b: Any) -> None:
-        raise OSError("disk full")
+    real = os.link
+
+    def boom(a: Any, b: Any, **kw: Any) -> None:
+        if str(b).startswith("chunk-"):  # V4: the filesystem probe links too, ignore it
+            raise OSError("disk full")
+        real(a, b, **kw)
 
     monkeypatch.setattr(os, "link", boom)
     with pytest.raises(OSError):
         run(tmp_path, FakeSource([mk(1000)]), ExtractionRequest("SYN", 1000, 2000, 1000))
     assert not list(tmp_path.glob("chunk-*"))
+    assert not list(tmp_path.glob("*.tmp-*"))
 
 
 # ---- manifest provenance ------------------------------------------------------------------------
@@ -384,7 +390,7 @@ def test_external_anchor_detects_self_consistent_forgery(tmp_path: Path) -> None
 
 def test_provenance_fields_present(tmp_path: Path) -> None:
     m = run(tmp_path, FakeSource([mk(1000)]), ExtractionRequest("SYN", 1000, 2000, 1000))
-    assert m["provenance"]["orders_submitted"] == 0 and m["provenance"]["extractor"].endswith("/4")
+    assert m["provenance"]["orders_submitted"] == 0 and m["provenance"]["extractor"].endswith("/6")
     assert (
         m["max_chunk_ticks"] == 1_000_000
         and "not when ticks were" in m["provenance"]["retrieval_note"]

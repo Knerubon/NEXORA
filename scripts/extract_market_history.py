@@ -3,6 +3,9 @@
 Attaches to an already-running, already-logged-in terminal; accepts no credentials; sends no
 orders. Requires an explicit time-conversion JSON (segments with evidence_ref) - there is no
 default offset. Output is written to --out (keep it outside Git; raw ticks are not committed).
+The dataset is born UNTRUSTED; this tool can only emit an anchor CANDIDATE, signed with the
+operator's key. Approval is a separate act by an authorized custodian, a different principal
+(`custody_market_history.py approve`).
 """
 
 from __future__ import annotations
@@ -14,6 +17,7 @@ from pathlib import Path
 
 from nexora.market_history.clock import ClockAttestation
 from nexora.market_history.convert import TimeConversion, TimeSegment
+from nexora.market_history.custody import make_candidate
 from nexora.market_history.extract import (
     DEFAULT_MAX_CHUNK_TICKS,
     ExtractionRequest,
@@ -27,6 +31,7 @@ from nexora.market_history.extract import (
 from nexora.market_history.models import HistoryError
 from nexora.market_history.provider import Mt5ReadOnlyHistorySource
 from nexora.market_history.quality import QualityConfig
+from nexora.market_history.signing import load_signer
 
 
 def main() -> int:
@@ -57,6 +62,24 @@ def main() -> int:
     )
     ap.add_argument("--protected-margin-ms", type=int, default=0)
     ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument(
+        "--operator",
+        help="principal id of the person running this extraction (canonical lower-case ASCII; "
+        "recorded in the manifest; a dataset without one can never be TRUSTED; the custodian "
+        "must be a different principal)",
+    )
+    ap.add_argument(
+        "--operator-key",
+        type=Path,
+        help="the operator's Ed25519 private key file (PEM, mode 0600, outside the dataset): "
+        "signs the candidate so the operator identity is authenticated, not declared",
+    )
+    ap.add_argument(
+        "--candidate-out",
+        type=Path,
+        help="write an anchor CANDIDATE for a custodian to approve (outside the dataset folder). "
+        "A candidate grants nothing: only a custodian approval in the evidence store does.",
+    )
     anchor = ap.add_argument_group(
         "anchor (optional; all three together)",
         "Write the external anchor record. It MUST be stored outside the dataset folder and "
@@ -70,12 +93,17 @@ def main() -> int:
     anchor_args = (args.anchor_out, args.anchor_recorded_by, args.anchor_storage_ref)
     if any(anchor_args) and not all(anchor_args):
         ap.error("--anchor-out, --anchor-recorded-by and --anchor-storage-ref go together")
-    if args.anchor_out is not None:
-        out_abs, anchor_abs = args.out.resolve(), args.anchor_out.resolve()
-        if anchor_abs == out_abs or out_abs in anchor_abs.parents:
-            raise HistoryError("anchor_inside_dataset")
-        if args.anchor_out.exists() or args.anchor_out.is_symlink():
-            raise HistoryError("anchor_file_exists")
+    for flag, target in (("anchor", args.anchor_out), ("candidate", args.candidate_out)):
+        if target is None:
+            continue
+        out_abs, target_abs = args.out.resolve(), target.resolve()
+        if target_abs == out_abs or out_abs in target_abs.parents:
+            raise HistoryError(f"{flag}_inside_dataset")
+        if target.exists() or target.is_symlink():
+            raise HistoryError(f"{flag}_file_exists")
+    if args.candidate_out is not None and not (args.operator and args.operator_key):
+        ap.error("--candidate-out needs --operator and --operator-key (a signed attestation)")
+    signer = load_signer(args.operator_key) if args.candidate_out is not None else None
 
     # Everything below up to the source is validated BEFORE attaching to the terminal.
     raw = json.loads(args.time_conversion.read_text())
@@ -108,6 +136,7 @@ def main() -> int:
             clock_attestation=attestation,
             protected_utc_ranges=protected,
             protected_margin_ms=margin,
+            operator=args.operator,
         )
     finally:
         source.close()
@@ -123,9 +152,14 @@ def main() -> int:
         )
         with args.anchor_out.open("x") as fh:  # exclusive: never overwrite an anchor
             fh.write(json.dumps(record, indent=2, sort_keys=True) + "\n")
+    if args.candidate_out is not None:
+        assert signer is not None
+        candidate = make_candidate(manifest, signer=signer, created_at=datetime.now(UTC))
+        with args.candidate_out.open("x") as fh:
+            fh.write(json.dumps(candidate, indent=2, sort_keys=True) + "\n")
     # Writing the anchor next to the data on the same disk proves nothing on its own: the operator
     # must copy it to its independent home. Until then, and without it, the status is UNTRUSTED.
-    status = dataset_status(args.out, record)
+    status = dataset_status(args.out, record)  # no store/registry here: never TRUSTED at extraction
     print(
         json.dumps(
             {
