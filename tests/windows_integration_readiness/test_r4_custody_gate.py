@@ -167,6 +167,15 @@ def test_b9_revoked_approval_replay(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "approval_replayed_after_revocation" in reasons
 
 
+def test_b9_revocation_before_the_first_approval_does_not_block(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """X2 must not over-block: an older revocation followed by the only approval is fine."""
+    _approved_baseline(monkeypatch)
+    d = trust_gate(good(revocation_seqs=(3,), candidate_approval_seqs=(5,)))
+    assert d.outcome == cg.RECORDABLE, d.reasons
+
+
 def test_b10_same_store_pin_is_not_independent(monkeypatch: pytest.MonkeyPatch) -> None:
     reasons = _reasons(monkeypatch, pin_channel=cg.PIN_SAME_STORE)
     assert "store_head_pin_not_from_independent_channel" in reasons
