@@ -4,7 +4,7 @@
 |---|---|
 | Reference | PR #96 `claude/market-history-fix-v4` at `d6a7cda72a88600e2ccf6554605f1c50478893ea`, read with `git show` only. PR #96 was not checked out, changed, commented on or reviewed here. |
 | Stack | #89 -> #91 -> #92 -> #93 (`e74ad035e7f21aa07528965da6ebe190c0512793`) -> #96 (`d6a7cda7...`) |
-| Status of the reference | **Not an approved baseline.** PR #96 Reviewer A: REQUEST CHANGES, G1 NOT MET, 3 MAJOR (F1 forgeable approvals, F2 revocation replay, F3 trust not bound to the verified bytes). |
+| Status of the reference | **Not an approved baseline.** PR #96 Reviewer A round 2: REQUEST CHANGES, G1 NO-GO, 4 MAJOR (F1 forgeable approvals, F2 revocation replay, F3 verify/trust TOCTOU, N1 operator self-approval by a declared name). |
 | Consequence | Every TRUSTED step in this package is **BLOCKED** (DEP-01). The procedure below describes the V4 contract so the package is ready when the dependency resolves; it does not make TRUSTED reachable. |
 
 Everything quoted here (flags, codes, constants) was read at `d6a7cda7...` and must be re-verified at
@@ -57,15 +57,19 @@ review that approves the V4 custody baseline.
 | `custody.store_ref`, `registry_ref` | the store directory and registry file the **verifier** supplied (outside the dataset) |
 | `custody.approval_seq`, `approval_entry_sha256` | stdout of `custody_market_history.py approve` (`seq`, `entry_sha256`) |
 | `custody.store_head`, `store_head_channel_ref` | `custody_market_history.py head` at verification time, and where the pin was published |
-| `custody.revocations_after_approval` | count of revoke entries with `seq` > `approval_seq` |
-| `custody.verifier_command`, `verifier_exit_code`, `verifier_status`, `verifier_status_reasons` | verbatim stage-5 command, exit code and printed JSON |
-| `people.custodian` | the `--custodian` value used in stage 3 |
+| `custody.revocations_after_approval`, `custody.revocation_seqs` | revoke entries for this dataset (`seq` list) and the count with `seq` > `approval_seq` |
+| `custody.candidate_approval_seqs` | `seq` of every approval entry for this candidate (round 4, X2) |
+| `custody.store_head_at_verification`, `custody.store_head_channel_kind` | `head` output at verification time; whether the pin came from an independent channel before verification (round 4, X3) |
+| `custody.verifier_argv`, `verifier_exit_code`, `verifier_status`, `verifier_status_reasons` | stage-5 invocation as an argv list (not free text), exit code and printed JSON |
+| `people.custodian`, `custody.approver_identities`, `custody.registry_identities` | the `--custodian` value used in stage 3, its registry id and every alias, and every id and alias in the verifier's registry |
+| `custody.candidate_creator`, `custody.extraction_platform`, `custody.writer_lock`, `custody.store_chain` | candidate `created_by`, manifest `filesystem_capabilities.platform`, lock outcome, `head` `chain` |
 | `node.filesystem_type` and case 6 | the manifest's `filesystem_capabilities` record plus the package probes |
 
-## Adversarial coverage (B1-B10)
+## Adversarial coverage (B1-B10, round 4 B1-B12)
 
-`tests/windows_integration_readiness/custody_gate.py` and `test_v4_custody_compat.py` model the
-checklist gate, not PR #96's code. Each case must add its own refusal reason:
+`tests/windows_integration_readiness/custody_gate.py`, `test_v4_custody_compat.py` and
+`test_r4_custody_gate.py` model the checklist gate, not PR #96's code. Each case must add its own
+refusal reason:
 
 | Case | Refusal |
 |---|---|
@@ -80,8 +84,27 @@ checklist gate, not PR #96's code. Each case must add its own refusal reason:
 | B9 Windows guarantees | `windows_guarantee_unverified:<g>`, `dep01_platform_unproven_at_v4:win32` |
 | B10 extractor changed after checklist | STOP `extractor_sha_changed_since_checklist`, `extractor_version_changed:<v>` |
 
+Round 4 (findings N3 and R3-2; cross-track X2, X3, X5, X6):
+
+| Rule | Refusal |
+|---|---|
+| The verifier invocation is an argv list: optional launcher (`python`, `uv run [--no-sync] python`), then `scripts/verify_market_history.py`, then only reviewed flags in `--flag value` form. `--dataset`, `--store`, `--registry`, `--store-head` and `--require-trusted` are all required. | `verifier_argv_not_v4_verifier` (for example `echo TRUSTED`), `verifier_argv_missing:<flag>`, `verifier_argv_malformed:<tok>`, `verifier_argv_duplicate:<flag>`, `verifier_argv_store_head_malformed`; unknown flag is STOP |
+| The recorded pin is the `--store-head` value of that invocation, and it equals the store head at verification in sequence **and** digest | `recorded_pin_absent_from_verifier_invocation`, `recorded_pin_differs_from_verifier_invocation`, `stale_pinned_head`, `pinned_head_digest_mismatch` |
+| The approval lies inside the pinned chain; at the head sequence it is the head entry; no revocation beyond the pin | `approval_outside_pinned_chain`, `approval_entry_differs_from_pinned_head`, `approval_entry_sha256_not_recorded`, `revocation_outside_pinned_chain` |
+| Self-approval is compared over the approver's id **and every alias** (as V4 `_independence_problem` does); the alias set is mandatory and must be in the registry | `self_approval_by_operator`, `self_approval_by_candidate_creator`, `approver_alias_set_not_recorded`, `approver_alias_not_in_verifier_registry` |
+| Identities mirror PR #96 `normalize_identity` (no control or format characters, not empty) and are stricter: after NFKC and case-folding only `[a-z0-9._@+-]` is accepted, so confusable letters from other scripts are refused, not compared | `identity_ambiguous:<role>`, `identity_control_or_format_character:<role>`, `identity_empty:<role>` |
+| Identities are declared, not authenticated. Every bundle is blocked until PR #96 authenticates principals and that is independently approved (`V4_PRINCIPAL_AUTHENTICATION_AVAILABLE = False`) | `operator_identity_not_authenticated`, `approver_identity_not_authenticated`, `dep01_principal_authentication_unavailable` |
+| X2: a revocation after the **first** approval of the candidate wins, so a re-appended revoked approval stays revoked. A legitimate re-approval needs a new candidate. | `approval_replayed_after_revocation`, `approval_not_among_candidate_approvals` |
+| X3: the pin must come from an independent channel recorded before verification; a pin read from the same store at verification time cannot reveal a re-sealed store | `store_head_pin_not_from_independent_channel`, `same_store_pin_presented_as_independent`, `store_head_pin_channel_unknown` |
+| Guarantees use a fail-closed **allow-list** (`VERIFIABLE_GUARANTEES`, empty while DEP-02 is unresolved): any claimed guarantee, listed or not, is blocked | `guarantee_not_on_allow_list:<g>`, `dep02_windows_guarantees_unresolved` |
+
+With `V4_BASELINE_APPROVED` and `V4_PRINCIPAL_AUTHENTICATION_AVAILABLE` both `False` (shipped), every
+bundle is BLOCKED. Tests flip them only inside `monkeypatch`, never through a gate parameter.
+
 Limitation: these tests prove the **gate** refuses each case. They cannot prove that PR #96's code
-does. B4 replay (Reviewer A F2) and the integrity/custody TOCTOU (F3) are #96 defects, owned there.
+does. B4 replay (Reviewer A F2), the integrity/custody TOCTOU (F3) and declared-name self-approval
+(N1) are #96 defects, owned there. Requiring an alias set and an independent pin channel does not
+authenticate anything: the values are still declared by the people being checked.
 
 ## Cross-track dependencies
 

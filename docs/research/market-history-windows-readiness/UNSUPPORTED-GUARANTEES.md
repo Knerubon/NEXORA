@@ -5,6 +5,11 @@ means exercised on Linux in the CI/cloud container (probes and mocks) and theref
 about Windows. Each item is carried into the evidence record's `not_verified` list until a real-half
 record verifies it.
 
+Round 4: both the custody gate and the evidence validator treat this list as illustrative, not as a
+deny-list. They accept a verified guarantee only from an explicit allow-list
+(`custody_gate.VERIFIABLE_GUARANTEES`), which is empty while DEP-02 is unresolved, so a guarantee
+that is missing from this page is refused like one that is on it.
+
 ## Windows / filesystem
 
 | Mechanism | What cannot be promised | Status |

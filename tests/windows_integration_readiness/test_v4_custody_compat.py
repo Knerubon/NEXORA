@@ -16,17 +16,26 @@ from tests.windows_integration_readiness import custody_gate as cg
 from tests.windows_integration_readiness.custody_gate import CustodyBundle, trust_gate
 
 SHA = "0123456789abcdef0123456789abcdef01234567"
-GOOD_ARGV = (
-    "--dataset",
-    "D",
-    "--store",
-    "S",
-    "--registry",
-    "R",
-    "--store-head",
-    "7:" + "a" * 64,
-    "--require-trusted",
-)
+HEAD_SHA = "a" * 64
+ENTRY_SHA = "b" * 64
+
+
+def argv(pin: str = "7:" + HEAD_SHA) -> tuple[str, ...]:
+    return (
+        cg.V4_VERIFY_SCRIPT,
+        "--dataset",
+        "D",
+        "--store",
+        "S",
+        "--registry",
+        "R",
+        "--store-head",
+        pin,
+        "--require-trusted",
+    )
+
+
+GOOD_ARGV = argv()
 
 
 def good(**changes: Any) -> CustodyBundle:
@@ -50,18 +59,32 @@ def good(**changes: Any) -> CustodyBundle:
         writer_lock="acquired",
         checklist_extractor_sha=SHA,
         run_extractor_sha=SHA,
+        # explicit test-only conditions: authenticated principals do not exist at V4 (DEP-01)
+        approver_identities=frozenset({"synthetic-custodian"}),
+        operator_authenticated=True,
+        approver_authenticated=True,
+        pinned_head_sha256=HEAD_SHA,
+        store_head_sha256_at_verification=HEAD_SHA,
+        approval_entry_sha256=ENTRY_SHA,
+        candidate_approval_seqs=(5,),
+        pin_channel=cg.PIN_INDEPENDENT,
     )
     return dataclasses.replace(base, **changes)
 
 
 def _approved_baseline(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test-only: pretend DEP-01 is resolved so each other check can be seen on its own."""
     monkeypatch.setattr(cg, "V4_BASELINE_APPROVED", True)
+    monkeypatch.setattr(cg, "V4_PRINCIPAL_AUTHENTICATION_AVAILABLE", True)
 
 
 def test_complete_bundle_is_still_blocked_while_v4_baseline_unapproved() -> None:
     d = trust_gate(good())
     assert d.outcome == cg.BLOCKED
-    assert d.reasons == ("dep01_v4_custody_baseline_not_independently_approved",)
+    assert d.reasons == (
+        "dep01_principal_authentication_unavailable",
+        "dep01_v4_custody_baseline_not_independently_approved",
+    )
 
 
 def test_complete_bundle_is_only_recordable_never_trusted(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -73,7 +96,16 @@ def test_complete_bundle_is_only_recordable_never_trusted(monkeypatch: pytest.Mo
 CASES: list[tuple[str, dict[str, Any], str, str]] = [
     (
         "B1_anchor_only",
-        {"verify_argv": ("--dataset", "D", "--anchor", "A", "--require-trusted")},
+        {
+            "verify_argv": (
+                cg.V4_VERIFY_SCRIPT,
+                "--dataset",
+                "D",
+                "--anchor",
+                "A",
+                "--require-trusted",
+            )
+        },
         cg.BLOCKED,
         "anchor_only_or_no_custody_inputs_never_trusted",
     ),
@@ -97,7 +129,12 @@ CASES: list[tuple[str, dict[str, Any], str, str]] = [
         cg.BLOCKED,
         "evidence_store_chain_invalid:entry_hash_mismatch:3",
     ),
-    ("B6_stale_pin", {"pinned_head_seq": 5}, cg.BLOCKED, "stale_pinned_head"),
+    (
+        "B6_stale_pin",
+        {"pinned_head_seq": 6, "verify_argv": argv("6:" + HEAD_SHA)},
+        cg.BLOCKED,
+        "stale_pinned_head",
+    ),
     ("B6_no_pin", {"pinned_head_seq": None}, cg.BLOCKED, "store_head_not_pinned"),
     (
         "B7_v3_anchor_as_custody",
@@ -186,3 +223,6 @@ def test_quoted_v4_interface_constants() -> None:
     assert "--anchor" in cg.V4_VERIFY_FLAGS and "--store-head" in cg.V4_VERIFY_FLAGS
     assert cg.V4_CUSTODY_SUBCOMMANDS == ("approve", "revoke", "head")
     assert cg.V4_BASELINE_APPROVED is False
+    assert cg.V4_PRINCIPAL_AUTHENTICATION_AVAILABLE is False
+    assert cg.DEP02_WINDOWS_GUARANTEES_RESOLVED is False
+    assert cg.VERIFIABLE_GUARANTEES == frozenset()
