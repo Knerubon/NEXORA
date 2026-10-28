@@ -3,8 +3,9 @@
 Attaches to an already-running, already-logged-in terminal; accepts no credentials; sends no
 orders. Requires an explicit time-conversion JSON (segments with evidence_ref) - there is no
 default offset. Output is written to --out (keep it outside Git; raw ticks are not committed).
-The dataset is born UNTRUSTED; this tool can only emit an anchor CANDIDATE. Approval is a
-separate act by an authorized custodian (`custody_market_history.py approve`).
+The dataset is born UNTRUSTED; this tool can only emit an anchor CANDIDATE, signed with the
+operator's key. Approval is a separate act by an authorized custodian, a different principal
+(`custody_market_history.py approve`).
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ from nexora.market_history.extract import (
 from nexora.market_history.models import HistoryError
 from nexora.market_history.provider import Mt5ReadOnlyHistorySource
 from nexora.market_history.quality import QualityConfig
+from nexora.market_history.signing import load_signer
 
 
 def main() -> int:
@@ -62,8 +64,15 @@ def main() -> int:
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument(
         "--operator",
-        help="declared identity of the person running this extraction (recorded in the manifest; "
-        "a dataset without one can never be TRUSTED; a custodian must be someone else)",
+        help="principal id of the person running this extraction (canonical lower-case ASCII; "
+        "recorded in the manifest; a dataset without one can never be TRUSTED; the custodian "
+        "must be a different principal)",
+    )
+    ap.add_argument(
+        "--operator-key",
+        type=Path,
+        help="the operator's Ed25519 private key file (PEM, mode 0600, outside the dataset): "
+        "signs the candidate so the operator identity is authenticated, not declared",
     )
     ap.add_argument(
         "--candidate-out",
@@ -92,8 +101,9 @@ def main() -> int:
             raise HistoryError(f"{flag}_inside_dataset")
         if target.exists() or target.is_symlink():
             raise HistoryError(f"{flag}_file_exists")
-    if args.candidate_out is not None and not args.operator:
-        ap.error("--candidate-out needs --operator (the candidate records who extracted)")
+    if args.candidate_out is not None and not (args.operator and args.operator_key):
+        ap.error("--candidate-out needs --operator and --operator-key (a signed attestation)")
+    signer = load_signer(args.operator_key) if args.candidate_out is not None else None
 
     # Everything below up to the source is validated BEFORE attaching to the terminal.
     raw = json.loads(args.time_conversion.read_text())
@@ -143,7 +153,8 @@ def main() -> int:
         with args.anchor_out.open("x") as fh:  # exclusive: never overwrite an anchor
             fh.write(json.dumps(record, indent=2, sort_keys=True) + "\n")
     if args.candidate_out is not None:
-        candidate = make_candidate(manifest, created_by=args.operator, created_at=datetime.now(UTC))
+        assert signer is not None
+        candidate = make_candidate(manifest, signer=signer, created_at=datetime.now(UTC))
         with args.candidate_out.open("x") as fh:
             fh.write(json.dumps(candidate, indent=2, sort_keys=True) + "\n")
     # Writing the anchor next to the data on the same disk proves nothing on its own: the operator

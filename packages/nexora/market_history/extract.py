@@ -30,6 +30,7 @@ from nexora.market_history.custody import (
     _inside,
     evaluate_custody,
     manifest_operator,
+    normalize_identity,
 )
 from nexora.market_history.fsutil import (
     TMP_MARKER,
@@ -319,11 +320,14 @@ def extract(
 
 
 def _clean_operator(operator: str | None) -> str | None:
+    """The operator is recorded as a canonical principal id (X5: ambiguous spellings are refused,
+    never normalised). It is a claim until the operator's signed attestation verifies."""
     if operator is None:
         return None
-    if type(operator) is not str or not operator.strip() or len(operator) > 200:
-        raise HistoryError("invalid_operator")
-    return operator.strip()
+    try:
+        return normalize_identity(operator)
+    except HistoryError:
+        raise HistoryError("invalid_operator", "not a canonical principal id") from None
 
 
 def _extract_locked(
