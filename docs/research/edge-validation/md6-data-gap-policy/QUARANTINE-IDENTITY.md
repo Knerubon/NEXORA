@@ -63,7 +63,9 @@ ASCII only.
 or partial overlap of quarantined content is detected (record containment).
 
 **`shadow_record_hashes`.** Per-record hashes computed after a representation-only reduction (trailing fractional
-zeros removed, `-0` read as `0`). Used ONLY to detect that a candidate re-expresses quarantined values in another
+zeros removed, `-0` read as `0`, `flags` left out entirely). Leaving `flags` out means a re-extraction that drops,
+adds or rewrites flags while raw time and prices are unchanged is detected as representation drift (round-2 N6).
+Used ONLY to detect that a candidate re-expresses quarantined values in another
 representation. They never create a match, never clear a match and never normalize content.
 
 **Lineage fields** (cited by Track B). `lineage_parents`: a list of `LineageRef(dataset_id, ordered_content_hash)`
@@ -85,6 +87,9 @@ not match the anchor.
   `shadow_record_hashes`, computed under the canonicalization version above. Labels alone MUST NOT key an entry.
 - **QI-R2.** Dataset-level rejections (D09 hard defect) MUST be registered with `scope = DATASET`. Window-level
   quarantines MUST be registered with `scope = WINDOW` and a `window_id`, and their content is the window's records.
+  The re-entry check is applied to each evaluation window as its own candidate (A-24). A WINDOW entry therefore
+  blocks any candidate that contains its records (for example the whole containing dataset, as SUPERSET) but not a
+  sibling window checked on its own (round-2 N4; D09 option b).
 - **QI-R3.** Every entry MUST carry all of: content identity (all five fields), `record_hashes`,
   `shadow_record_hashes`, `dataset_id`, `previous_aliases` (may be empty), `lineage_parents` (may be empty),
   `window_id` (null for DATASET), `instrument_id`, rejection reason (`defect_class` and preregistered
@@ -139,13 +144,15 @@ the content stays quarantined.
 4. At least one new evidence reference is given (for example a new retrieval, calendar or offset evidence), and no
    given reference was already cited by the target entry or by an earlier requalification of it.
 5. A rationale is recorded.
-6. The requalified identity uses this canonicalization version and hash algorithm, has the target's
-   `multiset_fingerprint`, and its `ordered_content_hash` is not already requalified under the target.
+6. The requalified identity uses this canonicalization version and hash algorithm, and its
+   `ordered_content_hash` is not already requalified under the target. It either has the target's
+   `multiset_fingerprint`, or it is a subset: the request then carries the records, which must reproduce the
+   requalified identity exactly and form a sub-multiset of the target's `record_hashes` (round-2 N5).
 7. `decided_at` does not precede the register head.
 
 The REQUALIFIED status applies only to the specific `ordered_content_hash` requalified. A reordering of the same
 records, a subset or a child still match the original entry and stay blocked until they are requalified
-themselves. REQUALIFIED never grants TRUSTED: the dataset must still pass every Part A criterion.
+themselves under rule 6; requalifying a subset never releases its sibling records. REQUALIFIED never grants TRUSTED: the dataset must still pass every Part A criterion.
 
 ## 6. Fail-closed behaviour
 
@@ -160,15 +167,16 @@ themselves. REQUALIFIED never grants TRUSTED: the dataset must still pass every 
 
 Track B cites these names exactly: `content_identity` (`canonicalization_version`, `hash_algorithm`,
 `ordered_content_hash`, `multiset_fingerprint`, `record_count`), `record_hashes`, `lineage_parents`
-(`LineageRef(dataset_id, ordered_content_hash)`), `previous_aliases`, and the register `entry_hash`. Exposure
-should be recorded against `ordered_content_hash` together with `canonicalization_version`, and checked across
-reorderings with `multiset_fingerprint`, so that a renamed dataset does not reset exposure.
+(`LineageRef(dataset_id, ordered_content_hash)`), `previous_aliases`, and the register `entry_hash`. The exposure
+key is `multiset_fingerprint` together with `canonicalization_version`, so a reordered or renamed copy does not
+reset exposure; record containment gives lineage (EVALUATION-EXPOSURE-LINEAGE.md section 2, I1 to I5;
+`tests/md6_cross_track_reference.py`).
 
 ## 8. What stays OPEN
 
 | ID | Question | Owner |
 |---|---|---|
-| QI-1 | May a superset or partially overlapping dataset be used with the quarantined records' windows excluded? Default until decided: blocked | Quant |
+| QI-1 | May a superset or partially overlapping dataset be used with the quarantined records' windows excluded? Default until decided: blocked. Sibling windows checked on their own are not affected (QI-R2) | Quant |
 | QI-2 | Exact mapping from the tooling's stored chunk format to the canonical tokens (are prices stored as decimal strings or binary floats; how flags are stored). This mapping is part of canonicalization version 1 and must be fixed before use | Architect, Market data |
 | QI-3 | Where the register anchor is stored and who holds custody (for example in the preregistration commit) | Rin, Architect |
 | QI-4 | Must refused requalification attempts also be logged? This model does not append refused attempts | Quant, Rin |
@@ -206,6 +214,14 @@ All in `tests/test_md6_quarantine_identity.py`. Inputs are SYNTHETIC.
 | C9 | Requalification by strategy author, by the submitter, by a context strategy author, by another role, without new evidence, with reused evidence, back-dated | refused; still QUARANTINED_MATCH | `test_c9_unauthorized_requalification_is_refused` |
 | C9 | Requalification against a corrupted register | refused (UNVERIFIED) | `test_c9_requalification_against_corrupt_register_is_refused` |
 | C10 | Independent Quant approver, new evidence | REQUALIFIED; history preserved; no trust; Part A still required | `test_c10_legitimate_requalification_preserves_history_and_grants_no_trust` |
+
+Round-2 MINOR regressions, in `tests/test_md6_exposure_n1_remediation.py`:
+
+| Case | Input | Expected | Test |
+|---|---|---|---|
+| N4 | WINDOW-scope entry for W2; whole dataset and sibling windows W1, W3 checked | dataset DERIVED_FROM_QUARANTINED (SUPERSET); siblings NOT_KNOWN | `test_n4_window_quarantine_blocks_containing_dataset_but_not_sibling_windows` |
+| N5 | Subset of quarantined content requalified with its records; without records; foreign or mismatched records; sibling of a requalified subset | REQUALIFIED (history kept, no trust) / refused / refused / still DERIVED_FROM_QUARANTINED | `test_n5_*` (3 tests) |
+| N6 | Re-extraction with `flags` absent, or with other flags | CANONICALIZATION_CONFLICT (REPRESENTATION_DRIFT) | `test_n6_*` (2 tests) |
 | C10 | Reordering or subset of requalified content | still QUARANTINED_MATCH / DERIVED | `test_c10_requalification_is_specific_to_the_content_identity` |
 | C10 | Second requalification of the same identity | refused | `test_c10_second_requalification_of_same_identity_is_refused` |
 | C10 | Re-quarantine after requalification | QUARANTINED_MATCH | `test_c10_requarantine_after_requalification_wins` |

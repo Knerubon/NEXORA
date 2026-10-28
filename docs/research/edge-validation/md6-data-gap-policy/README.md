@@ -33,7 +33,8 @@ Worked examples, where present, use SYNTHETIC numbers and are labelled as such; 
 | [QUARANTINE-IDENTITY.md](QUARANTINE-IDENTITY.md) | Content-addressed quarantine register, re-entry outcomes and requalification (D09, D13) |
 
 Executable specifications (test-only reference models, not runtime enforcement; synthetic fixtures only):
-`tests/test_md6_gap_partition.py`, `tests/test_md6_exposure_lineage.py`, `tests/test_md6_quarantine_identity.py`.
+`tests/test_md6_gap_partition.py`, `tests/test_md6_exposure_lineage.py`, `tests/test_md6_quarantine_identity.py`,
+`tests/test_md6_exposure_n1_remediation.py` (round-2 findings N1 to N6; cross-track bridge `tests/md6_cross_track_reference.py`).
 
 Reading order: this README, the register, the acceptance criteria, open questions, then the sign-off package.
 

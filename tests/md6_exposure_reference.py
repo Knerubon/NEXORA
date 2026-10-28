@@ -10,11 +10,20 @@ Specifies the rule set in
 * exposure keyed by (instrument, half-open UTC interval) and by ``content_identity``, never by
   evaluation family id, dataset id or preregistration id;
 * exposure inherited by overlapping windows and through dataset lineage (parents and children);
-* gate eligibility outcomes INDEPENDENT / EXPLORATORY / UNVERIFIED / REJECTED_RETROSPECTIVE.
+* gate eligibility outcomes INDEPENDENT / EXPLORATORY / UNVERIFIED / REJECTED_RETROSPECTIVE;
+* one exposure unit, one qualification (N1): exposure is checked at the registration's AND at the
+  evaluation's ledger position, and two ACTIVE registrations whose footprints overlap contend, so
+  neither is INDEPENDENT on its own, whatever order they are evaluated in;
+* outcomes frozen at the evaluation's ledger position (N2): later appends never change them;
+* a Quant-authorised ``MultiplicityDeclaration`` as the only way several pre-declared variants on
+  one exposure unit can yield gate evidence, and then only one qualification for the whole set.
+  The correction itself is OPEN (QE-7); the model only checks that a reference to it exists.
 
 ``ContentIdentity`` and ``DatasetLineage`` are stand-ins for the definitions owned by
 QUARANTINE-IDENTITY.md (content hash plus canonicalization version, and lineage parents). This
-module does not define any canonicalization; it treats both fields as opaque strings.
+module does not define any canonicalization. ``content_hash`` is compared as an opaque string;
+two pieces under different canonicalization versions are not comparable and fail closed (N3).
+``tests/md6_cross_track_reference.py`` derives both from Track C's content profile.
 
 No rule here reads an outcome value (P/L, win rate, trades, signals): records carry no such field.
 Ordering is by ledger position. ``recorded_at`` values are synthetic integers and only have to be
@@ -128,7 +137,22 @@ class Abandonment:
     abandonment_timestamp: int
 
 
-Record = Registration | Evaluation | ProtectedStatisticsView | Abandonment
+@dataclass(frozen=True)
+class MultiplicityDeclaration:
+    """Quant-authorised statement that several registrations form one confirmatory set.
+
+    Only ``quant_authority_ref`` and ``correction_ref`` are checked for presence; the correction
+    method and any number in it are OPEN (QE-7). The set yields at most one gate qualification.
+    """
+
+    declaration_id: str
+    member_preregistration_ids: tuple[str, ...]
+    quant_authority_ref: str
+    correction_ref: str
+    declaration_timestamp: int
+
+
+Record = Registration | Evaluation | ProtectedStatisticsView | Abandonment | MultiplicityDeclaration
 
 
 @dataclass(frozen=True)
@@ -190,6 +214,7 @@ class Assessment:
     outcome: Outcome
     reasons: tuple[str, ...]
     exposed_parts: tuple[Piece, ...] = ()
+    contending_preregistrations: tuple[str, ...] = ()
 
 
 # --------------------------------------------------------------------------------------------
@@ -208,6 +233,8 @@ def _record_time(record: Record) -> int:
         return record.evaluation_timestamp
     if isinstance(record, ProtectedStatisticsView):
         return record.view_timestamp
+    if isinstance(record, MultiplicityDeclaration):
+        return record.declaration_timestamp
     return record.abandonment_timestamp
 
 
@@ -249,6 +276,8 @@ def verify_chain(ledger: Ledger) -> tuple[str, ...]:
     prereg_ids: set[str] = set()
     eval_ids: set[str] = set()
     view_ids: set[str] = set()
+    declaration_ids: set[str] = set()
+    declared_members: set[str] = set()
     for index, entry in enumerate(ledger):
         if entry.position != index:
             problems.append(f"position gap or reorder at index {index} (found {entry.position})")
@@ -279,6 +308,19 @@ def verify_chain(ledger: Ledger) -> tuple[str, ...]:
             if record.view_id in view_ids:
                 problems.append(f"duplicate view id {record.view_id}")
             view_ids.add(record.view_id)
+        elif isinstance(record, MultiplicityDeclaration):
+            if record.declaration_id in declaration_ids:
+                problems.append(f"duplicate declaration id {record.declaration_id}")
+            declaration_ids.add(record.declaration_id)
+            members = record.member_preregistration_ids
+            if len(set(members)) != len(members) or len(members) < 2:
+                problems.append(f"declaration {record.declaration_id} needs 2+ distinct members")
+            for member in members:
+                if member not in prereg_ids:
+                    problems.append(f"declares unknown or later preregistration {member}")
+                if member in declared_members:
+                    problems.append(f"preregistration {member} declared in more than one set")
+                declared_members.add(member)
         elif record.preregistration_id not in prereg_ids:
             problems.append(
                 f"abandons unknown or later preregistration {record.preregistration_id}"
@@ -402,7 +444,17 @@ def footprint(targets: Sequence[Target], lineage: LineageRegistry) -> tuple[Piec
 
 
 def collide(a: Piece, b: Piece) -> Piece | None:
-    """Exposed part of ``a`` caused by ``b``: same instrument OR same content, and time overlap."""
+    """Exposed part of ``a`` caused by ``b``: same instrument OR same content, and time overlap.
+
+    Raises LineageUnresolvable when the two content identities are under different
+    canonicalization versions: content equality cannot be decided (CANONICALIZATION_CONFLICT).
+    """
+    ca, cb = a.content_identity, b.content_identity
+    if ca.canonicalization_version != cb.canonicalization_version:
+        raise LineageUnresolvable(
+            "CANONICALIZATION_CONFLICT: content identities under different canonicalization "
+            f"versions ({ca.canonicalization_version} vs {cb.canonicalization_version})"
+        )
     if a.instrument_id != b.instrument_id and a.content_identity != b.content_identity:
         return None
     part = _overlap(a.start_ms, a.end_ms, b.start_ms, b.end_ms)
@@ -418,13 +470,28 @@ def _exposing(record: Record) -> tuple[Target, ...] | None:
 
 
 def exposed_parts(
-    ledger: Ledger, before_position: int, pieces: Sequence[Piece], lineage: LineageRegistry
+    ledger: Ledger,
+    before_position: int,
+    pieces: Sequence[Piece],
+    lineage: LineageRegistry,
+    ignore_preregistrations: frozenset[str] = frozenset(),
 ) -> tuple[Piece, ...]:
-    """Parts of ``pieces`` observed by any exposure entry strictly before ``before_position``."""
+    """Parts of ``pieces`` observed by any exposure entry strictly before ``before_position``.
+
+    ``ignore_preregistrations`` skips evaluations run under those registrations; it is used only
+    for the members of one Quant-declared multiplicity set (never for views or unregistered runs).
+    """
     found: list[Piece] = []
     for entry in ledger[:before_position]:
         targets = _exposing(entry.record)
         if targets is None:
+            continue
+        record = entry.record
+        if (
+            isinstance(record, Evaluation)
+            and record.preregistration_id is not None
+            and record.preregistration_id in ignore_preregistrations
+        ):
             continue
         for seen in footprint(targets, lineage):
             for piece in pieces:
@@ -469,6 +536,7 @@ def _find(ledger: Ledger, kind: type[object], key: str, value: str) -> list[Ledg
 
 
 def registration_status(ledger: Ledger, preregistration_id: str) -> RegistrationStatus:
+    """Status from the entries of ``ledger``. Pass a prefix to get the status at a position."""
     for entry in ledger:
         record = entry.record
         if isinstance(record, Abandonment) and record.preregistration_id == preregistration_id:
@@ -478,32 +546,51 @@ def registration_status(ledger: Ledger, preregistration_id: str) -> Registration
     return "ACTIVE"
 
 
+def contending_registrations(
+    prefix: Ledger,
+    own_preregistration_id: str,
+    pieces: Sequence[Piece],
+    lineage: LineageRegistry,
+) -> tuple[str, ...]:
+    """ACTIVE registrations in ``prefix``, other than the own one, whose footprint overlaps.
+
+    A registration withdrawn (superseded or abandoned) inside ``prefix`` does not contend.
+    Raises LineageUnresolvable if any registration's footprint cannot be resolved: contention
+    that cannot be decided fails closed.
+    """
+    found: list[str] = []
+    for entry in prefix:
+        record = entry.record
+        if not isinstance(record, Registration):
+            continue
+        if record.preregistration_id == own_preregistration_id:
+            continue
+        if registration_status(prefix, record.preregistration_id) != "ACTIVE":
+            continue
+        theirs = footprint(record.targets, lineage)
+        if any(collide(a, b) is not None for a in pieces for b in theirs):
+            found.append(record.preregistration_id)
+    return tuple(found)
+
+
 def _unverified(*reasons: str) -> Assessment:
     return Assessment(Outcome.UNVERIFIED, tuple(reasons))
 
 
-def classify_evaluation(
-    replicas: Sequence[Ledger],
-    anchors: Sequence[LedgerAnchor],
+def _assess(
+    ledger: Ledger,
     lineage: LineageRegistry,
-    evaluation_id: str,
+    e_entry: LedgerEntry,
+    declared_set: frozenset[str] = frozenset(),
 ) -> Assessment:
-    """Gate-eligibility outcome of one evaluation, computed from the ledger alone.
+    """Outcome of the evaluation at ``e_entry``, from the ledger prefix ending at it.
 
-    Precedence: UNVERIFIED, then REJECTED_RETROSPECTIVE, then EXPLORATORY, else INDEPENDENT.
+    ``declared_set`` holds the members of one Quant-declared multiplicity set; their mutual
+    contention and their evaluations' mutual exposure are ignored. Only
+    ``classify_multiplicity_set`` passes it.
     """
-    ledger, problems = reconcile(replicas)
-    if ledger is None:
-        return _unverified(*problems)
-    hits = _find(ledger, Evaluation, "evaluation_id", evaluation_id)
-    if len(hits) != 1:
-        return _unverified(f"evaluation {evaluation_id} not found exactly once in the ledger")
-    e_entry = hits[0]
     assert isinstance(e_entry.record, Evaluation)
     evaluation = e_entry.record
-    anchor_problems = check_anchors(ledger, anchors, e_entry.position)
-    if anchor_problems:
-        return _unverified(*anchor_problems)
     missing = _missing_fields(evaluation)
     if missing:
         return _unverified(*(f"evaluation missing {m}" for m in missing))
@@ -528,40 +615,152 @@ def classify_evaluation(
         )
     if evaluation.registration_timestamp != registration.registration_timestamp:
         return _unverified("evaluation cites a registration timestamp the ledger contradicts")
+    # R2/N2: nothing appended after the evaluation is consulted from here on.
+    prefix = ledger[: e_entry.position + 1]
     try:
         reg_pieces = footprint(registration.targets, lineage)
         footprint(evaluation.targets, lineage)
-        exposed = exposed_parts(ledger, r_entry.position, reg_pieces, lineage)
+        at_registration = exposed_parts(prefix, r_entry.position, reg_pieces, lineage)
+        before_evaluation = exposed_parts(
+            prefix, e_entry.position, reg_pieces, lineage, declared_set
+        )
+        contenders = tuple(
+            c
+            for c in contending_registrations(
+                prefix, registration.preregistration_id, reg_pieces, lineage
+            )
+            if c not in declared_set
+        )
     except LineageUnresolvable as exc:
         return _unverified(f"exposure history or lineage unverifiable: {exc}")
 
     reasons: list[str] = []
-    if exposed:
+    if at_registration:
         reasons.append("registered windows/content already exposed before registration")
-    computed: ExposureStatus = "EXPOSED" if exposed else "UNEXPOSED"
-    for label, declared in (
-        ("registration", registration.prior_exposure_status),
-        ("evaluation", evaluation.prior_exposure_status),
+    elif before_evaluation:
+        reasons.append("footprint exposed after registration and before this evaluation")
+    at_reg_status: ExposureStatus = "EXPOSED" if at_registration else "UNEXPOSED"
+    at_eval_status: ExposureStatus = "EXPOSED" if before_evaluation else "UNEXPOSED"
+    for label, declared, computed in (
+        ("registration", registration.prior_exposure_status, at_reg_status),
+        ("evaluation", evaluation.prior_exposure_status, at_eval_status),
     ):
         if declared != computed:
             reasons.append(f"{label} declares {declared} but ledger shows {computed}")
+    if contenders:
+        reasons.append(
+            "exposure unit contended by other ACTIVE registrations "
+            f"{', '.join(contenders)}: one exposure unit yields at most one qualification, and "
+            "several variants need a Quant multiplicity declaration (QE-7)"
+        )
     for name in ("strategy_version", "policy_version", "evaluation_family_id", "targets"):
         if getattr(evaluation, name) != getattr(registration, name):
             reasons.append(f"evaluation deviates from registration in {name}")
-    status = registration_status(ledger, registration.preregistration_id)
+    status = registration_status(prefix, registration.preregistration_id)
     if status != "ACTIVE":
         reasons.append(f"registration is {status}")
     earlier = [
         e
-        for e in ledger[: e_entry.position]
+        for e in prefix[:-1]
         if isinstance(e.record, Evaluation)
         and e.record.preregistration_id == registration.preregistration_id
     ]
     if earlier:
         reasons.append("registration already consumed by an earlier evaluation")
     if reasons:
-        return Assessment(Outcome.EXPLORATORY, tuple(reasons), exposed)
-    return Assessment(Outcome.INDEPENDENT, ("preregistered before any exposure",))
+        return Assessment(Outcome.EXPLORATORY, tuple(reasons), before_evaluation, contenders)
+    return Assessment(Outcome.INDEPENDENT, ("preregistered before any exposure, uncontended",))
+
+
+def classify_evaluation(
+    replicas: Sequence[Ledger],
+    anchors: Sequence[LedgerAnchor],
+    lineage: LineageRegistry,
+    evaluation_id: str,
+) -> Assessment:
+    """Gate-eligibility outcome of one evaluation, computed from the ledger alone.
+
+    Precedence: UNVERIFIED, then REJECTED_RETROSPECTIVE, then EXPLORATORY, else INDEPENDENT.
+    The outcome depends only on the ledger prefix ending at the evaluation, so it is frozen
+    once recorded. A member of a multiplicity set is never INDEPENDENT on its own.
+    """
+    ledger, problems = reconcile(replicas)
+    if ledger is None:
+        return _unverified(*problems)
+    hits = _find(ledger, Evaluation, "evaluation_id", evaluation_id)
+    if len(hits) != 1:
+        return _unverified(f"evaluation {evaluation_id} not found exactly once in the ledger")
+    anchor_problems = check_anchors(ledger, anchors, hits[0].position)
+    if anchor_problems:
+        return _unverified(*anchor_problems)
+    return _assess(ledger, lineage, hits[0])
+
+
+def classify_multiplicity_set(
+    replicas: Sequence[Ledger],
+    anchors: Sequence[LedgerAnchor],
+    lineage: LineageRegistry,
+    declaration_id: str,
+) -> Assessment:
+    """The single gate qualification a Quant-declared multiplicity set may yield.
+
+    INDEPENDENT only if: the declaration cites Quant authority and a correction reference; it is
+    recorded after every member registration and before every member evaluation; every member has
+    exactly one evaluation; and every member evaluation would be INDEPENDENT once contention and
+    exposure among the declared members themselves are set aside. Any other registration, view or
+    unregistered run on the footprint still disqualifies. The correction is not applied here.
+    """
+    ledger, problems = reconcile(replicas)
+    if ledger is None:
+        return _unverified(*problems)
+    hits = _find(ledger, MultiplicityDeclaration, "declaration_id", declaration_id)
+    if len(hits) != 1:
+        return _unverified(f"declaration {declaration_id} not found exactly once in the ledger")
+    d_entry = hits[0]
+    assert isinstance(d_entry.record, MultiplicityDeclaration)
+    declaration = d_entry.record
+    if not declaration.quant_authority_ref or not declaration.correction_ref:
+        return _unverified(
+            "multiplicity declaration lacks Quant authority or correction reference (QE-7)"
+        )
+    members = frozenset(declaration.member_preregistration_ids)
+    evaluations: list[LedgerEntry] = []
+    for member in declaration.member_preregistration_ids:
+        runs = [
+            e
+            for e in ledger
+            if isinstance(e.record, Evaluation) and e.record.preregistration_id == member
+        ]
+        if len(runs) != 1:
+            return _unverified(f"member {member} has {len(runs)} evaluations; exactly one required")
+        evaluations.append(runs[0])
+    anchor_problems = check_anchors(ledger, anchors, max(e.position for e in evaluations))
+    if anchor_problems:
+        return _unverified(*anchor_problems)
+    worst = Outcome.INDEPENDENT
+    reasons: list[str] = []
+    for e_entry in evaluations:
+        assert isinstance(e_entry.record, Evaluation)
+        if e_entry.position < d_entry.position:
+            assessment = Assessment(
+                Outcome.EXPLORATORY,
+                ("declaration recorded after a member evaluation",),
+            )
+        else:
+            assessment = _assess(ledger, lineage, e_entry, members)
+        if _RANK[assessment.outcome] > _RANK[worst]:
+            worst = assessment.outcome
+        reasons.extend(f"{e_entry.record.evaluation_id}: {r}" for r in assessment.reasons)
+    if worst is not Outcome.INDEPENDENT:
+        return Assessment(worst, tuple(reasons))
+    return Assessment(
+        Outcome.INDEPENDENT,
+        (
+            f"one qualification for declared set {declaration_id} "
+            f"({len(members)} members); correction {declaration.correction_ref} must be applied "
+            "(method OPEN, QE-7); no member is INDEPENDENT on its own",
+        ),
+    )
 
 
 # --------------------------------------------------------------------------------------------
@@ -640,6 +839,49 @@ def check_family_disclosure(
     )
     if listed_count != len(required_ids) or len(set(listed_ids)) != len(listed_ids):
         problems.append(f"disclosed count {listed_count} != required count {len(required_ids)}")
+    return tuple(problems)
+
+
+def evaluations_touching(
+    ledger: Ledger, targets: Sequence[Target], lineage: LineageRegistry
+) -> tuple[str, ...]:
+    """Every evaluation (registered or not, any outcome, downgraded or not) on the footprint.
+
+    Raises LineageUnresolvable if any footprint cannot be resolved (callers fail closed).
+    """
+    wanted = footprint(targets, lineage)
+    found: list[str] = []
+    for entry in ledger:
+        record = entry.record
+        if not isinstance(record, Evaluation):
+            continue
+        theirs = footprint(record.targets, lineage)
+        if any(collide(a, b) is not None for a in wanted for b in theirs):
+            found.append(record.evaluation_id)
+    return tuple(found)
+
+
+def check_evaluation_disclosure(
+    ledger: Ledger,
+    targets: Sequence[Target],
+    lineage: LineageRegistry,
+    listed_evaluation_ids: Sequence[str],
+) -> tuple[str, ...]:
+    """D-4: a result family lists every evaluation on its footprint, including any INDEPENDENT
+    result voluntarily downgraded or under a later superseded registration (no file drawer)."""
+    try:
+        required = set(evaluations_touching(ledger, targets, lineage))
+    except LineageUnresolvable as exc:
+        return (f"disclosure unverifiable: {exc}",)
+    problems = [
+        f"undisclosed evaluation {m}" for m in sorted(required - set(listed_evaluation_ids))
+    ]
+    problems.extend(
+        f"listed evaluation not touching data {x}"
+        for x in sorted(set(listed_evaluation_ids) - required)
+    )
+    if len(set(listed_evaluation_ids)) != len(listed_evaluation_ids):
+        problems.append("duplicate evaluation id in disclosure")
     return tuple(problems)
 
 

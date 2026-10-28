@@ -23,7 +23,9 @@ No value is proposed for any item marked OPEN.
 | Q15 | Is a tick exactly at a session close instant a calendar contradiction (half-open default), or does a source need a closing-quote convention? | D04, GAP-INTERVAL-PARTITION |
 | QE-3 | Are Part A count-and-coverage statistics on non-protected evaluation windows exempt from exposure? Current proposal: yes (EVALUATION-EXPOSURE-LINEAGE.md X5) | D15 |
 | QE-4 | May one registration pre-declare a finite set of evaluations? Currently only the first evaluation is INDEPENDENT; repeats are EXPLORATORY | D15 |
-| QI-1 | May a superset or partially overlapping dataset be used with the quarantined windows excluded? Default until decided: blocked | D13 |
+| QE-7 | May several pre-declared variants on one exposure unit yield gate evidence at all? If yes, which correction applies (method and parameters)? Default until decided: no; every contending registration is EXPLORATORY, and a multiplicity declaration yields one qualification only with a Quant correction reference (EVALUATION-EXPOSURE-LINEAGE.md 5.4) | D15 |
+| QE-8 | Does withdrawing a registration before any exposure of the shared units release contention? Current structural default: yes (G-i) | D15 |
+| QI-1 | May a superset or partially overlapping dataset be used with the quarantined windows excluded? Default until decided: blocked. Note: because A-24 is checked per evaluation window, a WINDOW-scope quarantine already leaves sibling windows of the same dataset eligible; only candidates that contain the quarantined records are blocked (D09 option b, not a) | D13 |
 | QI-4 | Must refused requalification attempts be logged? (Quant with Rin) | D13 |
 | QI-5 | Procedure for coincidental identical records across instruments | D13 |
 | Q13 | Stale or frozen quotes (ticks keep arriving with an unchanged quote) and quote bursts are not detected by any gap or validity rule. Should they be in MD-6 scope, and with what definition? No value proposed; until answered they are outside this policy and must not be assumed checked | D08, D11 |

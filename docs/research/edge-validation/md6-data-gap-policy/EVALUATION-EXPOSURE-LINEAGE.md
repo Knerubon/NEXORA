@@ -4,8 +4,9 @@ Status: **DRAFT / PROPOSAL. Quant sign-off PENDING. Not authoritative.**
 Every numeric value stays `OPEN`. All examples are SYNTHETIC. This document sets no threshold and
 grants no gate eligibility to any real result.
 
-Executable specification (test-only, not runtime enforcement): `tests/md6_exposure_reference.py` and
-`tests/test_md6_exposure_lineage.py`.
+Executable specification (test-only, not runtime enforcement): `tests/md6_exposure_reference.py`,
+`tests/md6_cross_track_reference.py`, `tests/test_md6_exposure_lineage.py` and
+`tests/test_md6_exposure_n1_remediation.py`.
 
 ## 1. Problem
 
@@ -28,6 +29,14 @@ protected-range statistics viewed after P1 (`test_d16_protected_statistics_view_
 The fix: exposure is a property of the data (instrument, time interval, content), recorded in an
 append-only ledger. Labels such as family id, dataset id or preregistration id cannot reset it.
 
+Round-2 review finding N1 (MAJOR) against head `dd3504e347fd2c75b38d400f9ba40cf6d0a48bcc`: exposure was
+checked only at the registration's ledger position. Three policy variants registered up front on one
+window, then evaluated one after another, all came out INDEPENDENT; so did a run after an unregistered
+peek or a protected-statistics view placed between registration and evaluation. The rules G-h and G-i
+(section 5.3) and the multiplicity rule (section 5.4) close this. The round-2 MINORs N2 (later supersede
+changed an earlier outcome) and N3 (content identity compared only as an opaque key) are closed by R2/D-4
+and by section 2.
+
 ## 2. Dependency on QUARANTINE-IDENTITY.md (Track C)
 
 This document uses two definitions owned by `QUARANTINE-IDENTITY.md` (written in parallel; not
@@ -40,13 +49,23 @@ redefined here):
   `previous_aliases` from QUARANTINE-IDENTITY.md. For exposure this resolves to a status `ROOT`,
   `DERIVED` (with parents and the parent interval each part is derived from) or `UNKNOWN`.
 
-Integration rule (orchestrator reconciliation): two targets share content for exposure purposes when the
-QUARANTINE-IDENTITY.md re-entry check would match them, that is equal `ordered_content_hash`, equal
-`multiset_fingerprint` (reordered copy), or record containment via `record_hashes` (subset or superset).
-A `CANONICALIZATION_CONFLICT` or `UNVERIFIED` from that check makes the exposure outcome UNVERIFIED. The
-test-only reference model below compares `content_identity` as an opaque key and does not re-implement
-the multiset or containment match; the (instrument, interval) key still catches a reordered copy on the
-same instrument. Combining both checks in one model is a runtime implementation dependency (D18).
+Integration rule: two targets share content for exposure purposes when the QUARANTINE-IDENTITY.md
+content relation would match them, that is equal `ordered_content_hash`, equal `multiset_fingerprint`
+(reordered copy), or record containment via `record_hashes` (subset or superset). Concretely:
+
+- I1. The exposure key of a dataset's content is its Track C `multiset_fingerprint` together with its
+  `canonicalization_version`. A reordered copy therefore has the same exposure key.
+- I2. A dataset whose records are a subset of another known dataset's records is `DERIVED` from it over
+  its own span. The superset side needs no edge: exposure flows both ways through the subset's edge (X3).
+- I3. A partial overlap of records cannot be mapped to a parent interval: lineage `UNKNOWN`, so every
+  outcome touching it is UNVERIFIED.
+- I4. Two content identities under different canonicalization versions are not comparable. Any such
+  comparison is a `CANONICALIZATION_CONFLICT` and the outcome is UNVERIFIED.
+- I5. The same content under two instrument labels conflicts with the lineage record: UNVERIFIED.
+
+`tests/md6_cross_track_reference.py` computes I1 to I3 from Track C's `content_profile` and feeds them to
+the exposure model; I4 is enforced in the exposure model itself. Runtime enforcement stays a D18
+dependency.
 
 ## 3. Definitions
 
@@ -112,7 +131,8 @@ dependent result UNVERIFIED.
   whose source interval was exposed is exposed on that interval. Exposure of a derived dataset exposes the
   parent interval it was derived from.
 - X4. Protected-range or holdout statistics observed at any time, including after a preregistration,
-  are exposure for every later preregistration on that range (closes the D16 gap).
+  are exposure for every later preregistration on that range (closes the D16 gap), and for every
+  evaluation that comes after the view in the ledger, even under an earlier registration (G-h).
 - X5. Count-and-coverage quality statistics on non-protected evaluation windows, produced for Part A
   acceptance, are not exposure events. Whether this exemption is acceptable is OPEN (QE-3 below).
 
@@ -129,6 +149,21 @@ An evaluation is **INDEPENDENT** (eligible as independent evidence for G4/G5) on
   and targets.
 - G-f. The registration is still ACTIVE (not superseded, not abandoned).
 - G-g. It is the first evaluation under that registration.
+- G-h. At the evaluation's ledger position, no exposure event other than the evaluation itself has
+  touched any part of the registration's footprint. An unregistered peek, an evaluation under any other
+  registration, or a protected statistics view between registration and evaluation makes it EXPLORATORY.
+- G-i. No other ACTIVE registration that appears in the ledger before the evaluation has a footprint that
+  overlaps this registration's footprint (contention). A registration superseded or abandoned before the
+  evaluation does not contend; one withdrawn after it still does.
+
+G-h and G-i together give the rule **one exposure unit, at most one qualification**: an exposure unit is
+any (instrument, interval, content) piece of a footprint, resolved through lineage. Only an evaluation
+that is the first exposure of every unit in its footprint, and that no other live registration also
+claims, can be INDEPENDENT. The outcome does not depend on the order in which evaluations are run: when
+several registrations contend, every one of them is EXPLORATORY whichever is evaluated first (C6 tests).
+A registration whose own footprint was already partly exposed still contends for the unexposed rest, so
+the result stays order-independent. Contention that cannot be decided because a footprint does not
+resolve is UNVERIFIED (G-a).
 
 Outcomes, in precedence order:
 
@@ -136,7 +171,7 @@ Outcomes, in precedence order:
    timestamp contradicts the ledger. Fails closed; not eligible.
 2. **REJECTED_RETROSPECTIVE**: the registration's ledger position is after the evaluation it covers.
    A claimed timestamp cannot override position.
-3. **EXPLORATORY**: any of G-c to G-g fails, or the evaluation cites no preregistration. Never eligible.
+3. **EXPLORATORY**: any of G-c to G-i fails, or the evaluation cites no preregistration. Never eligible.
 4. **INDEPENDENT**: otherwise.
 
 Consequences:
@@ -146,14 +181,40 @@ Consequences:
 - Declaring `EXPOSED` when the ledger shows none also yields EXPLORATORY: the declarant may know of
   exposure the ledger lacks.
 
-### 5.4 Relabelling
+### 5.4 Several variants on one exposure unit (multiplicity)
+
+No default allows several pre-declared variants on one exposure unit to yield gate evidence. If the
+Quant wants to allow it, the only route is an explicit, Quant-authorised **multiplicity declaration**
+appended to the ledger:
+
+- M1. It names two or more ACTIVE registrations that appear earlier in the ledger, a Quant authority
+  reference and a reference to the Quant-decided correction. A registration may be in at most one
+  declaration (otherwise the ledger fails to verify).
+- M2. It must be appended before the first evaluation of any member.
+- M3. Every member must have exactly one evaluation; an incomplete set is UNVERIFIED.
+- M4. The members' contention with each other and their evaluations' exposure of each other are set
+  aside. Anything else still counts: an outside registration, an unregistered peek or a protected view
+  makes the set EXPLORATORY.
+- M5. The set as a whole yields **one** qualification. No member is ever INDEPENDENT on its own, so a
+  member cannot be cited alone.
+- M6. The correction method, and any number in it, is OPEN (QE-7). The model checks only that the
+  references exist; it does not apply or invent a correction.
+
+Without a declaration, G-i applies and every contending registration is EXPLORATORY.
+
+### 5.5 Relabelling and frozen outcomes
 
 - R1. The outcome is computed from the ledger. No record field holds it and no one sets it by hand.
-- R2. A request to change an outcome is refused, except a voluntary downgrade INDEPENDENT to
-  EXPLORATORY. EXPLORATORY, UNVERIFIED and REJECTED_RETROSPECTIVE evidence can never become INDEPENDENT.
-  Appending new registrations later does not change an earlier evaluation's outcome.
+- R2. An evaluation's outcome is computed from the ledger prefix that ends at the evaluation. Nothing
+  appended later (registration, supersede, abandonment, view, evaluation, declaration) changes it. The one
+  later entry the check looks at is the cited registration itself: if it appears only after the
+  evaluation, the outcome is REJECTED_RETROSPECTIVE, which is never eligible.
+- R3. A request to change an outcome is refused, except a voluntary downgrade INDEPENDENT to
+  EXPLORATORY by the result family. EXPLORATORY, UNVERIFIED and REJECTED_RETROSPECTIVE evidence can never
+  become INDEPENDENT. A downgrade or a later supersede does not remove the evaluation from disclosure
+  (D-4): an unfavourable INDEPENDENT result cannot be filed away.
 
-### 5.5 Disclosure (forking paths)
+### 5.6 Disclosure (forking paths)
 
 - D-1. Every result family MUST list every preregistration whose footprint overlaps the family's
   footprint, with its status (ACTIVE, SUPERSEDED, ABANDONED), and the count.
@@ -162,12 +223,16 @@ Consequences:
 - D-3. A family is INDEPENDENT only if every member evaluation is INDEPENDENT and disclosure is complete;
   otherwise it takes its worst member outcome (UNVERIFIED worst, then REJECTED_RETROSPECTIVE, then
   EXPLORATORY).
+- D-4. Every result family MUST also list every evaluation (registered or not, any outcome, including
+  ones voluntarily downgraded or under a registration superseded later) whose footprint overlaps the
+  family's footprint. A missing or extra entry makes the family UNVERIFIED.
 
-### 5.6 What stays possible
+### 5.7 What stays possible
 
-Evaluation on data whose footprint is unexposed at registration time remains INDEPENDENT (B10),
-including a new instrument, a later period, or a derived dataset over unexposed intervals. Earlier
-exposure elsewhere does not taint it.
+Evaluation on data whose footprint is unexposed and uncontended at the evaluation remains INDEPENDENT
+(B10, C9), including a new instrument, a later period, or a derived dataset over unexposed intervals.
+Earlier exposure elsewhere does not taint it. Withdrawing a competing registration before any exposure of
+the shared units releases the contention (C9).
 
 ## 6. Fail-closed behaviour
 
@@ -181,6 +246,10 @@ exposure elsewhere does not taint it.
 | Missing required identity field | UNVERIFIED |
 | Cited preregistration not in ledger, or timestamp conflict | UNVERIFIED |
 | Registration after the evaluation it covers | REJECTED_RETROSPECTIVE |
+| Footprint of a possibly contending registration does not resolve | UNVERIFIED |
+| Content identities under different canonicalization versions compared | UNVERIFIED |
+| Records partially overlap a known dataset (no parent interval) | UNVERIFIED |
+| Multiplicity declaration without Quant authority or correction reference, or with a member not evaluated exactly once | UNVERIFIED |
 
 ## 7. What stays OPEN
 
@@ -192,6 +261,8 @@ exposure elsewhere does not taint it.
 | QE-4 | Whether one registration may pre-declare a finite set of evaluations (G-g currently allows one) | Quant |
 | QE-5 | Treatment of evidence UNVERIFIED only because history predates the ledger (no grandfathering proposed) | Quant, Rin |
 | QE-6 | Final `content_identity` and lineage schema | Track C, QUARANTINE-IDENTITY.md |
+| QE-7 | Whether several pre-declared variants on one exposure unit may yield gate evidence at all (section 5.4) and, if so, the correction method and its parameters. Default until decided: no; every contending registration is EXPLORATORY | Quant |
+| QE-8 | Whether withdrawing (superseding or abandoning) a registration before any exposure of the shared units should release contention (current structural default: yes, G-i) | Quant |
 
 No numeric value is introduced by this document.
 
@@ -206,9 +277,10 @@ All in `tests/test_md6_exposure_lineage.py`. Windows and identities are SYNTHETI
 | B2 | Same content, new dataset id | EXPLORATORY (old rule: eligible) | `test_b2_identical_data_new_dataset_id_is_exploratory` |
 | B2 alias | Same content, relabelled instrument | UNVERIFIED (identity conflict) | `test_b2_instrument_relabel_with_same_content_is_not_eligible` |
 | B2 key | Content key collides across instrument labels | exposed part found | `test_b2_content_key_collides_across_instrument_labels` |
-| B3 | `[0,100)` exposed; P2 `[50,150)`; P3 `[100,150)` registered before its exposure | P2 EXPLORATORY (exposed `[50,100)`); P3 INDEPENDENT | `test_b3_overlapping_window_is_exploratory_and_disjoint_part_is_eligible` |
+| B3 | `[0,100)` exposed; P2 `[50,150)` and P3 `[100,150)` both registered before `[100,150)` is exposed | both EXPLORATORY (P2 exposed on `[50,100)`; P3 contended by P2 on `[100,150)`) | `test_b3_overlapping_window_is_exploratory_and_disjoint_part_is_eligible` |
+| B3 alone | P3 `[100,150)` registered and evaluated with no contender; P2 registered later | P3 INDEPENDENT; P2 EXPLORATORY | `test_b3_disjoint_part_registered_alone_is_eligible` |
 | B3 late | `[100,150)` registered after it was exposed | EXPLORATORY | `test_b3_disjoint_part_registered_after_its_exposure_is_exploratory` |
-| B4 | Policy re-registered (supersedes P1) after viewing results | EXPLORATORY; E1 also EXPLORATORY (superseded) | `test_b4_reregister_policy_after_viewing_results_is_exploratory` |
+| B4 | Policy re-registered (supersedes P1) after viewing results | E2 EXPLORATORY; E1 stays INDEPENDENT (frozen, R2) and must be disclosed (D-4) | `test_b4_reregister_policy_after_viewing_results_is_exploratory` |
 | B5 | Strategy v2 registered on exposed holdout | EXPLORATORY | `test_b5_strategy_change_after_holdout_exposure_is_exploratory` |
 | B5 old reg | Strategy v2 run under P1 | EXPLORATORY | `test_b5_changed_strategy_under_original_registration_is_exploratory` |
 | B6 | Request INDEPENDENT for exploratory evidence; append a laundering registration | refused; stays EXPLORATORY | `test_b6_relabel_exploratory_as_independent_is_refused` |
@@ -226,9 +298,30 @@ All in `tests/test_md6_exposure_lineage.py`. Windows and identities are SYNTHETI
 | B9 | Registration appended after the evaluation it covers | REJECTED_RETROSPECTIVE | `test_b9_retrospective_registration_is_rejected` |
 | B10 | Fresh window and fresh instrument, registered before exposure | INDEPENDENT | `test_b10_future_evaluation_on_unexposed_data_is_independent` |
 | D16 | Holdout gap stats viewed after P1, then P2 on holdout | EXPLORATORY (old D15/D16: permitted, eligible) | `test_d16_protected_statistics_view_counts_as_exposure` |
-| misc | Unregistered run; repeat run; abandoned registration | EXPLORATORY | `test_unregistered_evaluation_is_exploratory`, `test_repeat_evaluation_under_one_registration_is_exploratory`, `test_abandoned_registration_is_exploratory_and_disclosed` |
+| misc | Unregistered run; repeat run; registration abandoned before its run | EXPLORATORY (abandonment after the run: frozen INDEPENDENT) | `test_unregistered_evaluation_is_exploratory`, `test_repeat_evaluation_under_one_registration_is_exploratory`, `test_abandoned_registration_is_exploratory_and_disclosed` |
 | misc | Disclosure list and count; family outcome | incomplete disclosure is UNVERIFIED | `test_family_disclosure_lists_all_preregistrations_with_count`, `test_family_outcome_requires_complete_disclosure` |
 | misc | Records carry no outcome fields | none present | `test_ledger_records_carry_no_outcome_fields` |
+
+N1 remediation cases, all in `tests/test_md6_exposure_n1_remediation.py`:
+
+| ID | Input | Expected | Test |
+|---|---|---|---|
+| C1 | Three policy variants registered up front on `[0,100)` (one family), evaluated in turn (R-B1) | all EXPLORATORY; complete disclosure does not help | `test_c1_three_preregistered_variants_evaluated_sequentially_yield_no_independent` |
+| C2 | Same window, three family ids: up front / interleaved register-evaluate | all EXPLORATORY / only the first INDEPENDENT | `test_c2_same_window_three_family_ids_upfront_yield_no_independent`, `test_c2_same_window_three_family_ids_interleaved_only_first_is_independent` |
+| C3 | Same content under three dataset ids, up front | all EXPLORATORY | `test_c3_same_content_under_three_dataset_ids_upfront_yield_no_independent` |
+| C4 | `[0,100)`, `[50,150)`, `[150,250)` up front | first two EXPLORATORY; disjoint one INDEPENDENT | `test_c4_partially_overlapping_windows_contend_and_disjoint_window_does_not` |
+| C5 | Two children sharing a parent interval; child and root; children on disjoint parent intervals | contend / contend / both INDEPENDENT | `test_c5_*` (3 tests) |
+| C6 | All 6 evaluation orders of C1; both orders of the B3 mix | identical outcomes in every order | `test_c6_three_variants_every_evaluation_order_gives_identical_outcomes`, `test_c6_overlap_and_disjoint_mix_is_order_independent` |
+| C7 | Re-registration (supersede) after exposure | new run EXPLORATORY; earlier result frozen and must be disclosed | `test_c7_reregistration_after_exposure_is_exploratory_and_earlier_result_is_frozen` |
+| C8 | No ledger copy, empty ledger, no anchor; set check without ledger | UNVERIFIED | `test_c8_missing_exposure_registry_is_unverified` |
+| C9 | Lone registration on unexposed window; contender withdrawn before / after exposure | INDEPENDENT / INDEPENDENT / EXPLORATORY | `test_c9_*` (3 tests) |
+| C10 | Weekend-straddle gap partition (M1 regression) | 7 min VERIFIED_OPEN, VERIFIED | `test_c10_weekend_straddle_partition_still_counts_only_verified_open_time` |
+| C11 | Quarantined content renamed, re-declared, reordered (M3 regression) | QUARANTINED_MATCH | `test_c11_quarantined_content_under_new_id_and_metadata_is_still_caught` |
+| C12 | UNKNOWN lineage on own target / on a possible contender | UNVERIFIED | `test_c12_unknown_lineage_of_own_target_is_unverified`, `test_c12_unknown_lineage_of_a_possible_contender_is_unverified` |
+| N1 | Unregistered peek / protected view between registration and run (R-B2, R-B3); relabel request | EXPLORATORY; relabel refused | `test_n1_*` (3 tests) |
+| M | Quant multiplicity declaration: valid; no authority or correction; with a peek; after a member run; member unevaluated; two sets on one window; member in two sets | one qualification, members EXPLORATORY / UNVERIFIED / EXPLORATORY / EXPLORATORY / UNVERIFIED / EXPLORATORY / ledger invalid | `test_multiplicity_*`, `test_two_declared_sets_on_one_window_yield_no_qualification`, `test_registration_in_two_declarations_breaks_the_ledger` |
+| N2 | Later supersede on another window (R-B4); voluntary downgrade | outcome unchanged; downgraded result must be disclosed | `test_n2_*` (2 tests) |
+| N3 | Reordered copy; plus relabelled instrument; other canonicalization version (R-B5); subset; superset; partial overlap; disjoint | EXPLORATORY / UNVERIFIED / UNVERIFIED / EXPLORATORY / EXPLORATORY / UNVERIFIED / INDEPENDENT | `test_n3_*` (7 tests) |
 
 ## 9. Limitations
 
@@ -238,7 +331,13 @@ All in `tests/test_md6_exposure_lineage.py`. Windows and identities are SYNTHETI
 - The model cannot detect exposure that never reached the ledger (an unlogged look). Mitigation is
   procedural: attestation, the custodian procedure for protected ranges, and the declared prior
   exposure field (a declared `EXPOSED` fails closed).
-- `content_identity` and lineage are taken from Track C; this model trusts the lineage registry it is
-  given and fails closed only when an entry is missing, `UNKNOWN` or inconsistent.
+- `content_identity` and lineage are taken from Track C through `tests/md6_cross_track_reference.py`;
+  the exposure model trusts the lineage registry it is given and fails closed only when an entry is
+  missing, `UNKNOWN` or inconsistent. The bridge treats synthetic `raw_msc` as verified UTC; real data
+  would first need MD-2 (offset).
+- G-i is deliberately conservative: a registration that can never be INDEPENDENT itself (its footprint
+  was partly exposed already) still blocks others on the units it shares. This keeps outcomes
+  independent of evaluation order; the cost is that such a registration can burn a fresh unit until it
+  is withdrawn before exposure (QE-8).
 - Validity of decision and approval references (that they point to a signed Quant record) is attested,
   not checked by the model. Quant sign-off is PENDING for every rule here.

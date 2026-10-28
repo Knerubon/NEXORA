@@ -27,6 +27,7 @@ from tests.md6_exposure_reference import (
     Registration,
     Target,
     append,
+    check_evaluation_disclosure,
     check_family_disclosure,
     classify_evaluation,
     collide,
@@ -236,8 +237,23 @@ def test_b3_overlapping_window_is_exploratory_and_disjoint_part_is_eligible() ->
     book.evaluate("E2", "P2", overlapping, family="FAM-2")
     e2 = book.classify("E2")
     assert e2.outcome is Outcome.EXPLORATORY
-    assert e2.exposed_parts == (Piece(INST_A, 50, 100, ROOT_A),)
+    assert e2.exposed_parts == (Piece(INST_A, 50, 100, ROOT_A), Piece(INST_A, 100, 150, ROOT_A))
+    # N1: P2 and P3 were both ACTIVE on [100, 150) before its first exposure, so they contend and
+    # neither is INDEPENDENT there, whichever is evaluated first (see the C6 permutation tests).
+    e3 = book.classify("E3")
+    assert e3.outcome is Outcome.EXPLORATORY
+    assert e3.contending_preregistrations == ("P2",)
+
+
+def test_b3_disjoint_part_registered_alone_is_eligible() -> None:
+    book = _first_evaluation_seen()  # [0, 100) exposed
+    disjoint = (tgt(100, 150),)
+    book.register("P3", disjoint, family="FAM-3")  # uncontended, before any exposure
+    book.evaluate("E3", "P3", disjoint, family="FAM-3")
+    book.register("P2", (tgt(50, 150),), family="FAM-2")  # after E3: cannot reach back
+    book.evaluate("E2", "P2", (tgt(50, 150),), family="FAM-2")
     assert book.classify("E3").outcome is Outcome.INDEPENDENT
+    assert book.classify("E2").outcome is Outcome.EXPLORATORY
 
 
 def test_b3_disjoint_part_registered_after_its_exposure_is_exploratory() -> None:
@@ -258,8 +274,12 @@ def test_b4_reregister_policy_after_viewing_results_is_exploratory() -> None:
     book.register("P2", W, policy="POLICY-v2", supersedes=("P1",))
     book.evaluate("E2", "P2", W, policy="POLICY-v2")
     assert book.classify("E2").outcome is Outcome.EXPLORATORY
-    # The earlier result is now superseded: also not gate-eligible, and must be disclosed.
-    assert book.classify("E1").outcome is Outcome.EXPLORATORY
+    # N2 / R2: the supersede is appended after E1, so E1's outcome is frozen as INDEPENDENT. It
+    # cannot be withdrawn from the record: every family on W must disclose it (D-4).
+    assert book.classify("E1").outcome is Outcome.INDEPENDENT
+    assert check_evaluation_disclosure(book.ledger, W, LINEAGE, ["E2"]) == (
+        "undisclosed evaluation E1",
+    )
 
 
 # ---- B5 -------------------------------------------------------------------------------------
@@ -514,7 +534,13 @@ def test_repeat_evaluation_under_one_registration_is_exploratory() -> None:
 def test_abandoned_registration_is_exploratory_and_disclosed() -> None:
     book = _first_evaluation_seen()
     book.abandon("P1")
-    assert book.classify("E1").outcome is Outcome.EXPLORATORY
+    # N2: abandoning after the evaluation does not change its frozen outcome.
+    assert book.classify("E1").outcome is Outcome.INDEPENDENT
+    early = Book()
+    early.register("P1", W)
+    early.abandon("P1")
+    early.evaluate("E1", "P1", W)
+    assert early.classify("E1").outcome is Outcome.EXPLORATORY
     touching = registrations_touching(book.ledger, W, LINEAGE)
     assert [(d.preregistration_id, d.status) for d in touching] == [("P1", "ABANDONED")]
 

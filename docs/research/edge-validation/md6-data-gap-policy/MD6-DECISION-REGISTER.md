@@ -256,7 +256,9 @@ in the master reports) are outside MD-6 and must not be inferred from it.
   defect: the scope is the whole dataset. The dataset is not accepted as evidence, its status stays
   `UNTRUSTED`, a dataset-level rejection entry (scope `DATASET`, keyed by content identity per
   [QUARANTINE-IDENTITY.md](QUARANTINE-IDENTITY.md)) is appended to the quarantine register (D13), and every window
-  drawn from that dataset is recorded as quarantined (none is silently dropped). Soft defect over its registered tolerance (OPEN): window quarantined.
+  drawn from that dataset is recorded as quarantined (none is silently dropped). Soft defect over its registered tolerance (OPEN): window quarantined (scope `WINDOW`). The re-entry check
+  (A-24) is applied per evaluation window: a WINDOW entry blocks any candidate containing the quarantined
+  window's records, including the whole containing dataset, but not sibling windows checked on their own.
   Soft defect within tolerance: annotated and carried into results as a covariate field of the run, not
   hidden. Decisions are produced by a documented deterministic procedure and listed in a quarantine register
   (D13), never decided per run by inspecting results.
@@ -401,10 +403,16 @@ in the master reports) are outside MD-6 and must not be inferred from it.
   UNVERIFIED / REJECTED_RETROSPECTIVE) is computed from the hash-chained exposure ledger in
   [EVALUATION-EXPOSURE-LINEAGE.md](EVALUATION-EXPOSURE-LINEAGE.md). Evidence is INDEPENDENT only if the
   preregistration was committed, by ledger position, before any exposure of any part of its windows or
-  content (including overlapping windows and lineage-related datasets), and before the evaluation.
-  Otherwise it is EXPLORATORY permanently. Missing or conflicting exposure history is UNVERIFIED. Every
-  result family lists all preregistrations touching its instruments and windows, including superseded and
-  abandoned ones, with a count.
+  content (including overlapping windows and lineage-related datasets), and before the evaluation; no
+  exposure event other than the evaluation itself touched that footprint between registration and
+  evaluation; and no other ACTIVE registration overlapping that footprint was in the ledger before the
+  evaluation (one exposure unit, at most one qualification; outcome independent of evaluation order).
+  Otherwise it is EXPLORATORY permanently. Several variants on one exposure unit can yield at most one
+  qualification, and only through a Quant-authorised multiplicity declaration whose correction is OPEN
+  (QE-7); there is no default allowing it. Outcomes are frozen at the evaluation's ledger position.
+  Missing or conflicting exposure history, or lineage that does not resolve, is UNVERIFIED. Every result
+  family lists all preregistrations touching its instruments and windows, including superseded and
+  abandoned ones, with a count, and every evaluation touching them, including downgraded ones.
 - **Rationale:** Prevents threshold tuning toward desired results.
 - **Measurable test:** Git ordering shows the preregistration commit precedes every evaluation artifact
   that cites it; the cited hash equals the hash of the committed file. The exposure ledger verifies (hash
@@ -423,8 +431,9 @@ in the master reports) are outside MD-6 and must not be inferred from it.
   and only by the custodian procedure; no price, spread or return distributions. Gap threshold values and
   reference distributions are never computed from protected-range data. Any observation of any statistic on a
   protected range, at any time, including after a preregistration, is an exposure event in the exposure
-  ledger and makes every later preregistration touching that range EXPLORATORY for that range
-  ([EVALUATION-EXPOSURE-LINEAGE.md](EVALUATION-EXPOSURE-LINEAGE.md) X4). Any new report field must be reviewed for holdout
+  ledger and makes every later preregistration touching that range EXPLORATORY for that range, and every
+  evaluation after the view, even under an earlier preregistration
+  ([EVALUATION-EXPOSURE-LINEAGE.md](EVALUATION-EXPOSURE-LINEAGE.md) X4, G-h). Any new report field must be reviewed for holdout
   leakage before use (D18).
 - **Rationale:** Even gap counts per day reveal volatility regimes and event days; thresholds set after
   seeing them carry information.

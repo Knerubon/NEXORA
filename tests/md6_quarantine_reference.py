@@ -30,6 +30,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final, Literal
@@ -193,12 +194,13 @@ def _shadow_price(token: str) -> str:
 
 
 def _shadow_record_hash(record: TickRecord) -> str:
+    """Flags-insensitive value key (N6): a re-extraction that drops, adds or rewrites ``flags``
+    while raw time and prices are unchanged is representation drift, never an unrelated record."""
     canonical_record_bytes(record)  # validates the grammar first
     fields = [
         str(record.raw_msc),
         _shadow_price(record.bid),
         _shadow_price(record.ask),
-        record.flags,
     ]
     payload = json.dumps(fields, separators=(",", ":"), ensure_ascii=True).encode("ascii")
     version = CANONICALIZATION_VERSION.encode("ascii")
@@ -779,6 +781,9 @@ class RequalificationRequest:
     rationale: str
     decided_at: int
     post_evaluation: bool
+    # Required only when requalifying a subset of the quarantined content (N5): the records are
+    # re-hashed and must reproduce ``requalified_identity`` and be a sub-multiset of the target.
+    requalified_records: tuple[TickRecord, ...] = ()
 
 
 def _requalified_ordered_hashes(
@@ -837,7 +842,16 @@ def requalify(
     ):
         return Refused("CANONICALIZATION_CONFLICT: identity not comparable")
     if ident.multiset_fingerprint != tid.multiset_fingerprint:
-        return Refused("requalified identity is not the quarantined content")
+        if not request.requalified_records:
+            return Refused("requalified identity is not the quarantined content")
+        try:
+            sub = content_profile(request.requalified_records)
+        except CanonicalizationError as exc:
+            return Refused(f"CANONICALIZATION_CONFLICT: {exc}")
+        if sub.identity != ident:
+            return Refused("requalified records do not reproduce the requalified identity")
+        if Counter(sub.record_hashes) - Counter(tq.record_hashes):
+            return Refused("requalified identity is not the quarantined content or a subset of it")
     if ident.ordered_content_hash in _requalified_ordered_hashes(entries, target.entry_hash):
         return Refused("this content identity is already requalified")
     if entries and request.decided_at < entries[-1].decided_at:
@@ -991,6 +1005,10 @@ def check_reentry(
                 requalified.append(e.entry_hash)
             else:
                 quarantined.append((e.entry_hash, exact))
+            continue
+        if cand.ordered_content_hash in requal:
+            # N5: this exact subset of the quarantined content was itself requalified.
+            requalified.append(e.entry_hash)
             continue
         names = {q.dataset_id, *q.previous_aliases}
         # A declared parent that is itself a requalified identity is not a quarantined parent.

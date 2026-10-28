@@ -47,7 +47,7 @@ has no standing under this policy.
 
 ## Questions the reviewer must answer
 
-At minimum Q1 to Q15, QE-3, QE-4, QI-1, QI-4 and QI-5 of [OPEN-QUESTIONS.md](OPEN-QUESTIONS.md), plus: for each decision D01 to D18, accept,
+At minimum Q1 to Q15, QE-3, QE-4, QE-7, QE-8, QI-1, QI-4 and QI-5 of [OPEN-QUESTIONS.md](OPEN-QUESTIONS.md), plus: for each decision D01 to D18, accept,
 accept with change, reject or defer.
 
 ## Record-of-decision template (to be completed by the Quant approver only)
