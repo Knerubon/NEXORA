@@ -1,6 +1,6 @@
 # Market history extraction (EDGE-VALIDATION-1, Agent B)
 
-Status: tooling complete (data-integrity fix waves V1-V4 applied, see `RISK-REVIEW.md` and
+Status: tooling complete (data-integrity fix waves V1-V4 and V4 round 3 applied, see `RISK-REVIEW.md` and
 `THREAT-MODEL-V4.md`; operator steps in `WINDOWS-MT5-RUNBOOK.md`); **real extraction BLOCKED** (no MT5 host in cloud sessions).
 Package `nexora.market_history`, CLI `scripts/extract_market_history.py` (operator-started,
 WINDOWS-INTEGRATION, read-only, no credentials, no orders).
@@ -28,10 +28,12 @@ WINDOWS-INTEGRATION, read-only, no credentials, no orders).
   are not proven (see the platform matrix in `THREAT-MODEL-V4.md`).
 - **Trust (V4).** Every dataset is `UNTRUSTED`; the extractor may only emit an anchor *candidate*.
   `TRUSTED` is returned by `dataset_status`/`require_trusted` only with independent custody evidence
-  supplied by the verifier: an append-only, hash-chained `EvidenceStore` holding an approval bound to
-  the exact dataset (id, content, manifest, symbol, window) by a custodian from an external registry who
-  is neither the extractor/candidate creator nor the recorded operator, plus a manifest
-  `filesystem_capabilities` record proving a supported configuration. A manifest claiming trust is
+  supplied by the verifier: an append-only, hash-chained `EvidenceStore` holding an Ed25519-signed
+  approval bound to the exact dataset (id, content, manifest, symbol, window) by a custodian principal
+  from an external registry (public keys) who is not the operator that signed the candidate, with
+  correct revocation lineage; a head pin signed by an independent pin authority no older than the
+  verifier's `max_pin_age`; and a manifest `filesystem_capabilities` record proving a supported
+  configuration. **No pin authority is designated yet, so nothing can be TRUSTED today.** A manifest claiming trust is
   rejected; a hash-only (V3) anchor never grants trust. V3 datasets still verify but stay `UNTRUSTED`
   (migration: re-extract under V4). Anything used as G1-G5 / freeze evidence must pass
   `require_trusted`. What is machine-enforced vs process control: `THREAT-MODEL-V4.md`.

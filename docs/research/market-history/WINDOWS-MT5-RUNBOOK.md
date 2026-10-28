@@ -70,7 +70,7 @@ uv run --no-sync python scripts/extract_market_history.py `
   --chunk-ms 3600000 --max-chunk-ticks 1000000 --max-gap-ms <Quant value, unset = do not run> `
   --time-conversion time_conversion.json --clock-attestation clock_attestation.json `
   (--protected-utc-ranges ranges.json | --no-protected-ranges) --protected-margin-ms <ms> `
-  --operator "<your declared identity>" `
+  --operator <your principal id> --operator-key <path to your 0600 operator key, NOT in the dataset> `
   --candidate-out D:\nexora-evidence-staging\<dataset-name>.candidate.json `
   --out D:\nexora-data\<dataset-name>
 ```
@@ -100,8 +100,9 @@ uv run --no-sync python scripts/extract_market_history.py `
   `THREAT-MODEL-V4.md`). It remains fully usable for development.
 - Every dataset is born **UNTRUSTED** (`development_status`) and the extractor can never make it
   anything else. `--operator` records who ran the extraction (a dataset without one can never be
-  trusted). `--candidate-out` (outside `--out`) writes an anchor CANDIDATE: a record of the dataset
-  hashes plus the extractor identity and a nonce. A candidate grants nothing. Hand the candidate file
+  trusted); it must be the strict lower-case principal id from the registry. `--candidate-out`
+  (outside `--out`) writes an anchor CANDIDATE signed with `--operator-key`: the dataset hashes, the
+  operator principal and key id, and a nonce. A candidate grants nothing. Hand the candidate file
   and the dataset to an authorized custodian (section 7). The old `--anchor-out` V3 anchor still works
   but is not custody evidence: it can never produce `TRUSTED`.
 
@@ -119,43 +120,70 @@ Reading a window is itself an access. If a split plan exists, pass its locked ra
 declared offset, set `--protected-margin-ms` to at least the offset uncertainty. No spread/price
 statistics are produced by the quality report. Do not open chunk files for the locked segment.
 
-## 7. Custody: independent approval, then verification
-**Who:** an authorized custodian, a different identity from the operator and from the candidate creator,
-on a machine they control, from a clean checkout of the same SHA. **Where the approval lives:** an
-append-only evidence store outside the dataset folder (`EvidenceStore`; the reference
-`LocalAppendOnlyStore` is for tests/single-host use; production needs a store with real immutability
-such as object lock or a ledger, which you must provide: no provider is hard-coded).
+## 7. Custody: signed independent approval, signed head pin, then verification
+Three DIFFERENT principals take part: the operator (extracted the data), an authorized custodian
+(approves) and a pin authority (signs the store head through its own channel). **No pin authority
+is designated today, so no dataset can become TRUSTED yet**: that needs a governance decision naming
+one and a `max_pin_age` policy. Do not invent either.
+
+Keys (each holder, once, on their own machine; the private key file never enters Git, the dataset or
+the store):
 ```powershell
-# custodian registry: JSON allowlist kept OUTSIDE the dataset, maintained by whoever owns custody
-#   {"schema":"nexora.market-history-custodians/1","custodians":[{"id":"carol","aliases":["carol@corp"]}]}
+uv run --no-sync python scripts/custody_market_history.py keygen --out <private-key-file>
+# prints {"ed25519": "<public key hex>", "key_id": "<sha256>"}: give the PUBLIC key to the registry owner
+```
+Registry (JSON kept OUTSIDE the dataset, maintained by whoever owns custody; ids are strict
+lower-case ASCII, one entry per principal):
+`{"schema":"nexora.market-history-principals/2","principals":[{"id":"carol","roles":["custodian"],
+"keys":[{"ed25519":"<hex>","valid_from":"...","valid_until":"...","revoked":false}]}]}`
+(roles: `operator`, `custodian`, `pin_authority`; a key marked `revoked` voids everything it signed).
+
+Approval (custodian, on a machine they control, from a clean checkout of the same SHA). The store is
+append-only and outside the dataset folder (`LocalAppendOnlyStore` is the reference for tests/single
+host; production needs real immutability such as object lock or a ledger, which you must provide):
+```powershell
 uv run --no-sync python scripts/custody_market_history.py approve --dataset <folder> `
   --candidate <candidate.json> --store <evidence-store-dir> --registry <registry.json> `
-  --custodian carol --evidence-ref "<ticket / PR comment where the decision is recorded>"
-uv run --no-sync python scripts/custody_market_history.py head --store <evidence-store-dir>
+  --signing-key <custodian-key-file> --evidence-ref "<ticket / PR comment where the decision is recorded>"
+uv run --no-sync python scripts/custody_market_history.py revoke --dataset <folder> `
+  --store <dir> --registry <registry.json> --signing-key <custodian-key-file> --evidence-ref "<ref>"
 ```
-`approve` re-verifies the dataset, refuses it when it has blockers, hard defects, no operator, a
-non-custodian approver, or an approver that is the operator or candidate creator (compared after
-Unicode NFKC + case folding, including registry aliases), and otherwise appends a hash-chained entry.
-Record the printed `head` (`SEQ:SHA256`) in a place the verifier trusts independently of the store.
-`revoke` withdraws trust (an authorized custodian; any later revoke entry fails closed).
+`approve` re-verifies ONE pinned copy of the dataset and refuses it on blockers, hard defects, an
+unsigned or foreign operator attestation, a signer who is not a custodian, a custodian who is the
+operator, a candidate already used, or a dataset path replaced during the check. The entry is signed
+and lists every earlier revocation of the dataset (`acknowledged_revocations`). A re-approval after a
+revocation needs a fresh signed candidate from the operator.
 
-A second person verifies:
+Pin (pin authority, reading the store through its own channel, after the approval):
+```powershell
+uv run --no-sync python scripts/custody_market_history.py pin --store <dir> --registry <registry.json> `
+  --signing-key <pin-authority-key-file> --out <new-pin.json> (--previous <last-pin.json> | --initial | --reanchor-ref "<authorization ref>")
+```
+A pin must extend the previous pin; `--reanchor-ref` names where an independent authorization to
+re-anchor a rewritten store is recorded. `head` prints the unsigned head (never sufficient on its own).
+
+Verification (a second person):
 `uv run --no-sync python scripts/verify_market_history.py --dataset <folder> --store <dir>
---registry <registry.json> --store-head <SEQ:SHA256> --require-trusted` (exit 0 only if `TRUSTED`).
-`TRUSTED` needs ALL of: clean verification; no hard defects; schema `/4`; a recorded
-`filesystem_capabilities` that proves a supported configuration (linux, local filesystem, every probe
-true) and a verifier on a supported platform; a recorded operator; a verifying approval chain; an
-approval bound to this exact dataset id, content hash, manifest hash, symbol and window; an approver
-in the registry (validity window respected) independent of operator and creator; sane timestamps; no
-later revocation. Without `--store-head` a rollback of the store tail (including a revocation) is not
-detectable: always pin it.
-Process controls this code cannot prove: that a declared identity is truthful, that the registry is
-maintained by the right people, that the store really is append-only, and that the head pin comes from
-an independent channel.
+--registry <registry.json> --pin <pin.json> --max-pin-age-seconds <policy value> --require-trusted`
+(exit 0 only if `TRUSTED`). Consumers read the data through `open_trusted`, which re-hashes every
+chunk as it is read. `TRUSTED` needs ALL of: clean verification on one pinned copy; no hard defects; a
+proven `filesystem_capabilities` record and a supported verifier platform; a signed operator
+attestation by the recorded operator; a custodian-signed approval bound to this exact dataset id,
+content hash, manifest hash, symbol and window, from a key valid at signing and now, by a principal
+independent of the operator; correct revocation lineage and no later revocation; and a pin signed by
+an independent pin authority, no older than `max_pin_age`, that covers the approval.
+
+Crash recovery: `custody_market_history.py recover-store --store <dir>` finishes an append that
+crashed between link and temp unlink; `scripts/recover_market_history.py <dataset-folder>` does the
+same for a dataset publication (extract re-runs do it automatically). Both remove only temp names
+that are the same file as their published entry and print what they removed.
+
+Process controls this code cannot prove: registry upkeep, private-key custody, that the store really
+is append-only, and that the pin authority and custodian are independent people.
 
 ## 8. Evidence to report back to the PR (no raw data)
 SHA, node/terminal build, operator, window and its pre-registration reference, `dataset_id` (content identity), `content_sha256`,
-`manifest_sha256`, the operator identity, the clock attestation reference, the `filesystem_capabilities` record, the candidate hash, the custody approval `seq`/`entry_sha256`/store head,  tick count, gap count (threshold used), hard defects (must be none), offset
+`manifest_sha256`, the operator identity, the clock attestation reference, the `filesystem_capabilities` record, the candidate hash, the custody approval `seq`/`entry_sha256`, the pin id and the `max_pin_age` used,  tick count, gap count (threshold used), hard defects (must be none), offset
 investigation report id, and any deviation. Missing commission/swap history stays `unavailable`.
 
 ## STOP conditions
