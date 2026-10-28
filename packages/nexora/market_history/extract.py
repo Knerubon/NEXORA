@@ -519,7 +519,11 @@ def _file_sha256(d: Dir, name: str) -> str:
 
 def _normalize_one(t: RawTick, conversion: TimeConversion) -> NormalizedTick:
     return NormalizedTick(
-        conversion.to_utc_msc(t.time_msc), t.time_msc, t.bid, t.ask, exact_sub(t.ask, t.bid),
+        conversion.to_utc_msc(t.time_msc),
+        t.time_msc,
+        t.bid,
+        t.ask,
+        exact_sub(t.ask, t.bid),
         t.flags,
     )
 
@@ -544,9 +548,7 @@ def _snapshot(d: Dir, name: str, limit: int) -> bytes:
         data = bytes(buf)
         after = os.fstat(fh.fileno())
     ident = ("st_ino", "st_dev", "st_size", "st_mtime_ns", "st_ctime_ns", "st_nlink")
-    if len(data) != before.st_size or any(
-        getattr(before, k) != getattr(after, k) for k in ident
-    ):
+    if len(data) != before.st_size or any(getattr(before, k) != getattr(after, k) for k in ident):
         raise HistoryError("changed_during_read", name)
     return data
 
@@ -1277,4 +1279,3 @@ def open_trusted(
         opened.close()
         raise HistoryError("dataset_untrusted", ",".join(status.reasons)[:300])
     return TrustedDataset(opened, manifest, status)
-

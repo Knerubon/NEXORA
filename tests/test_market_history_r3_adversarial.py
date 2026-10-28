@@ -787,7 +787,9 @@ def test_C11_legitimate_stable_dataset_is_trusted_and_digests_are_returned(
     s = status(e)
     assert s.trusted
     assert (s.dataset_id, s.manifest_sha256, s.content_sha256) == (
-        e.manifest["dataset_id"], e.manifest["manifest_sha256"], e.manifest["content_sha256"]
+        e.manifest["dataset_id"],
+        e.manifest["manifest_sha256"],
+        e.manifest["content_sha256"],
     )
     with _open_trusted(e) as td:
         assert len(list(td.iter_ticks())) == e.manifest["tick_count"]
@@ -1061,8 +1063,15 @@ def test_D5_recovery_of_a_completed_append_deletes_no_evidence(tmp_path: Path) -
 
 def _oracle(ticks: list[RawTick]) -> dict[str, int]:
     return oracle.classify(
-        [{"time_msc": t.time_msc, "bid": str(t.bid), "ask": str(t.ask),
-          **({"flags": t.flags} if t.flags is not None else {})} for t in ticks]  # fmt: skip
+        [
+            {
+                "time_msc": t.time_msc,
+                "bid": str(t.bid),
+                "ask": str(t.ask),
+                **({"flags": t.flags} if t.flags is not None else {}),
+            }
+            for t in ticks
+        ]  # fmt: skip
     )
 
 
@@ -1094,8 +1103,11 @@ GOLDEN: list[tuple[str, list[RawTick], tuple[int, int, int]]] = [
     ("G3 flags 2 vs 4", [tk(1000), tk(1500, A, 2), tk(1500, A, 4), tk(2000)], (0, 0, 1)),
     ("G4 adjacent repeat", [tk(1000), tk(1000), tk(1500)], (1, 0, 0)),
     ("G5 absent vs present flags", [tk(1500), tk(1500, A, 2), tk(1500)], (1, 0, 1)),
-    ("G6 equal decimals, other spelling", [tk(1500, ("100.1", "100.2")),
-                                           tk(1500, ("100.10", "100.20"))], (1, 0, 0)),  # fmt: skip
+    (
+        "G6 equal decimals, other spelling",
+        [tk(1500, ("100.1", "100.2")), tk(1500, ("100.10", "100.20"))],
+        (1, 0, 0),
+    ),  # fmt: skip
     ("G7 three quotes, one repeated", [tk(1500), tk(1500, B), tk(1500, C), tk(1500, B)], (1, 2, 0)),
 ]
 

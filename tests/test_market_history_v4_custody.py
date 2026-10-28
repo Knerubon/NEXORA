@@ -530,8 +530,10 @@ def test_revocation_withdraws_trust_and_even_a_rogue_revocation_fails_closed(
         )  # fmt: skip
     e.store.append(
         {
-            "schema": custody.APPROVAL_SCHEMA, "decision": "revoke",
-            **custody._bindings(e.manifest), "revoker": "mallory",
+            "schema": custody.APPROVAL_SCHEMA,
+            "decision": "revoke",
+            **custody._bindings(e.manifest),
+            "revoker": "mallory",
         }  # fmt: skip
     )
     s = status(e)
@@ -565,8 +567,11 @@ _PK = KEYS["carol"].public_hex
         _reg({"id": "a", "roles": ["custodian"], "keys": [{"ed25519": _PK, "revoked": "no"}]}),
         _reg({"id": "a", "roles": ["custodian"], "keys": [{"ed25519": _PK, "valid_from": "x"}]}),
         _reg(
-            {"id": "a", "roles": ["custodian"],
-             "keys": [{"ed25519": _PK, "valid_from": "2026-01-01T00:00:00"}]}
+            {
+                "id": "a",
+                "roles": ["custodian"],
+                "keys": [{"ed25519": _PK, "valid_from": "2026-01-01T00:00:00"}],
+            }
         ),  # fmt: skip
         _reg({"id": "a", "roles": ["custodian"], "keys": [{"ed25519": _PK}], "aliases": ["b"]}),
         _reg(
