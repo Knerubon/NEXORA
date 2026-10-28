@@ -1189,3 +1189,23 @@ def test_D12_unsupported_filesystem_lock_semantics_fail_closed(
     monkeypatch.setattr(lock, "_try_lock", no_flock)
     with pytest.raises(HistoryError, match="writer_lock_unsupported"):
         go(tmp_path / "nolock", operator="ann")
+
+
+def test_without_the_crypto_library_nothing_verifies_and_signing_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The core package imports with the standard library only (`cryptography` is loaded
+    lazily); without the library every signature check fails closed and the dataset is UNTRUSTED."""
+    from nexora.market_history import signing
+
+    e = make_env(tmp_path)
+    approve(e)
+    pin = fresh_pin(e.store, CHECK - timedelta(minutes=1))
+    assert status(e, pin=pin).trusted
+    for name in ("cryptography", "cryptography.exceptions", "cryptography.hazmat.primitives",
+                 "cryptography.hazmat.primitives.asymmetric",
+                 "cryptography.hazmat.primitives.asymmetric.ed25519"):  # fmt: skip
+        monkeypatch.setitem(sys.modules, name, None)
+    assert not status(e, pin=pin).trusted
+    with pytest.raises(HistoryError, match="signing_unavailable"):
+        signing.generate_signer()

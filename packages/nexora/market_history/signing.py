@@ -12,6 +12,10 @@ purpose (say an operator attestation) can never be replayed as another (an appro
 No private key is ever stored in the repository, fixtures, manifests or the evidence store. Key
 files live with their holder, outside the dataset; `load_signer` refuses a key file that is a
 symlink or readable by group/other.
+
+`cryptography` is imported lazily so the core package still imports with the standard library
+only. Without it nothing verifies (fail closed: no statement is accepted, nothing is TRUSTED) and
+signing raises `signing_unavailable`.
 """
 
 from __future__ import annotations
@@ -22,21 +26,33 @@ import stat
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
-
-from cryptography.exceptions import InvalidSignature
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.ed25519 import (
-    Ed25519PrivateKey,
-    Ed25519PublicKey,
-)
+from typing import TYPE_CHECKING, Any
 
 from nexora.market_history.models import HistoryError, canonical_json, sha256_hex
+
+if TYPE_CHECKING:
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 DOMAIN = b"nexora.market-history/signature/1\x00"
 PURPOSES = frozenset({"operator-attestation", "custody-approval", "custody-revocation", "head-pin"})
 _HEX = re.compile(r"[0-9a-f]+")
 _MAX_KEY_FILE = 4096
+
+
+def _ed25519() -> Any:
+    try:
+        from cryptography.hazmat.primitives.asymmetric import ed25519
+    except ImportError:
+        raise HistoryError("signing_unavailable", "cryptography is not installed") from None
+    return ed25519
+
+
+def _serialization() -> Any:
+    try:
+        from cryptography.hazmat.primitives import serialization
+    except ImportError:
+        raise HistoryError("signing_unavailable", "cryptography is not installed") from None
+    return serialization
 
 
 def _message(purpose: str, body: Mapping[str, Any]) -> bytes:
@@ -64,7 +80,11 @@ def verify(public_hex: str, purpose: str, body: Mapping[str, Any], signature_hex
     if not is_public_key_hex(public_hex) or not is_signature_hex(signature_hex):
         return False
     try:
-        key = Ed25519PublicKey.from_public_bytes(bytes.fromhex(public_hex))
+        from cryptography.exceptions import InvalidSignature
+    except ImportError:
+        return False
+    try:
+        key = _ed25519().Ed25519PublicKey.from_public_bytes(bytes.fromhex(public_hex))
         key.verify(bytes.fromhex(signature_hex), _message(purpose, body))
     except (InvalidSignature, ValueError, HistoryError):
         return False
@@ -79,31 +99,29 @@ class Signer:
 
     @property
     def public_hex(self) -> str:
-        raw = self._key.public_key().public_bytes(
-            serialization.Encoding.Raw, serialization.PublicFormat.Raw
-        )
-        return raw.hex()
+        ser = _serialization()
+        raw = self._key.public_key().public_bytes(ser.Encoding.Raw, ser.PublicFormat.Raw)
+        return str(raw.hex())
 
     @property
     def key_id(self) -> str:
         return key_id_of(self.public_hex)
 
     def sign(self, purpose: str, body: Mapping[str, Any]) -> str:
-        return self._key.sign(_message(purpose, body)).hex()
+        return str(self._key.sign(_message(purpose, body)).hex())
 
     def __repr__(self) -> str:
         return f"Signer(key_id={self.key_id[:16]}...)"
 
     def private_pem(self) -> bytes:
-        return self._key.private_bytes(
-            serialization.Encoding.PEM,
-            serialization.PrivateFormat.PKCS8,
-            serialization.NoEncryption(),
+        ser = _serialization()
+        return bytes(
+            self._key.private_bytes(ser.Encoding.PEM, ser.PrivateFormat.PKCS8, ser.NoEncryption())
         )
 
 
 def generate_signer() -> Signer:
-    return Signer(Ed25519PrivateKey.generate())
+    return Signer(_ed25519().Ed25519PrivateKey.generate())
 
 
 def load_signer(path: Path) -> Signer:
@@ -122,10 +140,10 @@ def load_signer(path: Path) -> Signer:
             raise HistoryError("signing_key_permissions", "must not be group/other accessible")
         data = fh.read(_MAX_KEY_FILE)
     try:
-        key = serialization.load_pem_private_key(data, password=None)
+        key = _serialization().load_pem_private_key(data, password=None)
     except (ValueError, TypeError):
         raise HistoryError("signing_key_unreadable", "not a PEM private key") from None
-    if not isinstance(key, Ed25519PrivateKey):
+    if not isinstance(key, _ed25519().Ed25519PrivateKey):
         raise HistoryError("signing_key_unreadable", "not an Ed25519 key")
     return Signer(key)
 
