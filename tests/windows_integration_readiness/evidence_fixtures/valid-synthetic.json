@@ -1,5 +1,5 @@
 {
-  "schema_version": "nexora.windows-readiness-evidence/2",
+  "schema_version": "nexora.windows-readiness-evidence/3",
   "evidence_class": "SYNTHETIC_FIXTURE",
   "identity_basis": "declared_not_authenticated",
   "identity": {
@@ -87,16 +87,52 @@
       "path": "synthetic/registry.json",
       "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     },
+    "registry_identities": [
+      "synthetic-custodian"
+    ],
+    "approver_identities": [
+      "synthetic-custodian"
+    ],
+    "candidate_creator": "synthetic-operator",
     "approval_seq": 1,
     "approval_entry_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "candidate_approval_seqs": [
+      1
+    ],
     "store_head": "1:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     "store_head_channel_ref": "SYNTHETIC-head-channel",
+    "store_head_channel_kind": "independent_prior_channel",
+    "store_head_at_verification": "1:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "store_chain": "ok",
+    "revocation_seqs": [],
     "revocations_after_approval": 0,
-    "verifier_command": "SYNTHETIC: no verifier was run",
+    "extraction_platform": "win32",
+    "writer_lock": "acquired",
+    "verifier_argv": [
+      "scripts/verify_market_history.py",
+      "--dataset",
+      "SYNTHETIC-dataset",
+      "--store",
+      "SYNTHETIC-store",
+      "--registry",
+      "synthetic/registry.json",
+      "--store-head",
+      "1:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "--require-trusted"
+    ],
     "verifier_exit_code": 1,
     "verifier_status": "UNTRUSTED",
     "verifier_status_reasons": [
       "capability:platform_unproven:win32"
+    ],
+    "gate_outcome": "BLOCKED",
+    "gate_reasons": [
+      "dep01_platform_unproven_at_v4:win32",
+      "verifier_did_not_report_trusted",
+      "operator_identity_not_authenticated",
+      "approver_identity_not_authenticated",
+      "dep01_principal_authentication_unavailable",
+      "dep01_v4_custody_baseline_not_independently_approved"
     ]
   },
   "execution": {
@@ -219,13 +255,15 @@
     "5": {
       "result": "PASS",
       "evidence": {
-        "run_a_content_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-        "run_b_content_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-        "chunk_ms_variants": {
-          "synthetic": true
-        },
+        "run_a_content_sha256": "7777777777777777777777777777777777777777777777777777777777777777",
+        "run_b_content_sha256": "7777777777777777777777777777777777777777777777777777777777777777",
+        "chunk_ms_variants": [
+          3600000,
+          86400000
+        ],
         "variant_content_sha256": {
-          "synthetic": true
+          "3600000": "7777777777777777777777777777777777777777777777777777777777777777",
+          "86400000": "7777777777777777777777777777777777777777777777777777777777777777"
         },
         "order_counts": {
           "synthetic": true

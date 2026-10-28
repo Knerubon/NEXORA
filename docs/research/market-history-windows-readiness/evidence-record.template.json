@@ -1,5 +1,5 @@
 {
-  "schema_version": "nexora.windows-readiness-evidence/2",
+  "schema_version": "nexora.windows-readiness-evidence/3",
   "evidence_class": "TEMPLATE",
   "identity_basis": "declared_not_authenticated",
   "identity": {
@@ -69,15 +69,27 @@
   "custody": {
     "store_ref": "NOT VERIFIED",
     "registry_ref": "NOT VERIFIED",
+    "registry_identities": "NOT VERIFIED",
+    "approver_identities": "NOT VERIFIED",
+    "candidate_creator": "NOT VERIFIED",
     "approval_seq": "NOT VERIFIED",
     "approval_entry_sha256": "NOT VERIFIED",
+    "candidate_approval_seqs": "NOT VERIFIED",
     "store_head": "NOT VERIFIED",
     "store_head_channel_ref": "NOT VERIFIED",
+    "store_head_channel_kind": "NOT VERIFIED",
+    "store_head_at_verification": "NOT VERIFIED",
+    "store_chain": "NOT VERIFIED",
+    "revocation_seqs": "NOT VERIFIED",
     "revocations_after_approval": "NOT VERIFIED",
-    "verifier_command": "NOT VERIFIED",
+    "extraction_platform": "NOT VERIFIED",
+    "writer_lock": "NOT VERIFIED",
+    "verifier_argv": "NOT VERIFIED",
     "verifier_exit_code": "NOT VERIFIED",
     "verifier_status": "NOT VERIFIED",
-    "verifier_status_reasons": "NOT VERIFIED"
+    "verifier_status_reasons": "NOT VERIFIED",
+    "gate_outcome": "NOT VERIFIED",
+    "gate_reasons": "NOT VERIFIED"
   },
   "execution": {
     "commands_run": "NOT VERIFIED",

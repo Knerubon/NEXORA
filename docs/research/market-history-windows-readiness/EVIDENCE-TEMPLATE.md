@@ -2,7 +2,8 @@
 
 One record per real-half execution. Machine-readable form:
 [evidence-record.template.json](evidence-record.template.json) (schema version
-`nexora.windows-readiness-evidence/2`).
+`nexora.windows-readiness-evidence/3`; round 4 added the custody fields the gate needs, a
+structured verifier argv, the recorded gate decision and the overall value `BLOCKED`).
 
 ## Which artifact decides
 
@@ -21,8 +22,17 @@ claim to be, or anything about Windows or MT5. The validator's report always say
 
 - Every field listed below is required. A field is either a real value of its kind (text, 40-hex
   SHA, 64-hex SHA-256, UTC timestamp ending in `Z` or `+00:00`, boolean, integer, a reference
-  `{"path": ..., "sha256": ...}`, a non-empty list, or a non-empty object) or the literal
-  `"NOT VERIFIED"`. Blank, whitespace-only, `[]` and `{}` are invalid. Unknown keys are invalid.
+  `{"path": ..., "sha256": ...}`, a non-empty list, a list of distinct positive sequence numbers
+  (may be empty), or a non-empty object) or the literal `"NOT VERIFIED"`. Blank, whitespace-only,
+  `[]` and `{}` are invalid (except an empty sequence list). Unknown keys are invalid.
+- **Placeholders are not values (R3-4).** A text value (also a list item, a status reason or a
+  reference path) is rejected as `placeholder_value` when, after NFKC normalisation, case folding and
+  removal of every non-letter/digit character, it is empty or one of: `notverified`, `unverified`,
+  `notyetverified`, `na`, `notapplicable`, `notavailable`, `tbd`, `tbc`, `tobedetermined`, `todo`,
+  `fixme`, `unknown`, `placeholder`, `pending`, `null`, `xxx`. So `not verified`, `NOT  VERIFIED`,
+  `n/a`, `-`, fullwidth or zero-width variants are all refused; only the exact literal
+  `"NOT VERIFIED"` marks an unfilled field. Free text that merely contains such a word is accepted.
+  The schema expresses the ASCII part of this rule; NFKC variants are caught by the validator only.
 - Do not embed raw ticks, account numbers, balances, passwords or tokens. Raw outputs are
   referenced by path + SHA-256 only.
 - The `evidence_class` field is `TEMPLATE` (everything unfilled), `SYNTHETIC_FIXTURE` (record id starts with
@@ -34,21 +44,61 @@ claim to be, or anything about Windows or MT5. The validator's report always say
 when the claimed value differs.
 
 - Any case `FAIL` (or a malformed case) derives `FAIL`.
-- All seven cases `PASS` derives `PASS` only for `REAL_WINDOWS_RUN` and only when **all** of these
-  hold, otherwise the record is rejected:
+- All seven cases `PASS` for a `REAL_WINDOWS_RUN` first requires **all** of these, otherwise the
+  record derives `FAIL` and is rejected:
   - no field anywhere is `NOT VERIFIED`;
   - `checkout.status_short` is empty **and** `checkout.checkout_clean` is `true`;
     `checkout.head` equals `identity.extractor_sha` **and** `checkout.head_equals_sha` is `true`;
   - `custody.verifier_status` is `TRUSTED` with `verifier_exit_code` 0 and no status reasons,
-    `custody.revocations_after_approval` is 0, and `dataset.development_status` is `TRUSTED`.
+    no revocation is recorded, and `dataset.development_status` is `TRUSTED`;
+  - every `execution.exit_codes` entry is 0, and case 5 `run_a_content_sha256` equals
+    `dataset.content_sha256`;
+  - the custody gate, re-run by the validator over the `custody` section, reports no reason other
+    than a dependency block (`dep01_*`, `dep02_*`, unauthenticated principals).
+- If those hold, real-half readiness is derived from **machine-checked dependency status**
+  (`evidence_validator.dependency_status()`: DEP-01 from `custody_gate.V4_BASELINE_APPROVED` and
+  `V4_PRINCIPAL_AUTHENTICATION_AVAILABLE`, DEP-03 from the BLOCKED steps of
+  `execution_contract.REAL_HALF_STEPS`), never from a free-text field. While DEP-01 or DEP-03 is
+  BLOCKED, or the gate still reports a dependency block, the record derives **`BLOCKED`** (N2). A
+  record that claims `PASS` then is rejected with `real_readiness_pass_while_dependency_blocked:<DEP>`.
+  Only with every dependency resolved can it derive `PASS`. Today no record can.
 - Templates and synthetic fixtures derive `NOT_RUN` even when every case says `PASS`.
 - Otherwise `NOT_RUN`.
+
+The report separates the two questions: `offline_harness_consistent` (the record is complete and
+consistent) and `real_readiness` (`NOT_CLAIMED`, `BLOCKED`, `FAIL` or `PASS`), plus the dependency
+status it used and `dependency_source` (`derived`; only a test can make it `test_override`).
 
 A case `PASS` needs every evidence field of that case verified, a non-empty `evidence_refs` list,
 and the case-specific values in the case table below. Contradictions are rejected whatever the
 overall result: `checkout_clean` disagreeing with `status_short`, `head_equals_sha` disagreeing with
 the recorded head, a `TRUSTED` dataset without a `TRUSTED` verifier, or a `TRUSTED` verifier with a
 non-zero exit or with reasons.
+
+**Summary flags are derived (N1).** Whatever the result: case 2 `counts_equal` must equal
+`quality_counts == independent_counts`; case 4 `ranges_equal` must equal
+`derived_fold_ranges == independent_fold_ranges`; case 7 `forbidden_names_observed` must equal the
+number of forbidden MT5 names in `observed_mt5_names`; case 5 `variant_content_sha256` must hold
+SHA-256 values only. `commands_run` and `exit_codes` must have the same length,
+`finished_at_utc` may not precede `started_at_utc`, and the window may not be pre-registered after
+the run started. Under case `PASS` additionally: case 5 run A equals run B and every variant hash,
+and case 7 observed no forbidden name.
+
+**Custody is cross-checked (R3-1).** `custody.verifier_argv` is an argv list checked by
+`custody_gate.parse_verify_argv` against the reviewed V4 CLI: `scripts/verify_market_history.py`
+(optionally after `python` or `uv run [--no-sync] python`) with `--dataset`, `--store`,
+`--registry`, `--store-head` and `--require-trusted`; `--store`, `--registry` and `--store-head`
+must equal `store_ref`, `registry_ref.path` and `store_head`. Anchor-only or arbitrary commands
+(`echo TRUSTED`) are rejected, and a `TRUSTED` status with such a command is a contradiction.
+`revocations_after_approval` must match `revocation_seqs`, and `approval_seq` must be one of
+`candidate_approval_seqs`. The validator re-runs `custody_gate.trust_gate` over the section and
+rejects the record if `gate_outcome`/`gate_reasons` differ from that decision.
+
+**REAL records carry no mock markers (R3-1).** In a `REAL_WINDOWS_RUN`, `record_id`,
+`hostname_class`, `terminal.company/name/server_name`, `source_descriptor`,
+`broker_clock_evidence_kind`, `store_ref`, `verifier_argv`, `commands_run` and `clock_source` may not
+contain `synthetic`, `mock`, `fixture`, `test-only`, `dummy` or `fake` as a word, nor the mock source
+string of `execution_contract`.
 
 **Independence.** `operator`, `second_person_verifier` and `custodian` must be pairwise distinct,
 and none of them may equal `reviewer`, compared after NFKC normalization, trimming, case folding and
@@ -67,15 +117,17 @@ different names used by one person.
 | `window` | `symbol`, `window_raw_msc`, `window_utc_msc`, `preregistration_ref`, `preregistered_at_utc`, `protected_ranges_ref`, `protected_margin_ms` |
 | `source_provenance` | `source_descriptor`, `broker_clock_evidence_ref`, `broker_clock_evidence_kind`, `time_conversion_sha256`, `clock_attestation_sha256`, `dst_rule_evidence_ref` |
 | `dataset` | `dataset_id`, `content_sha256`, `manifest_sha256`, `candidate_sha256`, `development_status` |
-| `custody` | `store_ref`, `registry_ref`, `approval_seq`, `approval_entry_sha256`, `store_head`, `store_head_channel_ref`, `revocations_after_approval`, `verifier_command`, `verifier_exit_code`, `verifier_status`, `verifier_status_reasons` |
+| `custody` | `store_ref`, `registry_ref`, `registry_identities`, `approver_identities`, `candidate_creator`, `approval_seq`, `approval_entry_sha256`, `candidate_approval_seqs`, `store_head`, `store_head_channel_ref`, `store_head_channel_kind`, `store_head_at_verification`, `store_chain`, `revocation_seqs`, `revocations_after_approval`, `extraction_platform`, `writer_lock`, `verifier_argv`, `verifier_exit_code`, `verifier_status`, `verifier_status_reasons`, `gate_outcome`, `gate_reasons` |
 | `execution` | `commands_run`, `raw_output_refs`, `exit_codes` |
 | `timestamps` | `started_at_utc`, `finished_at_utc`, `clock_source` |
 
 Notes: `terminal.account_kind` is `investor` or `demo` (no account number). `custody.*` maps to the
 V4 custody interface of PR #96 at `d6a7cda72a88600e2ccf6554605f1c50478893ea`; see
 [V4-CUSTODY-COMPATIBILITY.md](V4-CUSTODY-COMPATIBILITY.md). `store_head` is `SEQ:SHA256` as accepted
-by `verify_market_history.py --store-head`. There is deliberately no V3 `anchor_ref` field: a V3
-anchor never grants trust at V4.
+by `verify_market_history.py --store-head`. `store_head_channel_kind` is
+`independent_prior_channel` or `same_store_at_verification`; `gate_outcome` is
+`RECORDABLE_PENDING_REVIEW`, `BLOCKED` or `STOP`. There is deliberately no V3 `anchor_ref` field: a
+V3 anchor never grants trust at V4.
 
 ## Case evidence (`cases.<n>.evidence`)
 
@@ -101,6 +153,16 @@ Case `PASS` additionally requires: case 1 `first_last_time_msc_in_window = true`
 
 Each entry below must appear in `not_verified` unless `claim_evidence` maps it to a reference that
 verifies it; never in both, never in neither. Unknown entries are rejected.
+
+Round 4 (R3-1): a reference alone cannot prove a capability owned by an unresolved dependency. The
+validator's `CLAIM_OWNER` map is a fail-closed allow-list: the six Windows/filesystem entries belong
+to DEP-02, `independent_store_integrity` and `custodian_identity_authenticity` to DEP-01,
+`terminal_history_determinism_between_fetches` and `documented_tick_dtype_matches_terminal_build` to
+DEP-03, and `tick_completeness` has no reviewed evidence method at all. Moving any of those to
+`claim_evidence` is rejected (`claim_requires_unresolved_dependency:<DEP>:<claim>` or
+`claim_has_no_reviewed_evidence_method:<claim>`) while the owner is not RESOLVED. The remaining five
+may be evidenced by a reviewed reference. DEP-02 claims are also passed to the custody gate, whose
+guarantee allow-list is empty.
 
 - `windows_ntfs_atomicity_and_hardlink_behaviour`
 - `reparse_point_and_junction_handling`
@@ -129,8 +191,9 @@ PR #96 Reviewer A F1 (approvals are unauthenticated strings) and PR #96 `lock.py
   `NOT VERIFIED`, every case `NOT_RUN`.
 - `tests/windows_integration_readiness/evidence_fixtures/valid-synthetic.json`:
   `SYNTHETIC_FIXTURE`, fully populated with synthetic values, every case `PASS`, dataset
-  `UNTRUSTED`. It passes the structural checks and derives `NOT_RUN`. It is **not** a run and is
-  **not** Windows-verified.
+  `UNTRUSTED`, a structured synthetic verifier argv and the gate decision the gate actually returns
+  for it (`BLOCKED`). It passes the structural checks and derives `NOT_RUN`. It is **not** a run and
+  is **not** Windows-verified.
 
 An evidence record is **not** an approval. A reviewer who neither operated nor implemented the run
 must approve it, and approval of readiness must precede any real-data execution.

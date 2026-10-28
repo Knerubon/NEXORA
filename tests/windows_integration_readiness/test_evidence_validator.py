@@ -4,6 +4,10 @@ Adversarial cases A1-A10 from the PR #95 remediation prompt, plus Reviewer B's B
 Every negative case must be rejected by `validate_record` (authoritative). Cases marked
 `schema=True` must ALSO be rejected by the committed JSON Schema; that half runs only where
 `jsonschema` is installed (it is not in the locked env), and is skipped otherwise with that reason.
+
+Round 4: a real-half PASS is BLOCKED while DEP-01/DEP-03 are BLOCKED (N2), so the negative cases run
+against a PASS-shaped record with `_test_only_dependencies` marking those dependencies RESOLVED.
+Without that test-only override the same baseline is rejected (see the baseline tests).
 """
 
 from __future__ import annotations
@@ -15,10 +19,13 @@ from typing import Any
 
 import pytest
 
+from tests.windows_integration_readiness import custody_gate as cg
 from tests.windows_integration_readiness.evidence_validator import (
     MANDATORY_NOT_VERIFIED,
     NOT_VERIFIED,
+    RESOLVED,
     SCHEMA_VERSION,
+    Report,
     validate_record,
 )
 
@@ -40,16 +47,62 @@ def template() -> Rec:
     return _load(DOCS / "evidence-record.template.json")
 
 
-def real_shaped_pass() -> Rec:
-    """In-memory only, never committed: the synthetic fixture relabelled as a real run with a
-    TRUSTED independent verification, so the PASS derivation itself can be attacked."""
+# Test-only: pretend the dependencies a real PASS needs are resolved (never used by the CLI).
+OVERRIDE = {"DEP-01": RESOLVED, "DEP-03": RESOLVED}
+
+
+def with_gate(r: Rec) -> Rec:
+    """Record the custody gate decision the checklist would record for this custody section."""
+    r["custody"]["gate_outcome"] = NOT_VERIFIED
+    r["custody"]["gate_reasons"] = NOT_VERIFIED
+    gate = validate_record(r).gate
+    assert gate is not None
+    r["custody"]["gate_outcome"] = gate.outcome
+    r["custody"]["gate_reasons"] = list(gate.reasons)
+    return r
+
+
+def real_shaped_pass(overall: str = "PASS") -> Rec:
+    """In-memory only, never committed: the synthetic fixture rewritten as a real-shaped run with a
+    TRUSTED independent verification (on a proven platform), so the PASS derivation itself can be
+    attacked. Provenance fields carry no synthetic markers."""
     r = synthetic()
     r["evidence_class"] = "REAL_WINDOWS_RUN"
-    r["identity"]["record_id"] = "TEST-ONLY-PASS-SHAPE"
+    r["identity"]["record_id"] = "REAL-SHAPE-0001"
+    r["node"]["hostname_class"] = "node-class-a"
+    r["terminal"].update(company="Broker Co", name="Terminal", server_name="Server-1")
+    r["source_provenance"]["source_descriptor"] = "terminal copy_ticks_range"
+    r["source_provenance"]["broker_clock_evidence_kind"] = "broker_statement"
+    r["execution"]["commands_run"] = ["scripts/extract_market_history.py --symbol SYN"]
+    r["timestamps"]["clock_source"] = "ntp"
     r["dataset"]["development_status"] = "TRUSTED"
-    r["custody"].update(verifier_status="TRUSTED", verifier_exit_code=0, verifier_status_reasons=[])
-    r["overall_result"] = "PASS"
-    return r
+    head = r["custody"]["store_head"]
+    r["custody"]["registry_ref"]["path"] = "registry.json"
+    r["custody"].update(
+        store_ref="store-dir",
+        verifier_argv=[
+            cg.V4_VERIFY_SCRIPT,
+            "--dataset",
+            "dataset-dir",
+            "--store",
+            "store-dir",
+            "--registry",
+            r["custody"]["registry_ref"]["path"],
+            "--store-head",
+            head,
+            "--require-trusted",
+        ],
+        extraction_platform="linux",
+        verifier_status="TRUSTED",
+        verifier_exit_code=0,
+        verifier_status_reasons=[],
+    )
+    r["overall_result"] = overall
+    return with_gate(r)
+
+
+def check(r: Rec) -> Report:
+    return validate_record(r, _test_only_dependencies=OVERRIDE)
 
 
 def _every_leaf(r: Rec, value: Any) -> None:
@@ -267,14 +320,28 @@ def _mutated(fn: Callable[[Rec], None]) -> Rec:
 
 
 def test_baseline_real_shaped_pass_is_accepted_so_negatives_are_meaningful() -> None:
-    report = validate_record(real_shaped_pass())
+    report = check(real_shaped_pass())
     assert report.ok, report.errors
     assert report.derived_overall == "PASS"
+    assert report.as_json()["dependency_source"] == "test_override"
+
+
+def test_baseline_real_shaped_record_is_blocked_without_the_test_override() -> None:
+    report = validate_record(real_shaped_pass())
+    assert set(report.errors) == {
+        "overall_result_not_derivable:claimed=PASS,derived=BLOCKED",
+        "real_readiness_pass_while_dependency_blocked:DEP-01",
+        "real_readiness_pass_while_dependency_blocked:DEP-03",
+    }
+    honest = validate_record(real_shaped_pass("BLOCKED"))
+    assert honest.ok, honest.errors
+    assert honest.real_readiness == "BLOCKED"
+    assert honest.as_json()["dependency_source"] == "derived"
 
 
 @pytest.mark.parametrize(("name", "mutate"), [(n, f) for n, f, _ in NEGATIVE])
 def test_negative_record_is_rejected(name: str, mutate: Callable[[Rec], None]) -> None:
-    report = validate_record(_mutated(mutate))
+    report = check(_mutated(mutate))
     assert not report.ok, name
     assert report.as_json()["windows_verified"] is False
 
@@ -294,10 +361,7 @@ def test_a3_contradiction_rejected_even_when_not_claiming_pass() -> None:
 
 
 def test_a4_reports_which_identities_collide() -> None:
-    assert (
-        "same_identity:operator=second_person_verifier"
-        in validate_record(_mutated(_a4_disguised)).errors
-    )
+    assert "same_identity:operator=second_person_verifier" in check(_mutated(_a4_disguised)).errors
 
 
 def test_a10_synthetic_fixture_passes_structural_checks_without_claiming_windows() -> None:
