@@ -774,6 +774,11 @@ def test_resealed_mutants_never_raise_and_are_never_trusted_against_an_anchor(
         "capability_profile",
         "instrument",
         "filesystem_capabilities",
+        # Round 3: the quality report gained keys, so the seeded RNG now also reaches
+        # quality.config.max_gap_ms. A threshold edit that changes no gap verdict is internally
+        # consistent (the recompute uses the recorded threshold); it is not identity, and the
+        # manifest hash bound into the signed approval exposes it (pre-existing, not new).
+        "quality",
     }, quiet_stale
     # A forger who recomputes every self-hash defeats integrity checks by construction: that is
     # exactly why TRUSTED requires the anchor, which the assertions above prove.

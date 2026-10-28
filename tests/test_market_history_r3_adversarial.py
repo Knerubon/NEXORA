@@ -10,12 +10,16 @@ data, no network.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import signal
 import subprocess
 import sys
 import textwrap
+import threading
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -34,10 +38,25 @@ from nexora.market_history.custody import (
     seal_entry,
     verify_chain,
 )
-from nexora.market_history.extract import dataset_status, open_trusted, verify_dataset
+from nexora.market_history.extract import (
+    ExtractionRequest,
+    dataset_status,
+    open_trusted,
+    recover_interrupted_publish,
+    verify_dataset,
+)
 from nexora.market_history.fsutil import Dir
-from nexora.market_history.models import HistoryError
+from nexora.market_history.lock import LOCK_NAME, acquire
+from nexora.market_history.models import HistoryError, RawTick
+from nexora.market_history.quality import (
+    LEGACY_QUALITY_VERSION,
+    QualityAccumulator,
+    QualityConfig,
+    quality_report,
+)
 
+from tests import _pr95_duplicate_oracle as oracle
+from tests.test_market_history import FakeSource, conv, mk
 from tests.test_market_history_corrective import go, reseal
 from tests.test_market_history_v3 import NOW
 from tests.test_market_history_v4_custody import (
@@ -795,3 +814,347 @@ def test_C12_interruption_during_pinned_io_fails_closed_and_leaks_nothing(
     r = subprocess.run([sys.executable, "-c", killer, str(e.ds)], cwd=ROOT, env=ENVV, timeout=60)
     assert r.returncode != 0
     assert status(e).trusted  # a killed reader leaves nothing behind
+
+
+# ============================ Workstream D: lock, recovery, duplicates =========================
+
+PR95_ORACLE_SHA256 = "81935643deea97ded77292505294a211a4862e8a0b6aad33371291f777beeb9d"
+
+
+def test_D0_the_pr95_oracle_copy_is_verbatim() -> None:
+    """X4: the comparator is PR #95's oracle at 3cc8869, byte for byte (Reviewer A round 2
+    manifest); it was not written or edited by the remediation."""
+    data = (ROOT / "tests" / "_pr95_duplicate_oracle.py").read_bytes()
+    assert hashlib.sha256(data).hexdigest() == PR95_ORACLE_SHA256
+
+
+HOLD = textwrap.dedent(
+    """
+    import sys, time
+    from pathlib import Path
+    from nexora.market_history.fsutil import Dir
+    from nexora.market_history.lock import acquire
+    lock = acquire(Dir.open(Path(sys.argv[1])))
+    print("held", flush=True)
+    time.sleep(float(sys.argv[2]))
+    lock.release()
+    """
+)
+
+
+def test_D1_external_unlink_of_a_live_writer_lock_admits_no_second_owner(tmp_path: Path) -> None:
+    """F6 (R1 test_FINDING_A1_external_unlink_of_live_lock_allows_second_owner)."""
+    proc = subprocess.Popen([sys.executable, "-c", HOLD, str(tmp_path), "5"], cwd=ROOT, env=ENVV,
+                            stdout=subprocess.PIPE, text=True)  # fmt: skip
+    try:
+        assert proc.stdout is not None and proc.stdout.readline().strip() == "held"
+        os.unlink(tmp_path / LOCK_NAME)  # the "attack": remove the name
+        with Dir.open(tmp_path) as d, pytest.raises(HistoryError, match="writer_lock_held"):
+            acquire(d)
+    finally:
+        proc.kill()
+        proc.wait(30)
+    with Dir.open(tmp_path) as d:  # kernel released everything on exit: free again
+        acquire(d).release()
+
+
+class _BlockingSource(FakeSource):
+    def __init__(self, ticks: list[RawTick], block_at: int) -> None:
+        super().__init__(ticks)
+        self.block_at = block_at
+        self.entered = threading.Event()
+        self.go_on = threading.Event()
+
+    def ticks(self, symbol: str, a: int, b: int, *, max_ticks: int) -> list[RawTick]:
+        if a == self.block_at:
+            self.entered.set()
+            assert self.go_on.wait(20)
+        return list(super().ticks(symbol, a, b, max_ticks=max_ticks))
+
+
+def test_D1b_lock_name_removed_mid_extraction_stops_the_writer_and_admits_no_other(
+    tmp_path: Path,
+) -> None:
+    """F6/I-A2 (R2 test_FINDING_A2_lock_name_removed_mid_extraction_admits_a_concurrent_writer):
+    the second writer is refused at the directory lock; the first notices the lost record before
+    its next publication and stops (fail closed); nothing half-written is ever trusted."""
+    ds = tmp_path / "ds"
+    src = _BlockingSource([mk(1000 + i * 500) for i in range(10)], block_at=3000)
+    errors: list[BaseException] = []
+
+    def writer1() -> None:
+        try:
+            go(ds, source=src, operator="ann")
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    t = threading.Thread(target=writer1)
+    t.start()
+    assert src.entered.wait(20)
+    os.unlink(ds / LOCK_NAME)
+    with pytest.raises(HistoryError, match="writer_lock_held"):
+        go(ds, operator="ann")  # no second owner while writer 1 lives
+    src.go_on.set()
+    t.join(30)
+    assert errors and isinstance(errors[0], HistoryError) and errors[0].code == "writer_lock_lost"
+    assert not (ds / "manifest.json").exists()
+    assert "manifest_missing" in verify_dataset(ds)
+    go(ds, operator="ann")  # a clean re-run completes it
+    assert verify_dataset(ds) == []
+
+
+def test_D2_competing_extraction_processes_exactly_one_completes(tmp_path: Path) -> None:
+    code = textwrap.dedent(
+        """
+        import sys, time
+        from pathlib import Path
+        from tests.test_market_history_corrective import go
+        from nexora.market_history.models import HistoryError
+        t0 = float(sys.argv[2])
+        while time.time() < t0: pass
+        try:
+            go(Path(sys.argv[1]), operator="ann"); print("OK")
+        except HistoryError as e:
+            print(e.code)
+        """
+    )
+    import time
+
+    for rnd in range(3):
+        ds = tmp_path / f"ds{rnd}"
+        t0 = time.time() + 1.5
+        argv = [sys.executable, "-c", code, str(ds), str(t0)]
+        procs = [
+            subprocess.Popen(argv, cwd=ROOT, env=ENVV, stdout=subprocess.PIPE, text=True)
+            for _ in range(6)
+        ]
+        outs = [p.communicate(timeout=60)[0].strip() for p in procs]
+        assert outs.count("OK") == 1, outs
+        assert set(outs) - {"OK"} <= {"writer_lock_held", "manifest_exists_dataset_is_immutable"}
+        assert verify_dataset(ds) == []
+
+
+CRASH_APPEND = textwrap.dedent(
+    """
+    import os, sys, signal, json
+    from pathlib import Path
+    from nexora.market_history.fsutil import Dir
+    stage, store = sys.argv[1], Path(sys.argv[2])
+    real_link = Dir.link
+    def link(self, src, dst):
+        if stage == "before_link": os.kill(os.getpid(), signal.SIGKILL)
+        real_link(self, src, dst)
+        if stage == "after_link": os.kill(os.getpid(), signal.SIGKILL)
+    Dir.link = link
+    from nexora.market_history.custody import LocalAppendOnlyStore
+    LocalAppendOnlyStore(store).append(json.loads(sys.argv[3]))
+    """
+)
+
+
+def _crash_append(stage: str, e: Env, body: dict[str, Any]) -> int:
+    r = subprocess.run([sys.executable, "-c", CRASH_APPEND, stage, str(e.store.location),
+                        json.dumps(body)], cwd=ROOT, env=ENVV, timeout=60)  # fmt: skip
+    return r.returncode
+
+
+def test_D3_crash_between_link_and_unlink_does_not_wedge_the_store(tmp_path: Path) -> None:
+    """N5 (R2 test_FINDING_A12_crash_between_link_and_temp_unlink_wedges_the_whole_store)."""
+    e = make_env(tmp_path)
+    approve(e)
+    assert status(e).trusted
+    assert _crash_append("after_link", e, body_for(e, "dave")) == -signal.SIGKILL
+    names = sorted(p.name for p in e.store.location.iterdir())
+    assert any(".tmp-" in n for n in names) and "entry-00000002.json" in names
+    assert len(e.store.entries()) == 2 and verify_chain(e.store.entries()) == ""  # readable
+    assert status(e).trusted  # every dataset in the store stays verifiable
+    other = make_env(tmp_path / "o")
+    approve(other, store=e.store)  # appendable; the append also finished the crashed one
+    assert not any(".tmp-" in p.name for p in e.store.location.iterdir())
+
+
+def test_D4_crash_during_manifest_publication_is_recoverable(tmp_path: Path) -> None:
+    """N5 (R2 test_FINDING_A12_crash_between_manifest_link_and_temp_unlink_bricks_the_dataset)."""
+    code = textwrap.dedent(
+        """
+        import os, signal, sys
+        from pathlib import Path
+        from nexora.market_history.fsutil import Dir
+        real = Dir.link
+        def link(self, src, dst):
+            real(self, src, dst)
+            if dst == "manifest.json": os.kill(os.getpid(), signal.SIGKILL)
+        Dir.link = link
+        from tests.test_market_history_corrective import go
+        go(Path(sys.argv[1]), operator="ann")
+        """
+    )
+    ds = tmp_path / "ds"
+    r = subprocess.run([sys.executable, "-c", code, str(ds)], cwd=ROOT, env=ENVV, timeout=60)
+    assert r.returncode == -signal.SIGKILL
+    assert "manifest_multiple_links" in verify_dataset(ds)  # blocked until recovered (fail closed)
+    out = subprocess.run([sys.executable, "scripts/recover_market_history.py", "--dataset",
+                          str(ds)], cwd=ROOT, env=ENVV, capture_output=True, text=True,
+                         timeout=60)  # fmt: skip
+    report = json.loads(out.stdout.strip().splitlines()[-1])
+    assert out.returncode == 0 and len(report["removed_temp_names"]) == 1
+    assert report["removed_temp_names"][0].startswith("manifest.json.tmp-")
+    assert report["verify_problems"] == []
+    assert recover_interrupted_publish(ds) == []  # deterministic: nothing left to do
+
+
+def test_D4b_extract_rerun_finishes_the_interrupted_publication_itself(tmp_path: Path) -> None:
+    code = textwrap.dedent(
+        """
+        import os, signal, sys
+        from pathlib import Path
+        from nexora.market_history.fsutil import Dir
+        real = Dir.link
+        def link(self, src, dst):
+            real(self, src, dst)
+            if dst == "manifest.json": os.kill(os.getpid(), signal.SIGKILL)
+        Dir.link = link
+        from tests.test_market_history_corrective import go
+        go(Path(sys.argv[1]), operator="ann")
+        """
+    )
+    ds = tmp_path / "ds"
+    subprocess.run([sys.executable, "-c", code, str(ds)], cwd=ROOT, env=ENVV, timeout=60)
+    with pytest.raises(HistoryError, match="manifest_exists_dataset_is_immutable"):
+        go(ds, operator="ann")  # still immutable...
+    assert verify_dataset(ds) == []  # ...but the interrupted publication is now complete
+
+
+def test_D5_recovery_of_a_completed_append_deletes_no_evidence(tmp_path: Path) -> None:
+    e = make_env(tmp_path)
+    approve(e)
+    assert _crash_append("before_link", e, body_for(e, "dave")) == -signal.SIGKILL  # orphan
+    assert _crash_append("after_link", e, body_for(e, "dave")) == -signal.SIGKILL  # twin
+    before = {p.name: p.read_bytes() for p in e.store.location.iterdir() if ".tmp-" not in p.name}
+    removed = e.store.recover()
+    assert len(removed) == 1 and removed[0].startswith("entry-00000002.json.tmp-")
+    after = {p.name: p.read_bytes() for p in e.store.location.iterdir() if ".tmp-" not in p.name}
+    assert after == before  # every entry intact
+    assert sum(".tmp-" in p.name for p in e.store.location.iterdir()) == 1  # orphan left alone
+    assert e.store.recover() == []
+    assert verify_chain(e.store.entries()) == "" and len(e.store.entries()) == 2
+
+
+def _oracle(ticks: list[RawTick]) -> dict[str, int]:
+    return oracle.classify(
+        [{"time_msc": t.time_msc, "bid": str(t.bid), "ask": str(t.ask),
+          **({"flags": t.flags} if t.flags is not None else {})} for t in ticks]  # fmt: skip
+    )
+
+
+def _quality(tmp: Path, ticks: list[RawTick]) -> dict[str, Any]:
+    return dict(go(tmp, source=FakeSource(ticks), operator="ann")["quality"])
+
+
+def _counts(q: dict[str, Any]) -> tuple[int, int, int]:
+    return (q["exact_duplicate_count"], q["same_timestamp_different_quote_count"],
+            q["same_quote_different_flags_count"])  # fmt: skip
+
+
+def _ocounts(o: dict[str, int]) -> tuple[int, int, int]:
+    return (o["exact_duplicate"], o["same_ts_diff_quote"], o["same_quote_diff_flags"])
+
+
+A, B, C = ("100.00", "100.10"), ("100.05", "100.15"), ("100.02", "100.12")
+
+
+def tk(t: int, q: tuple[str, str] = A, flags: int | None = None) -> RawTick:
+    return RawTick(t, Decimal(q[0]), Decimal(q[1]), flags)
+
+
+# Golden vectors derived BY HAND from ORACLE-SPEC section 3 (not by running either program):
+# (ticks, (exact_duplicate, same_timestamp_different_quote, same_quote_different_flags))
+GOLDEN: list[tuple[str, list[RawTick], tuple[int, int, int]]] = [
+    ("G1 (t,A)(t,B)(t,A)", [tk(1000), tk(1500), tk(1500, B), tk(1500), tk(2000)], (1, 1, 0)),
+    ("G2 repeat across timestamps", [tk(1000), tk(1500), tk(2000), tk(1500), tk(2500)], (1, 0, 0)),
+    ("G3 flags 2 vs 4", [tk(1000), tk(1500, A, 2), tk(1500, A, 4), tk(2000)], (0, 0, 1)),
+    ("G4 adjacent repeat", [tk(1000), tk(1000), tk(1500)], (1, 0, 0)),
+    ("G5 absent vs present flags", [tk(1500), tk(1500, A, 2), tk(1500)], (1, 0, 1)),
+    ("G6 equal decimals, other spelling", [tk(1500, ("100.1", "100.2")),
+                                           tk(1500, ("100.10", "100.20"))], (1, 0, 0)),  # fmt: skip
+    ("G7 three quotes, one repeated", [tk(1500), tk(1500, B), tk(1500, C), tk(1500, B)], (1, 2, 0)),
+]
+
+
+@pytest.mark.parametrize(("label", "ticks", "expected"), GOLDEN, ids=[g[0] for g in GOLDEN])
+def test_D6_D7_D8_duplicates_match_hand_golden_vectors_and_the_independent_oracle(
+    tmp_path: Path, label: str, ticks: list[RawTick], expected: tuple[int, int, int]
+) -> None:
+    """N6/X4 (R2 test_FINDING_A11_* x3): through the REAL extract() pipeline."""
+    q = _quality(tmp_path / "ds", ticks)
+    assert _counts(q) == expected, label
+    assert _ocounts(_oracle(ticks)) == expected, label  # the oracle agrees with the hand vector
+    assert verify_dataset(tmp_path / "ds") == []  # and the recompute reproduces it
+
+
+def test_D9_out_of_order_sequence_counts_the_repeat_and_stays_a_hard_defect(tmp_path: Path) -> None:
+    ticks = [tk(1000), tk(1500), tk(2000), tk(1500), tk(2500)]
+    q = _quality(tmp_path / "ds", ticks)
+    assert q["exact_duplicate_count"] == 1 and q["non_monotonic_count"] == 1
+    assert _oracle(ticks)["out_of_order"] == 1
+    assert "non_monotonic_count" in go(tmp_path / "x", source=FakeSource(ticks),
+                                       operator="ann")["quality_hard_defects"]  # fmt: skip
+
+
+def test_D10_large_dataset_with_separated_duplicates_matches_the_oracle(tmp_path: Path) -> None:
+    import random
+
+    rnd = random.Random(77)
+    ticks: list[RawTick] = []
+    for i in range(20_000):
+        t = 1_000 + i * 3
+        ticks.append(tk(t, rnd.choice([A, B, C]), rnd.choice([None, 2, 4])))
+        if i % 97 == 0 and ticks:  # re-emit an earlier tick from the same chunk, non-adjacent
+            ticks.append(ticks[max(0, len(ticks) - 1 - rnd.randrange(1, 30))])
+    req = ExtractionRequest("SYN", 1_000, 1_000 + 20_000 * 3, 5_000)
+    m = go(tmp_path / "ds", source=FakeSource(ticks), req=req, operator="ann")
+    in_window = [x for x in ticks if 1_000 <= x.time_msc < 61_000]
+    assert _counts(m["quality"]) == _ocounts(_oracle(in_window))
+    assert m["quality"]["exact_duplicate_count"] > 100
+    assert verify_dataset(tmp_path / "ds") == []
+
+
+def test_D11_legacy_quality_v1_manifests_still_verify(tmp_path: Path) -> None:
+    """Existing V3/V4 datasets carry tick-quality/1; the verifier reproduces that report exactly
+    (adjacent semantics), so the version bump does not invalidate them."""
+    ticks = [tk(1000), tk(1500), tk(1500, B), tk(1500), tk(2000)]
+    go(tmp_path / "ds", source=FakeSource(ticks), operator="ann")
+    acc = QualityAccumulator(QualityConfig(5000), version=LEGACY_QUALITY_VERSION)
+    from nexora.market_history.convert import normalize
+
+    for t in normalize([x for x in ticks if 1000 <= x.time_msc < 6000], conv()):
+        acc.add(t)
+    legacy = acc.report()
+    assert legacy["version"] == LEGACY_QUALITY_VERSION and legacy["exact_duplicate_count"] == 0
+    reseal(tmp_path / "ds", lambda m: m.update(quality=legacy))
+    assert verify_dataset(tmp_path / "ds") == []
+    reseal(tmp_path / "ds", lambda m: m["quality"].update(version="nexora.tick-quality/9"))
+    assert any("quality_recompute_failed" in p for p in verify_dataset(tmp_path / "ds"))
+    assert quality_report([], QualityConfig(1))["same_quote_different_flags_count"] == 0
+
+
+def test_D12_unsupported_filesystem_lock_semantics_fail_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nexora.market_history import fsutil, lock
+
+    e = make_env(tmp_path)
+    approve(e)
+    reseal(e.ds, lambda m: m["filesystem_capabilities"]["probes"].update(
+        directory_lock_exclusion=False))  # fmt: skip
+    assert "capability:probe_not_proven:directory_lock_exclusion" in _reasons(e)
+    caps = fsutil.capability_blockers({"schema": fsutil.FS_SCHEMA, "platform": "linux",
+                                       "fs_class": "local", "probes": {}})  # fmt: skip
+    assert "probe_not_proven:directory_lock_exclusion" in caps
+
+    def no_flock(fd: int) -> bool:
+        raise HistoryError("writer_lock_unsupported", "errno 95")
+
+    monkeypatch.setattr(lock, "_try_lock", no_flock)
+    with pytest.raises(HistoryError, match="writer_lock_unsupported"):
+        go(tmp_path / "nolock", operator="ann")

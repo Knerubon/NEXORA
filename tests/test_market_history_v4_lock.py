@@ -23,6 +23,7 @@ from nexora.market_history.fsutil import Dir
 from nexora.market_history.lock import (
     LOCK_FORMAT,
     LOCK_NAME,
+    _acquire_record,
     acquire,
     acquire_writer_lock,
     release_writer_lock,
@@ -95,7 +96,10 @@ def test_live_owner_appearing_after_we_looked_is_never_displaced(
     winner: list[Any] = []
 
     def live_owner_takes_it() -> None:
-        winner.append(acquire(Dir.open(tmp_path)))  # B acquires between A's open and A's flock
+        # B acquires between A's open and A's flock. Since round 3, A already holds the directory
+        # lock at that point, so only a writer that skips it (a round-2 V4 writer: the record
+        # sub-protocol alone) can get here; the record protocol must still never displace it.
+        winner.append(_acquire_record(Dir.open(tmp_path)))
 
     hook_once(monkeypatch, "after_open", live_owner_takes_it)
     with Dir.open(tmp_path) as d, pytest.raises(HistoryError, match="writer_lock_held"):
@@ -152,7 +156,7 @@ def test_acquirer_that_locked_a_just_released_inode_retries_on_the_new_file(
         # succeeds on an inode that no longer has a name: B must notice and retry, not "own" it.
         hook_once(monkeypatch, "after_open", a.release)
         with Dir.open(tmp_path) as db:
-            b = acquire(db)
+            b = _acquire_record(db)  # record sub-protocol (a full acquire stops at the dir lock)
             assert token_in(tmp_path / LOCK_NAME) == b.token != a.token
             with Dir.open(tmp_path) as dc, pytest.raises(HistoryError, match="writer_lock_held"):
                 acquire(dc)  # and B really owns the file that now carries its name

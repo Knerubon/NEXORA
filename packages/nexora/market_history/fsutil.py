@@ -57,6 +57,7 @@ REQUIRED_PROBES = (
     "hardlink_no_overwrite",
     "nlink_reported",
     "advisory_lock_exclusion",
+    "directory_lock_exclusion",
     "fsync_dir",
 )
 
@@ -314,7 +315,10 @@ def probe_filesystem(d: Dir) -> dict[str, Any]:
     Returns a JSON-safe record stored in the manifest. It is a CLAIM by the extracting machine:
     `capability_blockers` re-derives the verdict from the raw probes (never from a stored verdict),
     but a hostile extractor can still lie; the custodian approval is the control for that."""
-    from nexora.market_history.lock import lock_exclusion_works  # local: avoid import cycle
+    from nexora.market_history.lock import (  # local: avoid import cycle
+        directory_lock_exclusion_works,
+        lock_exclusion_works,
+    )
 
     suffix = f"{TMP_MARKER}probe-{os.getpid()}-{os.urandom(4).hex()}"
     a, b, s = f".a{suffix}", f".b{suffix}", f".s{suffix}"
@@ -339,6 +343,7 @@ def probe_filesystem(d: Dir) -> dict[str, Any]:
             probes["hardlink_no_overwrite"] = False
         probes["nofollow_open"] = _probe_nofollow(d, a, s, created)
         probes["advisory_lock_exclusion"] = lock_exclusion_works(d, a)
+        probes["directory_lock_exclusion"] = directory_lock_exclusion_works(d)
         probes["fsync_dir"] = d.fd is not None and _fsync_ok(d.fd)
     finally:
         for name in created:

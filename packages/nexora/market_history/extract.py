@@ -69,7 +69,7 @@ from nexora.market_history.models import (
 from nexora.market_history.provider import HistoricalTickSource, TransientSourceError
 from nexora.market_history.quality import QualityAccumulator, QualityConfig, hard_defects
 
-EXTRACTOR_VERSION = "nexora.market-history-extractor/5"
+EXTRACTOR_VERSION = "nexora.market-history-extractor/6"
 CHUNK_NAME = re.compile(r"chunk-(\d+)-(\d+)\.jsonl")
 MANIFEST_NAME = "manifest.json"
 ANCHOR_SCHEMA = "nexora.market-history-anchor/1"
@@ -241,6 +241,40 @@ def _clean_stale_temp(d: Dir) -> int:
     return n
 
 
+def recover_interrupted_publish(directory: Path) -> list[str]:
+    """Complete publications interrupted between the no-overwrite link and the temp unlink (N5).
+
+    Under the writer lock, a temp name whose inode IS the inode of its final name is the second
+    name of a file that was already published; removing that temp name deletes no data (the final
+    name keeps the inode). Nothing else is touched: other temps, mismatched inodes and every final
+    file are left as they are. Returns the removed names (audit record). Deterministic: running it
+    again returns []."""
+    with Dir.open(directory) as d:
+        lock = acquire(d)
+        try:
+            return _recover_in(d)
+        finally:
+            lock.release()
+
+
+def _recover_in(d: Dir) -> list[str]:
+    removed: list[str] = []
+    names = set(d.listdir())
+    for name in sorted(names):
+        if TMP_MARKER not in name:
+            continue
+        final = name.split(TMP_MARKER, 1)[0]
+        if final not in names or d.kind(name) != "regular" or d.kind(final) != "regular":
+            continue
+        a, b = d.stat(name), d.stat(final)
+        if (a.st_dev, a.st_ino) == (b.st_dev, b.st_ino):
+            d.unlink(name)
+            removed.append(name)
+    if removed:
+        d.fsync()
+    return removed
+
+
 def _utc_span(conversion: TimeConversion, lo: int, hi: int) -> tuple[int, int]:
     """Smallest UTC interval containing the raw window [lo, hi), segment by segment."""
     points: list[int] = []
@@ -304,6 +338,7 @@ def extract(
     with Dir.open(out_dir, create=True) as d:
         lock = acquire(d)
         try:
+            _recover_in(d)  # finish an interrupted publication first (N5), then judge
             if d.lexists(MANIFEST_NAME):
                 raise HistoryError("manifest_exists_dataset_is_immutable")
             clean_stale_temp(d)
@@ -312,7 +347,7 @@ def extract(
                 raise HistoryError("filesystem_cannot_hardlink", out_dir.name)
             return _extract_locked(
                 source, request, conversion, quality, d, retrieved_at, clock_attestation,
-                protected, margin, sleep, capabilities, operator,
+                protected, margin, sleep, capabilities, operator, lock.assert_held,
             )  # fmt: skip
         finally:
             lock.release()
@@ -342,6 +377,7 @@ def _extract_locked(
     sleep: Callable[[float], None],
     capabilities: dict[str, Any],
     operator: str | None,
+    still_owner: Callable[[], None] = lambda: None,
 ) -> dict[str, Any]:
     instrument = source.instrument(request.symbol)
     profile = source.capability_profile()
@@ -360,6 +396,7 @@ def _extract_locked(
         outside = len(ticks) - len(inside)
         body = "".join(_encode_tick(t) + "\n" for t in inside).encode()
         name = f"chunk-{a}-{b}.jsonl"
+        still_owner()  # F6: stop if the lock record was removed or replaced under us
         try:
             write_once_in(out_dir, name, body)
         except FileExistsError:
@@ -420,6 +457,7 @@ def _extract_locked(
         "operator": operator,
     }
     manifest["manifest_sha256"] = sha256_hex(canonical_json(manifest))
+    still_owner()
     try:
         write_once_in(
             out_dir, MANIFEST_NAME, json.dumps(manifest, sort_keys=True, indent=2).encode() + b"\n"
@@ -730,7 +768,10 @@ def _verify_in(
     conv: TimeConversion | None = None
     try:
         conv = conversion_from_manifest(manifest)
-        acc = QualityAccumulator(QualityConfig(manifest["quality"]["config"]["max_gap_ms"]))
+        acc = QualityAccumulator(
+            QualityConfig(manifest["quality"]["config"]["max_gap_ms"]),
+            version=manifest["quality"].get("version"),
+        )
     except (HistoryError, KeyError, TypeError, ValueError):
         acc = None  # reported below (attestation / recompute), never silently skipped
     quality_error = ""

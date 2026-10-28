@@ -4,7 +4,9 @@ Run by an AUTHORIZED CUSTODIAN, a different principal from the dataset operator,
 control. `approve` re-verifies the dataset itself, applies the same checks the verifier will apply
 (signed operator attestation, custodian key and role, independence of the authenticated principals,
 binding to the exact dataset) and appends a signed, hash-chained entry to the append-only evidence
-store. `revoke` withdraws trust. `head` prints the current chain head (unsigned: it is NOT an
+store. `revoke` withdraws trust. `recover-store` finishes appends interrupted by a crash between
+link and temp unlink (removes only temp names that are the same inode as their entry, and prints
+them). `head` prints the current chain head (unsigned: it is NOT an
 independent pin). `pin` is run by the PIN AUTHORITY, a principal independent of operators and
 approving custodians, over the store as it reads it through its own channel: it signs the head and
 must extend the previous pin (`--previous`), or state `--initial` / `--reanchor-ref` (where the
@@ -48,6 +50,8 @@ def main() -> int:
             p.add_argument("--candidate", type=Path, required=True)
     h = sub.add_parser("head")
     h.add_argument("--store", type=Path, required=True)
+    rs = sub.add_parser("recover-store", help="finish appends interrupted between link/unlink")
+    rs.add_argument("--store", type=Path, required=True)
     pn = sub.add_parser("pin")
     pn.add_argument("--store", type=Path, required=True)
     pn.add_argument("--registry", type=Path, required=True)
@@ -67,6 +71,11 @@ def main() -> int:
             print(json.dumps({"ed25519": signer.public_hex, "key_id": signer.key_id}))
             return 0
         store = LocalAppendOnlyStore(args.store)
+        if args.cmd == "recover-store":
+            removed = store.recover()
+            problem = verify_chain(store.entries())
+            print(json.dumps({"removed_temp_names": removed, "chain": problem or "ok"}))
+            return 1 if problem else 0
         if args.cmd == "head":
             entries = store.entries()
             problem = verify_chain(entries)

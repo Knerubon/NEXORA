@@ -59,6 +59,7 @@
     "probes": {
       "advisory_lock_exclusion": true,
       "dir_fd": true,
+      "directory_lock_exclusion": true,
       "fsync_dir": true,
       "hardlink_no_overwrite": true,
       "nlink_reported": true,
@@ -82,10 +83,10 @@
     ],
     "symbol": "SYN"
   },
-  "manifest_sha256": "13abbae73422226858ef29bb06cc8296580869e2558958d9e493aedf073e6a38",
+  "manifest_sha256": "d5efc9ec7a3d852f16021502b43d32724fa41224010d1846e13be5aaa3eb1c39",
   "max_chunk_ticks": 1000000,
   "provenance": {
-    "extractor": "nexora.market-history-extractor/5",
+    "extractor": "nexora.market-history-extractor/6",
     "operator": null,
     "orders_submitted": 0,
     "protected_margin_ms": 0,
@@ -110,12 +111,14 @@
     "nonfinite_quote_count": 0,
     "nonpositive_price_count": 0,
     "note": "counts and coverage only; no price/spread distributions (holdout custody)",
+    "same_quote_different_flags_count": 0,
     "same_timestamp_different_quote_count": 0,
     "tick_count": 10,
+    "tick_identity": "(raw_msc, canonical bid, canonical ask, flags or ABSENT): exact decimal values as received; a repeat counts as an exact duplicate wherever it occurs in its chunk (chunks partition raw time, so no identity can recur across chunks)",
     "ticks_per_utc_day": {
       "1969-12-31": 10
     },
-    "version": "nexora.tick-quality/1",
+    "version": "nexora.tick-quality/2",
     "zero_spread_count": 0
   },
   "quality_hard_defects": [],

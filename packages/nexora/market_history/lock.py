@@ -8,6 +8,9 @@ reaper could delete a live owner's freshly created lock; that class of bug canno
 no decision is derived from a previously read file.
 
 Protocol (POSIX):
+  0. take `flock(LOCK_EX|LOCK_NB)` on a descriptor of the PINNED DIRECTORY ITSELF (round 3, F6):
+     a directory inode has no name inside itself that anyone could unlink or replace, so removing
+     `.writer.lock` from outside can no longer admit a second writer; failure -> `writer_lock_held`;
   1. open `.writer.lock` (O_CREAT, no O_EXCL, O_NOFOLLOW, relative to the pinned directory);
   2. `flock(LOCK_EX|LOCK_NB)`; failure -> `writer_lock_held` (fail closed, never reap);
   3. confirm the locked inode is still the one at the name (the previous holder unlinks the file
@@ -18,7 +21,9 @@ Protocol (POSIX):
      closed, an operator must act;
   5. write the V4 record (pid/host/token are informational only, never used for ownership).
 Release unlinks the file only while still holding the lock and only if the name still resolves to
-the inode we hold, then closes the descriptor.
+the inode we hold, then closes the descriptors. `assert_held()` lets a writer confirm, before each
+publication, that the record name still resolves to its inode: if someone removed or replaced it
+the writer stops with `writer_lock_lost` (fail closed, auditable) instead of carrying on.
 
 Supported: POSIX local filesystems where `flock` is exclusive (probed: `lock_exclusion_works`;
 Linux ext4 cloud-tested). Not supported for TRUSTED: network/FUSE filesystems (flock may be local
@@ -116,6 +121,12 @@ class WriterLock:
     dev: int
     ino: int
     released: bool = False
+    dir_fd: int = -1  # descriptor holding the directory lock (POSIX); -1 where unsupported
+
+    def assert_held(self) -> None:
+        """Raise `writer_lock_lost` unless `.writer.lock` still names the inode we hold."""
+        if self.released or not _same_file_ids(self.directory, self.dev, self.ino):
+            raise HistoryError("writer_lock_lost", f"{LOCK_NAME} was removed or replaced")
 
     def release(self) -> None:
         if self.released:
@@ -136,6 +147,7 @@ class WriterLock:
         finally:
             _unlock(self.fd)
             os.close(self.fd)
+            _release_dir_lock(self.dir_fd)
 
 
 def _classify(raw: bytes) -> str:
@@ -157,6 +169,62 @@ def acquire(directory: Dir) -> WriterLock:
     """Take exclusive ownership of `directory` or raise `writer_lock_held` (this includes an owner
     that cannot be verified: fail closed) or `writer_lock_unsupported`. Never removes anyone
     else's file."""
+    dir_fd = _acquire_dir_lock(directory)
+    try:
+        lock = _acquire_record(directory)
+    except BaseException:
+        _release_dir_lock(dir_fd)
+        raise
+    lock.dir_fd = dir_fd
+    return lock
+
+
+def _open_self(directory: Dir) -> int:
+    """A new open file description of the pinned directory (POSIX only)."""
+    assert directory.fd is not None
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    return os.open(".", flags, dir_fd=directory.fd)
+
+
+def _acquire_dir_lock(directory: Dir) -> int:
+    if _WINDOWS or directory.fd is None:  # pragma: no cover - fallback is never TRUSTED
+        return -1
+    fd = _open_self(directory)
+    try:
+        if not _try_lock(fd):
+            raise HistoryError("writer_lock_held", "directory lock held by another writer")
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _release_dir_lock(fd: int) -> None:
+    if fd >= 0:
+        _unlock(fd)
+        os.close(fd)
+
+
+def directory_lock_exclusion_works(directory: Dir) -> bool:
+    """Probe: of two independent descriptors on the pinned directory, at most one can hold the
+    lock, and a holder blocks the other (works whether or not the caller already holds it)."""
+    if _WINDOWS or directory.fd is None:
+        return False
+    first = second = -1
+    try:
+        first, second = _open_self(directory), _open_self(directory)
+        _try_lock(first)  # now held by `first`, or already held by the caller / another writer
+        return not _try_lock(second)
+    except (OSError, HistoryError):
+        return False
+    finally:
+        for fd in (second, first):
+            if fd >= 0:
+                _unlock(fd)
+                os.close(fd)
+
+
+def _acquire_record(directory: Dir) -> WriterLock:
     flags = os.O_RDWR | os.O_CREAT
     for _attempt in range(4):
         try:
@@ -207,11 +275,15 @@ def acquire(directory: Dir) -> WriterLock:
 
 
 def _same_file(directory: Dir, st: os.stat_result) -> bool:
+    return _same_file_ids(directory, st.st_dev, st.st_ino)
+
+
+def _same_file_ids(directory: Dir, dev: int, ino: int) -> bool:
     try:
         now = directory.stat(LOCK_NAME)
     except FileNotFoundError:
         return False
-    return (now.st_dev, now.st_ino) == (st.st_dev, st.st_ino)
+    return (now.st_dev, now.st_ino) == (dev, ino)
 
 
 # ---- path/token compatibility API (V3 signatures) -------------------------------------------

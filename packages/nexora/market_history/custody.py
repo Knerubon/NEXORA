@@ -398,19 +398,20 @@ def head_of(entries: Sequence[Mapping[str, Any]]) -> ChainHead | None:
     return ChainHead(len(entries), str(entries[-1]["entry_sha256"])) if entries else None
 
 
-def _single_link(d: Dir, name: str) -> bool:
-    """True when `name` has exactly one link. An appender that is between its link() and unlink()
-    of the temp name makes a second link visible for a moment: wait that out, but only while a
-    sibling temp of that name exists; a persistent extra link is a second name for the evidence."""
-    import time
-
-    for _ in range(100):
-        if d.stat(name).st_nlink == 1:
-            return True
-        if not any(n.startswith(f"{name}{TMP_MARKER}") for n in d.listdir()):
-            return False
-        time.sleep(0.002)
-    return False
+def _completed_append_twins(d: Dir, name: str, st: os.stat_result, names: list[str]) -> list[str]:
+    """Temp names of `name` that ARE its inode: the second name left by an appender between its
+    no-overwrite link() and the temp unlink() (live, or crashed in that window: N5). Such a twin
+    is the same file, so it explains the extra link without being a second piece of evidence."""
+    out = []
+    for n in names:
+        if n.startswith(f"{name}{TMP_MARKER}"):
+            try:
+                t = d.stat(n)
+            except FileNotFoundError:
+                continue
+            if (t.st_dev, t.st_ino) == (st.st_dev, st.st_ino):
+                out.append(n)
+    return out
 
 
 class LocalAppendOnlyStore:
@@ -438,16 +439,20 @@ class LocalAppendOnlyStore:
         with d:
             # in-flight temp files of a concurrent appender are not entries (and a crashed
             # appender's leftover is harmless: it never carried an entry name)
-            names = sorted(n for n in d.listdir() if TMP_MARKER not in n)
+            listing = d.listdir()
+            temps = [n for n in listing if TMP_MARKER in n]
+            names = sorted(n for n in listing if TMP_MARKER not in n)
             out: list[dict[str, Any]] = []
             for i, name in enumerate(names, 1):
                 m = _ENTRY_NAME.fullmatch(name)
                 if not m or int(m.group(1)) != i:
                     raise HistoryError("store_unexpected_entry", name[:60])
                 try:
-                    if not _single_link(d, name):
-                        raise HistoryError("store_unexpected_entry", "multiple links")
                     with d.open_regular(name) as fh:
+                        st = os.fstat(fh.fileno())
+                        twins = _completed_append_twins(d, name, st, temps)
+                        if st.st_nlink != 1 + len(twins):
+                            raise HistoryError("store_unexpected_entry", "multiple links")
                         data = json.loads(fh.read(_MAX_FILE))
                 except HistoryError as exc:
                     if exc.code == "store_unexpected_entry":
@@ -458,10 +463,32 @@ class LocalAppendOnlyStore:
                 out.append(data)
             return out
 
+    def recover(self) -> list[str]:
+        """Remove the temp names of completed appends (same inode as their entry: no evidence
+        is deleted, the entry name keeps the file). Under the store lock, so no live appender
+        owns them. Returns the removed names (audit record); a second run returns []."""
+        with Dir.open(self.location, create=True) as d, _StoreLock(d):
+            return self._recover_in(d)
+
+    @staticmethod
+    def _recover_in(d: Dir) -> list[str]:
+        listing = d.listdir()
+        temps = [n for n in listing if TMP_MARKER in n]
+        removed: list[str] = []
+        for name in sorted(n for n in listing if _ENTRY_NAME.fullmatch(n)):
+            st = d.stat(name)
+            for twin in _completed_append_twins(d, name, st, temps):
+                d.unlink(twin, missing_ok=True)
+                removed.append(twin)
+        if removed:
+            d.fsync()
+        return removed
+
     def append(self, body: Mapping[str, Any]) -> dict[str, Any]:
         from nexora.market_history.extract import write_once_in
 
-        with Dir.open(self.location, create=True) as d:
+        with Dir.open(self.location, create=True) as d, _StoreLock(d):
+            self._recover_in(d)
             for _ in range(5):
                 entries = self.entries()
                 problem = verify_chain(entries)
@@ -480,6 +507,40 @@ class LocalAppendOnlyStore:
                     continue  # another appender took this sequence number: re-read and retry
                 return entry
         raise HistoryError("store_conflict", "could not append after retries")
+
+
+class _StoreLock:
+    """Serialises appenders of one LocalAppendOnlyStore (flock on a descriptor of the pinned
+    store directory). Readers never take it. Unsupported platforms run unserialised, as before:
+    the no-overwrite link still refuses a second entry at the same sequence number."""
+
+    def __init__(self, d: Dir) -> None:
+        self.d = d
+        self.fd = -1
+
+    def __enter__(self) -> _StoreLock:
+        from nexora.market_history.lock import _WINDOWS, _open_self
+
+        if _WINDOWS or self.d.fd is None:  # pragma: no cover
+            return self
+        import fcntl
+
+        self.fd = _open_self(self.d)
+        try:
+            fcntl.flock(self.fd, fcntl.LOCK_EX)  # blocking: appends are short
+        except OSError:
+            os.close(self.fd)
+            self.fd = -1
+            raise HistoryError("store_lock_unavailable") from None
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        if self.fd >= 0:
+            from nexora.market_history.lock import _unlock
+
+            _unlock(self.fd)
+            os.close(self.fd)
+            self.fd = -1
 
 
 # ---- approval and revocation -----------------------------------------------------------------

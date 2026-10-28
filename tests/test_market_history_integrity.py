@@ -390,7 +390,7 @@ def test_external_anchor_detects_self_consistent_forgery(tmp_path: Path) -> None
 
 def test_provenance_fields_present(tmp_path: Path) -> None:
     m = run(tmp_path, FakeSource([mk(1000)]), ExtractionRequest("SYN", 1000, 2000, 1000))
-    assert m["provenance"]["orders_submitted"] == 0 and m["provenance"]["extractor"].endswith("/5")
+    assert m["provenance"]["orders_submitted"] == 0 and m["provenance"]["extractor"].endswith("/6")
     assert (
         m["max_chunk_ticks"] == 1_000_000
         and "not when ticks were" in m["provenance"]["retrieval_note"]
