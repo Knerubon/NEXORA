@@ -15,7 +15,7 @@ import stat
 import time
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, BinaryIO
@@ -941,16 +941,21 @@ def dataset_status(
     registry: CustodianRegistry | None = None,
     expected_head: ChainHead | None = None,
     now: datetime | None = None,
+    pin: Mapping[str, Any] | None = None,
+    max_pin_age: timedelta | None = None,
 ) -> DatasetStatus:
     """Never raises. TRUSTED needs ALL of: a fully verifying dataset with no hard defects; a
     manifest from the current schema whose filesystem-capability record proves a supported
     configuration (re-derived here, never taken from a stored verdict) and a verifier that is itself
     on a supported platform; a recorded operator; and a valid, un-revoked custody approval in
     `store` for exactly this dataset by a custodian from `registry` who is independent of the
-    extractor and operator (see `custody.evaluate_custody`). A V3 `anchor` is accepted for
-    cross-checks only and NEVER grants trust: a matching hash is not custody."""
+    extractor and operator (see `custody.evaluate_custody`), covered by an independently signed
+    head `pin` no older than `max_pin_age`. A V3 `anchor` is accepted for cross-checks only and
+    NEVER grants trust: a matching hash is not custody."""
     try:
-        return _dataset_status(directory, anchor, store, registry, expected_head, now)
+        return _dataset_status(
+            directory, anchor, store, registry, expected_head, now, pin, max_pin_age
+        )
     except Exception as exc:  # defensive: a status check must never crash or fail open
         return DatasetStatus("UNTRUSTED", (f"status_internal_error:{type(exc).__name__}",))
 
@@ -962,6 +967,8 @@ def _dataset_status(
     registry: CustodianRegistry | None,
     expected_head: ChainHead | None,
     now: datetime | None,
+    pin: Mapping[str, Any] | None = None,
+    max_pin_age: timedelta | None = None,
 ) -> DatasetStatus:
     reasons: list[str] = []
     expected: str | None = None
@@ -998,7 +1005,9 @@ def _dataset_status(
     reasons += [f"capability:{c}" for c in verifier_blockers()]
     if manifest_operator(manifest) is None:
         reasons.append("custody:operator_not_recorded")
-    reasons += _custody_reasons(directory, manifest, store, registry, expected_head, now)
+    reasons += _custody_reasons(
+        directory, manifest, store, registry, expected_head, now, pin, max_pin_age
+    )
     return DatasetStatus("TRUSTED" if not reasons else "UNTRUSTED", tuple(reasons))
 
 
@@ -1009,6 +1018,8 @@ def _custody_reasons(
     registry: CustodianRegistry | None,
     expected_head: ChainHead | None,
     now: datetime | None,
+    pin: Mapping[str, Any] | None,
+    max_pin_age: timedelta | None,
 ) -> list[str]:
     if store is None or registry is None:
         return ["custody:no_evidence_store_or_registry"]
@@ -1019,7 +1030,10 @@ def _custody_reasons(
         entries = store.entries()
     except HistoryError as exc:
         return [f"custody:store_unreadable:{exc.code}"]
-    verdict = evaluate_custody(manifest, entries, registry, expected_head=expected_head, now=now)
+    verdict = evaluate_custody(
+        manifest, entries, registry, pin=pin, max_pin_age=max_pin_age,
+        expected_head=expected_head, now=now,
+    )  # fmt: skip
     return list(verdict.reasons)
 
 
@@ -1031,12 +1045,16 @@ def require_trusted(
     registry: CustodianRegistry | None = None,
     expected_head: ChainHead | None = None,
     now: datetime | None = None,
+    pin: Mapping[str, Any] | None = None,
+    max_pin_age: timedelta | None = None,
 ) -> DatasetStatus:
     """Gate for any consumer that treats a dataset as evidence (G1-G5, baseline freeze). Raises
-    `dataset_untrusted` unless trust is independently verifiable (fail closed)."""
+    `dataset_untrusted` unless trust is independently verifiable (fail closed): without a signed
+    independent head pin there is no TRUSTED."""
     status = dataset_status(
-        directory, anchor, store=store, registry=registry, expected_head=expected_head, now=now
-    )
+        directory, anchor, store=store, registry=registry, expected_head=expected_head, now=now,
+        pin=pin, max_pin_age=max_pin_age,
+    )  # fmt: skip
     if not status.trusted:
         raise HistoryError("dataset_untrusted", ",".join(status.reasons)[:300])
     return status

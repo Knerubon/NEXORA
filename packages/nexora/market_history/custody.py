@@ -41,6 +41,7 @@ from nexora.market_history.signing import Signer
 CANDIDATE_SCHEMA = "nexora.market-history-anchor-candidate/2"
 APPROVAL_SCHEMA = "nexora.market-history-approval/2"
 REGISTRY_SCHEMA = "nexora.market-history-principals/2"
+PIN_SCHEMA = "nexora.market-history-head-pin/1"
 ROLES = frozenset({"operator", "custodian", "pin_authority"})
 GENESIS = "0" * 64
 MAX_SKEW = timedelta(minutes=5)
@@ -428,7 +429,11 @@ class LocalAppendOnlyStore:
     def entries(self) -> list[dict[str, Any]]:
         try:
             d = Dir.open(self.location)
-        except (HistoryError, OSError):
+        except HistoryError as exc:
+            if exc.code == "out_dir_missing":
+                return []  # nothing was ever appended
+            raise HistoryError("store_unreadable", "cannot open store directory") from None
+        except OSError:
             raise HistoryError("store_unreadable", "cannot open store directory") from None
         with d:
             # in-flight temp files of a concurrent appender are not entries (and a crashed
@@ -555,46 +560,249 @@ class CustodyVerdict:
     head: ChainHead | None = None
 
 
+def _revocation_id(e: Mapping[str, Any]) -> str | None:
+    rid = e.get("revocation_id")
+    return rid if type(rid) is str and _HEX32.fullmatch(rid) else None
+
+
+def _acknowledged(e: Mapping[str, Any]) -> set[str] | None:
+    ack = e.get("acknowledged_revocations")
+    if not isinstance(ack, list) or not all(type(x) is str and _HEX32.fullmatch(x) for x in ack):
+        return None
+    if ack != sorted(set(ack)):
+        return None
+    return set(ack)
+
+
 def evaluate_custody(
     manifest: Mapping[str, Any],
     entries: Any,
     registry: PrincipalRegistry,
     *,
+    pin: Mapping[str, Any] | None = None,
+    max_pin_age: timedelta | None = None,
     expected_head: ChainHead | None = None,
     now: datetime | None = None,
 ) -> CustodyVerdict:
-    """Decide whether the store holds a valid, un-revoked approval for exactly this dataset."""
+    """Decide whether the store holds a valid, un-revoked approval for exactly this dataset AND an
+    independently signed head pin covers it.
+
+    Revocation lineage (F2) is decided over the WHOLE chain, in chain order, by identifiers that
+    do not depend on the append sequence:
+      * every approval carries a unique `approval_id`; a second entry with an id already seen is
+        a replay and never counts;
+      * a candidate (`candidate_sha256`) can back only one authentic approval;
+      * every approval lists, as `acknowledged_revocations`, exactly the `revocation_id`s of all
+        revocations of this dataset that precede it. An approval that omits one (a replay of an
+        older decision) is rejected; one that names a revocation which is no longer in the chain
+        proves history was removed: `revocation_lineage_broken`, never TRUSTED;
+      * any revocation after the latest valid approval denies trust (whoever wrote it);
+      * a revocation without a well-formed `revocation_id` cannot be acknowledged: fail closed.
+    Reapproval after a revocation is therefore always an explicitly new, signed custodian decision
+    that names the revocations it answers."""
     now = now or datetime.now(UTC)
     problem = verify_chain(entries, expected_head)
     if problem:
         return CustodyVerdict(False, (f"custody:chain_invalid:{problem}",))
     head = head_of(entries)
-    same_id = [e for e in entries if e.get("dataset_id") == manifest.get("dataset_id")]
+    blocking, pinned = pin_reasons(pin, entries, registry, now=now, max_pin_age=max_pin_age)
+    dataset_id = manifest.get("dataset_id")
     bound = _bindings(manifest)
-    exact = [e for e in same_id if all(e.get(k) == v for k, v in bound.items())]
     reasons: list[str] = []
-    for e in same_id:
-        if e not in exact:
-            mism = [k for k, v in bound.items() if e.get(k) != v]
-            reasons.append(f"custody:binding_mismatch:{','.join(mism)}")
+    approval_ids: set[str] = set()
+    candidates: set[Any] = set()
+    revocations: list[tuple[int, str | None]] = []
     valid: list[Mapping[str, Any]] = []
-    for e in exact:
+    for e in entries:
+        replay = False
+        if e.get("decision") == "approve" and type(e.get("approval_id")) is str:
+            replay = e["approval_id"] in approval_ids
+            approval_ids.add(e["approval_id"])
+        if e.get("dataset_id") != dataset_id:
+            continue
+        if e.get("decision") == "revoke":
+            rid = _revocation_id(e)
+            revocations.append((e["seq"], rid))
+            if rid is None:
+                blocking.append(f"custody:revocation_{e['seq']}_unidentifiable")
+            continue
+        mismatch = [k for k, v in bound.items() if e.get(k) != v]
+        if mismatch:
+            reasons.append(f"custody:binding_mismatch:{','.join(mismatch)}")
+            continue
         if e.get("decision") != "approve":
             continue
         why = check_approval_entry(e, manifest, registry, now=now)
+        if not why and replay:
+            why = "replayed_approval_id"
+        if not why:
+            if e["candidate_sha256"] in candidates:
+                why = "candidate_reused"
+            candidates.add(e["candidate_sha256"])
+        if not why:
+            why = _lineage_problem(e, revocations, blocking)
+        if not why and pinned is not None:
+            why = _pin_coverage_problem(e, pinned)
         if why:
             reasons.append(f"custody:approval_{e['seq']}_rejected:{why}")
         else:
             valid.append(e)
     if not valid:
-        return CustodyVerdict(False, (*reasons, "custody:no_valid_approval"), None, head)
+        return CustodyVerdict(False, (*reasons, *blocking, "custody:no_valid_approval"), None, head)
     latest = valid[-1]
-    # Any later revocation wins, whoever wrote it: an unauthorized revoker can only deny trust,
-    # never grant it, so ignoring it would be the unsafe direction.
-    revoked = [e for e in exact if e.get("decision") == "revoke" and e["seq"] > latest["seq"]]
-    if revoked:
-        return CustodyVerdict(False, (f"custody:revoked_at_seq_{revoked[-1]['seq']}",), None, head)
+    later = [seq for seq, _rid in revocations if seq > latest["seq"]]
+    if later:
+        revoked = (f"custody:revoked_at_seq_{later[-1]}", *blocking, *reasons)
+        return CustodyVerdict(False, revoked, None, head)
+    if pinned is not None and pinned.pinned_by in (latest["approver"], manifest_operator(manifest)):
+        blocking.append("custody:pin_not_independent")
+    if blocking:
+        return CustodyVerdict(False, (*blocking, *reasons), None, head)
+    # Rejected entries are not reported on success: an appender must not be able to deny trust
+    # merely by appending garbage (revocations and broken lineage DO deny, above).
     return CustodyVerdict(True, (), int(latest["seq"]), head)
+
+
+def _lineage_problem(
+    e: Mapping[str, Any], revocations: Sequence[tuple[int, str | None]], blocking: list[str]
+) -> str:
+    ack = _acknowledged(e)
+    if ack is None:
+        return "acknowledged_revocations_malformed"
+    prior = {rid for _seq, rid in revocations if rid is not None}
+    if ack - prior:
+        if "custody:revocation_lineage_broken" not in blocking:
+            blocking.append("custody:revocation_lineage_broken")
+        return "acknowledged_revocation_missing"
+    if prior - ack:
+        return "revocation_not_acknowledged"
+    return ""
+
+
+# ---- independent head pin ---------------------------------------------------------------------
+@dataclass(frozen=True, slots=True)
+class VerifiedPin:
+    seq: int
+    entry_sha256: str
+    captured_at: datetime
+    pinned_by: str
+
+
+def _pin_body(pin: Mapping[str, Any]) -> dict[str, Any]:
+    return _without(pin, "signature")
+
+
+def make_pin(
+    entries: Sequence[Mapping[str, Any]],
+    *,
+    signer: Signer,
+    pinned_by: str,
+    captured_at: datetime,
+    previous: Mapping[str, Any] | None = None,
+    initial: bool = False,
+    reanchor_ref: str | None = None,
+) -> dict[str, Any]:
+    """PIN AUTHORITY action: sign the current head of a store whose entries were obtained by the
+    pin authority itself, through its own channel. Continuity: a new pin must extend `previous`
+    (its pinned entry still at the same seq). Otherwise the pin authority must state either
+    `initial=True` (first pin of a store) or `reanchor_ref` (where the independent authorization
+    for re-anchoring a rewritten store is recorded); both are written into the signed pin."""
+    if captured_at.tzinfo is None:
+        raise HistoryError("invalid_timestamp", "captured_at")
+    normalize_identity(pinned_by)
+    problem = verify_chain(list(entries))
+    if problem or not entries:
+        raise HistoryError("pin_refused", problem or "empty_store")
+    reanchor = reanchor_ref.strip() if type(reanchor_ref) is str and reanchor_ref.strip() else None
+    if previous is not None:
+        pseq = previous.get("seq")
+        extends = (
+            type(pseq) is int
+            and 1 <= pseq <= len(entries)
+            and previous.get("store_genesis_sha256") == entries[0]["entry_sha256"]
+            and entries[pseq - 1]["entry_sha256"] == previous.get("entry_sha256")
+        )
+        if not extends and reanchor is None:
+            raise HistoryError("pin_refused", "store_does_not_extend_previous_pin")
+    elif not initial and reanchor is None:
+        raise HistoryError("pin_refused", "no_previous_pin")
+    body: dict[str, Any] = {
+        "schema": PIN_SCHEMA,
+        "store_genesis_sha256": entries[0]["entry_sha256"],
+        "seq": len(entries),
+        "entry_sha256": entries[-1]["entry_sha256"],
+        "captured_at": captured_at.isoformat(),
+        "pin_id": _nonce(),
+        "pinned_by": pinned_by,
+        "pinned_by_key_id": signer.key_id,
+        "previous_pin_id": previous.get("pin_id") if previous is not None else None,
+        "reanchor_ref": reanchor,
+    }
+    body["signature"] = signer.sign("head-pin", body)
+    return body
+
+
+def pin_reasons(
+    pin: Mapping[str, Any] | None,
+    entries: Sequence[Mapping[str, Any]],
+    registry: PrincipalRegistry,
+    *,
+    now: datetime,
+    max_pin_age: timedelta | None,
+) -> tuple[list[str], VerifiedPin | None]:
+    """(blocking reasons, verified pin). TRUSTED needs a head commitment signed by a
+    `pin_authority` principal, captured no longer than `max_pin_age` before `now`, for THIS store
+    (genesis entry) and matching the chain at its sequence. A head read from the store being
+    verified is not independent and never qualifies. There is no default age: it is a governance
+    parameter the verifier must state."""
+    if pin is None:
+        return ["custody:independent_pin_missing"], None
+    if max_pin_age is None or max_pin_age <= timedelta(0):
+        return ["custody:pin_max_age_not_set"], None
+    if not isinstance(pin, Mapping) or pin.get("schema") != PIN_SCHEMA:
+        return ["custody:pin_malformed:schema"], None
+    seq = pin.get("seq")
+    if type(seq) is not int or seq < 1:
+        return ["custody:pin_malformed:seq"], None
+    for key in ("store_genesis_sha256", "entry_sha256", "pinned_by_key_id"):
+        if type(pin.get(key)) is not str or not _HEX64.fullmatch(pin[key]):
+            return [f"custody:pin_malformed:{key}"], None
+    try:
+        pinned_by = normalize_identity(pin.get("pinned_by"))
+        captured = _aware(pin.get("captured_at"), "captured_at")
+    except HistoryError:
+        return ["custody:pin_malformed:pinned_by_or_captured_at"], None
+    _p, pkey, why = registry.authorize(
+        pin["pinned_by_key_id"], "pin_authority", pinned_by, (captured, now)
+    )
+    if pkey is None:
+        return [f"custody:pin_{why}"], None
+    if not signing.verify(pkey.public_hex, "head-pin", _pin_body(pin), pin.get("signature")):
+        return ["custody:pin_signature_invalid"], None
+    out: list[str] = []
+    if not entries or entries[0].get("entry_sha256") != pin["store_genesis_sha256"]:
+        out.append("custody:pin_store_mismatch")
+    elif seq > len(entries):
+        out.append("custody:pin_ahead_of_store_truncated")
+    elif entries[seq - 1].get("entry_sha256") != pin["entry_sha256"]:
+        out.append("custody:pin_head_mismatch")
+    if captured > now + MAX_SKEW:
+        out.append("custody:pin_in_the_future")
+    elif now - captured > max_pin_age:
+        out.append("custody:pin_stale")
+    if out:
+        return out, None
+    return [], VerifiedPin(seq, pin["entry_sha256"], captured, pinned_by)
+
+
+def _pin_coverage_problem(e: Mapping[str, Any], pinned: VerifiedPin) -> str:
+    """An approval counts only if the independent pin proves it was in the chain when pinned, and
+    its self-declared time does not postdate that independent capture (F4)."""
+    if e["seq"] > pinned.seq:
+        return "approval_not_covered_by_pin"
+    if _aware(e["approved_at"], "approved_at") > pinned.captured_at + MAX_SKEW:
+        return "approved_after_pin_capture"
+    return ""
 
 
 def build_approval_body(
@@ -605,9 +813,11 @@ def build_approval_body(
     approver: str,
     evidence_ref: str,
     approved_at: datetime,
+    acknowledged_revocations: Sequence[str] = (),
 ) -> dict[str, Any]:
     """A signed approval body ready to append. `approver` is the principal id `signer`'s key is
-    registered to (the verifier re-derives it from the key)."""
+    registered to (the verifier re-derives it from the key). `acknowledged_revocations` must be
+    the ids of every earlier revocation of this dataset (`revocations_of`)."""
     body: dict[str, Any] = {
         "schema": APPROVAL_SCHEMA,
         "decision": "approve",
@@ -619,9 +829,23 @@ def build_approval_body(
         "approver_key_id": signer.key_id,
         "approved_at": approved_at.isoformat(),
         "evidence_ref": evidence_ref.strip() if type(evidence_ref) is str else evidence_ref,
+        "acknowledged_revocations": sorted(set(acknowledged_revocations)),
     }
     body["signature"] = signer.sign("custody-approval", body)
     return body
+
+
+def revocations_of(entries: Sequence[Mapping[str, Any]], dataset_id: Any) -> list[str]:
+    """Ids of every revocation of `dataset_id` in `entries` (what a reapproval must acknowledge).
+    Refuses when one cannot be identified: such history cannot be answered, only re-extracted."""
+    out: list[str] = []
+    for e in entries:
+        if e.get("decision") == "revoke" and e.get("dataset_id") == dataset_id:
+            rid = _revocation_id(e)
+            if rid is None:
+                raise HistoryError("approval_refused", f"revocation_{e.get('seq')}_unidentifiable")
+            out.append(rid)
+    return sorted(set(out))
 
 
 def _principal_for(signer: Signer, registry: PrincipalRegistry, role: str) -> str:
@@ -660,11 +884,23 @@ def approve_dataset(
     location = getattr(store, "location", None)
     if isinstance(location, Path) and _inside(location, directory):
         raise HistoryError("store_inside_dataset")
+    existing = store.entries()
+    problem = verify_chain(existing)
+    if problem:
+        raise HistoryError("store_chain_invalid", problem)
     body = build_approval_body(
         manifest, candidate, signer=signer, approver=approver, evidence_ref=evidence_ref,
         approved_at=approved_at,
+        acknowledged_revocations=revocations_of(existing, manifest["dataset_id"]),
     )  # fmt: skip
     why = check_approval_entry(body, manifest, registry, now=datetime.now(UTC))
+    if not why and any(
+        e.get("decision") == "approve"
+        and e.get("candidate_sha256") == body["candidate_sha256"]
+        and not check_approval_entry(e, manifest, registry, now=datetime.now(UTC))
+        for e in existing
+    ):
+        why = "candidate_reused"  # a reapproval needs a fresh operator attestation
     if why:
         raise HistoryError("approval_refused", why)
     return store.append(body)

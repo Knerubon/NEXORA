@@ -4,7 +4,11 @@ Run by an AUTHORIZED CUSTODIAN, a different principal from the dataset operator,
 control. `approve` re-verifies the dataset itself, applies the same checks the verifier will apply
 (signed operator attestation, custodian key and role, independence of the authenticated principals,
 binding to the exact dataset) and appends a signed, hash-chained entry to the append-only evidence
-store. `revoke` withdraws trust. `head` prints the current chain head. `keygen` creates an Ed25519
+store. `revoke` withdraws trust. `head` prints the current chain head (unsigned: it is NOT an
+independent pin). `pin` is run by the PIN AUTHORITY, a principal independent of operators and
+approving custodians, over the store as it reads it through its own channel: it signs the head and
+must extend the previous pin (`--previous`), or state `--initial` / `--reanchor-ref` (where the
+independent authorization to re-anchor a rewritten store is recorded). `keygen` creates an Ed25519
 key pair: the private key file stays with its holder (mode 0600, never in Git, never next to the
 data); the printed public key goes into the principal registry.
 """
@@ -21,6 +25,7 @@ from nexora.market_history.custody import (
     approve_dataset,
     head_of,
     load_registry,
+    make_pin,
     revoke_dataset,
     verify_chain,
 )
@@ -43,6 +48,15 @@ def main() -> int:
             p.add_argument("--candidate", type=Path, required=True)
     h = sub.add_parser("head")
     h.add_argument("--store", type=Path, required=True)
+    pn = sub.add_parser("pin")
+    pn.add_argument("--store", type=Path, required=True)
+    pn.add_argument("--registry", type=Path, required=True)
+    pn.add_argument("--signing-key", type=Path, required=True, help="pin authority private key")
+    pn.add_argument("--out", type=Path, required=True, help="new pin file (never overwritten)")
+    grp = pn.add_mutually_exclusive_group(required=True)
+    grp.add_argument("--previous", type=Path, help="the last pin of this store")
+    grp.add_argument("--initial", action="store_true", help="first pin of a new store")
+    grp.add_argument("--reanchor-ref", help="where the re-anchoring authorization is recorded")
     k = sub.add_parser("keygen")
     k.add_argument("--out", type=Path, required=True, help="new private key file (0600)")
     args = ap.parse_args()
@@ -66,6 +80,26 @@ def main() -> int:
                 )
             )
             return 1 if problem else 0
+        if args.cmd == "pin":
+            registry = load_registry(args.registry)
+            signer = load_signer(args.signing_key)
+            found = registry.key(signer.key_id)
+            if found is None or "pin_authority" not in found[0].roles:
+                raise HistoryError("pin_refused", "signer_is_not_a_pin_authority")
+            previous = None
+            if args.previous is not None:
+                with _open_regular(args.previous) as fh:
+                    previous = json.loads(fh.read(1 << 16))
+            pin = make_pin(
+                store.entries(), signer=signer, pinned_by=found[0].id,
+                captured_at=datetime.now(UTC), previous=previous, initial=args.initial,
+                reanchor_ref=args.reanchor_ref,
+            )  # fmt: skip
+            with args.out.open("x") as fh:
+                fh.write(json.dumps(pin, indent=2, sort_keys=True) + "\n")
+            head_text = f"{pin['seq']}:{pin['entry_sha256']}"
+            print(json.dumps({"pin": head_text, "pin_id": pin["pin_id"]}))
+            return 0
         registry = load_registry(args.registry, dataset_dir=args.dataset)
         signer = load_signer(args.signing_key)
         now = datetime.now(UTC)
@@ -81,8 +115,11 @@ def main() -> int:
                 args.dataset, store=store, registry=registry, signer=signer,
                 evidence_ref=args.evidence_ref, revoked_at=now,
             )  # fmt: skip
-    except (HistoryError, FileExistsError) as exc:
-        code = exc.code if isinstance(exc, HistoryError) else "key_file_exists"
+    except (HistoryError, FileExistsError, ValueError) as exc:
+        if isinstance(exc, HistoryError):
+            code = exc.code
+        else:
+            code = "file_exists" if isinstance(exc, FileExistsError) else "input_unreadable"
         print(json.dumps({"refused": code, "detail": str(exc)[:300]}))
         return 2
     print(json.dumps({"seq": entry["seq"], "entry_sha256": entry["entry_sha256"]}))

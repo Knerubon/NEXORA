@@ -33,6 +33,7 @@ from nexora.market_history.custody import (
     head_of,
     load_registry,
     make_candidate,
+    make_pin,
     normalize_identity,
     revoke_dataset,
     seal_entry,
@@ -133,15 +134,40 @@ def approve(e: Env, who: str = "carol", at: datetime = LATER, **kw: Any) -> dict
     )
 
 
+MAX_PIN_AGE = timedelta(hours=1)
+
+
+def fresh_pin(store: Any, at: datetime = CHECK - timedelta(minutes=1)) -> dict[str, Any] | None:
+    """What the independent pin authority ("pia") signs after reading the store itself."""
+    try:
+        entries = store.entries()
+    except HistoryError:
+        return None
+    if not entries or verify_chain(entries):
+        return None
+    return make_pin(entries, signer=KEYS["pia"], pinned_by="pia", captured_at=at, initial=True)
+
+
 def status(e: Env, **kw: Any) -> Any:
+    """dataset_status as a verifier runs it: with a fresh independent pin unless one is given."""
+    now = kw.pop("now", CHECK)
+    store = kw.pop("store", e.store)
+    if "pin" not in kw:
+        kw["pin"] = fresh_pin(store, now - timedelta(minutes=1)) if store is not None else None
+    kw.setdefault("max_pin_age", MAX_PIN_AGE)
     return dataset_status(
         e.ds,
         kw.pop("anchor", None),
-        store=kw.pop("store", e.store),
+        store=store,
         registry=kw.pop("registry", e.registry),
-        now=kw.pop("now", CHECK),
+        now=now,
         **kw,
     )
+
+
+def fresh_candidate(e: Env, who: str = "ann") -> dict[str, Any]:
+    e.candidate = make_candidate(e.manifest, signer=KEYS[who], created_at=NOW)
+    return e.candidate
 
 
 def body_for(e: Env, who: str = "carol", **over: Any) -> dict[str, Any]:
@@ -168,7 +194,13 @@ def test_trusted_requires_the_full_custody_chain(tmp_path: Path) -> None:
     entry = approve(e)
     s = status(e)
     assert s.status == "TRUSTED" and s.reasons == () and entry["seq"] == 1
-    assert require_trusted(e.ds, None, store=e.store, registry=e.registry, now=CHECK).trusted
+    pin = fresh_pin(e.store)
+    assert require_trusted(
+        e.ds, None, store=e.store, registry=e.registry, now=CHECK, pin=pin,
+        max_pin_age=MAX_PIN_AGE,
+    ).trusted  # fmt: skip
+    with pytest.raises(HistoryError, match="independent_pin_missing"):
+        require_trusted(e.ds, None, store=e.store, registry=e.registry, now=CHECK)
 
 
 def test_candidate_alone_or_a_hash_only_anchor_never_trusts(tmp_path: Path) -> None:
@@ -357,6 +389,7 @@ def test_editing_a_stored_entry_breaks_the_chain(tmp_path: Path) -> None:
 def test_resealing_a_replaced_first_entry_breaks_the_next_link(tmp_path: Path) -> None:
     e = make_env(tmp_path)
     approve(e)
+    fresh_candidate(e)
     approve(e, "dave")
     p = tmp_path / "store" / "entry-00000001.json"
     first = json.loads(p.read_text())
@@ -394,7 +427,10 @@ def test_approval_for_one_dataset_cannot_be_replayed_for_another(tmp_path: Path)
 
     mb = go(b_ds, operator="ann", clock_attestation=ClockAttestation("other", "me", 0, 10**9))
     assert mb["dataset_id"] != a.manifest["dataset_id"]
-    s = dataset_status(b_ds, None, store=a.store, registry=a.registry, now=CHECK)
+    s = dataset_status(
+        b_ds, None, store=a.store, registry=a.registry, now=CHECK, pin=fresh_pin(a.store),
+        max_pin_age=MAX_PIN_AGE,
+    )  # fmt: skip
     assert not s.trusted and "custody:no_valid_approval" in s.reasons
 
 
@@ -592,7 +628,9 @@ def test_a_store_inside_the_dataset_folder_is_refused(tmp_path: Path) -> None:
 # ======================= the store =======================
 def test_store_entries_are_read_only_hash_chained_and_never_overwritten(tmp_path: Path) -> None:
     e = make_env(tmp_path)
-    one, two = approve(e), approve(e, "dave")
+    one = approve(e)
+    fresh_candidate(e)
+    two = approve(e, "dave")
     assert (one["seq"], two["seq"]) == (1, 2) and one["prev_sha256"] == GENESIS
     assert two["prev_sha256"] == one["entry_sha256"]
     assert verify_chain(e.store.entries()) == ""
@@ -670,7 +708,7 @@ def test_the_store_interface_is_provider_neutral(tmp_path: Path) -> None:
     assert isinstance(mem, EvidenceStore)
     e = make_env(tmp_path)
     approve(e, store=mem)
-    assert dataset_status(e.ds, None, store=mem, registry=e.registry, now=CHECK).trusted
+    assert status(e, store=mem).trusted
 
 
 @pytest.mark.parametrize(
@@ -788,6 +826,11 @@ def test_evaluate_custody_is_pure_and_reports_every_rejected_approval(tmp_path: 
     assert "custody:approval_2_rejected:evidence_ref_missing" in v.reasons
     good = approve(e)
     v = evaluate_custody(e.manifest, e.store.entries(), e.registry, now=CHECK)
+    assert not v.approved and v.reasons[0] == "custody:independent_pin_missing"
+    v = evaluate_custody(
+        e.manifest, e.store.entries(), e.registry, now=CHECK, pin=fresh_pin(e.store),
+        max_pin_age=MAX_PIN_AGE,
+    )  # fmt: skip
     assert v.approved and v.approval_seq == good["seq"]
 
 
@@ -834,7 +877,26 @@ def test_cli_custody_and_verify_round_trip(tmp_path: Path) -> None:
     assert code == 0 and out["chain"] == "ok"
     vargs = ["--dataset", str(e.ds), "--store", str(tmp_path / "store"), *reg]
     code, out = run_cli("verify_market_history.py", *vargs, "--require-trusted")
-    assert (code, out["status"]) == (0, "TRUSTED")
+    assert code == 1 and "custody:independent_pin_missing" in out["status_reasons"]
+    pin_file = tmp_path / "pin.json"
+    pin_args = ["pin", "--store", str(tmp_path / "store"), *reg, "--out", str(pin_file)]
+    code, out = run_cli(
+        "custody_market_history.py", *pin_args, "--signing-key", key_file(tmp_path, "carol"),
+        "--initial",
+    )  # fmt: skip
+    assert code == 2 and out["refused"] == "pin_refused"  # a custodian is not a pin authority
+    code, out = run_cli(
+        "custody_market_history.py", *pin_args, "--signing-key", key_file(tmp_path, "pia"),
+        "--initial",
+    )  # fmt: skip
+    assert code == 0 and out["pin"].startswith("1:")
+    pinned = [*vargs, "--pin", str(pin_file)]
+    code, out = run_cli("verify_market_history.py", *pinned, "--require-trusted")
+    assert code == 1 and "custody:pin_max_age_not_set" in out["status_reasons"]
+    pinned += ["--max-pin-age-seconds", "3600"]
+    code, out = run_cli("verify_market_history.py", *pinned, "--require-trusted")
+    assert (code, out["status"], out["status_reasons"]) == (0, "TRUSTED", [])
+    vargs = pinned
     code, out = run_cli("verify_market_history.py", *vargs, "--store-head", f"1:{'0' * 64}")
     assert code == 1 and "custody:chain_invalid:pinned_head_mismatch" in out["status_reasons"]
     code, out = run_cli("verify_market_history.py", *vargs, "--store-head", "garbage")
@@ -854,7 +916,7 @@ def test_cli_keygen_never_overwrites_and_refuses_loose_key_files(tmp_path: Path)
     assert code == 0 and len(first["ed25519"]) == 64
     assert oct(out_key.stat().st_mode & 0o777) == "0o600"
     code, out = run_cli("custody_market_history.py", "keygen", "--out", str(out_key))
-    assert code == 2 and out["refused"] == "key_file_exists"
+    assert code == 2 and out["refused"] == "file_exists"
     from nexora.market_history.signing import load_signer
 
     assert load_signer(out_key).public_hex == first["ed25519"]
