@@ -2,11 +2,11 @@
 
 | Field | Value |
 |---|---|
-| Status | DRAFT readiness package, remediation V1 after Independent Reviewer B (REQUEST CHANGES: 4 MAJOR, 7 MINOR). Documentation plus an offline fixture/mock harness. Remediation is not yet independently re-reviewed. |
+| Status | DRAFT readiness package. Remediation V1 addressed Independent Reviewer B round 1 (4 MAJOR, 7 MINOR); round 4 addresses the eight MINORs of rounds 2 and 3 (N1-N4, R3-1..R3-4). Documentation plus an offline fixture/mock harness. Round 4 is not yet independently re-reviewed. |
 | Class | Docs and CLOUD-SAFE tests. The steps it describes are WINDOWS-INTEGRATION and are **not** authorized by this PR. |
 | Base | `origin/main` `36c90c59e2aa4f0d221c9c468a8379c5f57cbb87` |
 | Extractor read (read-only) | PR #96 `claude/market-history-fix-v4` at `d6a7cda72a88600e2ccf6554605f1c50478893ea`, stacked on `claude/market-history-fix-v3` at `e74ad035e7f21aa07528965da6ebe190c0512793` (PRs #89, #91, #92, #93). Read with `git show` only. |
-| Real-half readiness | **Not declared.** TRUSTED is BLOCKED (DEP-01) and eight real-half steps are BLOCKED (DEP-03); see [DEPENDENCY-REGISTER.md](DEPENDENCY-REGISTER.md). Windows/MT5: UNVERIFIED. |
+| Real-half readiness | **Not declared.** TRUSTED is BLOCKED (DEP-01) and eight real-half steps are BLOCKED (DEP-03); the evidence validator derives `BLOCKED` for any real record while either holds. See [DEPENDENCY-REGISTER.md](DEPENDENCY-REGISTER.md). Windows/MT5: UNVERIFIED. |
 | Parent issue | EDGE-VALIDATION-1 (#77) |
 
 ## Purpose

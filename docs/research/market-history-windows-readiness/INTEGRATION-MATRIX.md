@@ -14,7 +14,10 @@ or missing evidence is FAIL, never PASS; `evidence_validator.py` enforces this f
 (DEP-03) or a TRUSTED verdict that is unreachable at V4 (DEP-01); see the step register in
 [WINDOWS-EXECUTION-CHECKLIST.md](WINDOWS-EXECUTION-CHECKLIST.md) and
 [DEPENDENCY-REGISTER.md](DEPENDENCY-REGISTER.md). The operator never writes code. Until those
-dependencies resolve, no case can PASS and real-half readiness is not declared.
+dependencies resolve, no case can PASS and real-half readiness is not declared. Since round 4 this
+is machine-enforced: `evidence_validator.py` derives the dependency status from the custody gate
+and the step register, so a REAL record whose evidence is otherwise consistent derives `BLOCKED`,
+and a record claiming `PASS` is rejected.
 
 ---
 
