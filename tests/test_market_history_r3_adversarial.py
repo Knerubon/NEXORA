@@ -11,10 +11,15 @@ data, no network.
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
+import textwrap
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import nexora.market_history.extract as ex
 import pytest
 from nexora.market_history import custody
 from nexora.market_history.custody import (
@@ -29,7 +34,8 @@ from nexora.market_history.custody import (
     seal_entry,
     verify_chain,
 )
-from nexora.market_history.extract import dataset_status
+from nexora.market_history.extract import dataset_status, open_trusted, verify_dataset
+from nexora.market_history.fsutil import Dir
 from nexora.market_history.models import HistoryError
 
 from tests.test_market_history_corrective import go, reseal
@@ -50,6 +56,9 @@ from tests.test_market_history_v4_custody import (
     registry_json,
     status,
 )
+
+ROOT = Path(__file__).resolve().parent.parent
+ENVV = {**os.environ, "PYTHONPATH": f"{ROOT}:{ROOT / 'packages'}"}
 
 
 def _revoke(e: Env, who: str = "carol", at: datetime = LATER + timedelta(hours=1)) -> Any:
@@ -459,3 +468,330 @@ def test_B_registry_fixture_is_unchanged() -> None:
     assert REGISTRY_JSON == registry_json()
     assert principal("ann", ["operator"])["keys"][0]["ed25519"] == KEYS["ann"].public_hex
     assert ChainHead(1, "0" * 64).seq == 1
+
+
+# ============================ Workstream C: pinned I/O and TOCTOU ==============================
+
+
+def _tampered_twin(tmp: Path, name: str = "bad") -> Path:
+    """Byte-identical extraction (same manifest) whose first chunk is then edited."""
+    bad = tmp / name
+    go(bad, operator="ann")
+    chunk = sorted(bad.glob("chunk-*"))[0]
+    chunk.chmod(0o644)
+    chunk.write_bytes(chunk.read_bytes().replace(b"100.1", b"100.2"))
+    assert verify_dataset(bad)
+    return bad
+
+
+def _open_trusted(e: Env) -> Any:
+    pin = fresh_pin(e.store)
+    assert pin is not None
+    return open_trusted(e.ds, store=e.store, registry=e.registry, pin=pin,
+                        max_pin_age=MAX_PIN_AGE, now=CHECK)  # fmt: skip
+
+
+def test_C1_directory_swap_between_verify_and_status_is_never_trusted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F3 (R1 test_FINDING_A3_status_verifies_one_directory_and_trusts_another): the same swap,
+    at the point that used to separate the integrity check from the custody decision. There is
+    now one pinned object for both, and a path that no longer names it is refused."""
+    e = make_env(tmp_path)
+    approve(e)
+    bad = _tampered_twin(tmp_path)
+    real = ex._verify_in
+
+    def swap_after(d: Dir, *a: Any) -> Any:
+        out = real(d, *a)
+        os.rename(e.ds, tmp_path / "genuine")
+        os.rename(bad, e.ds)
+        return out
+
+    monkeypatch.setattr(ex, "_verify_in", swap_after)
+    s = status(e)
+    assert not s.trusted
+    assert "integrity:dataset_path_replaced_during_check" in s.reasons
+    monkeypatch.setattr(ex, "_verify_in", real)
+    assert not status(e).trusted  # what now sits at the path fails integrity
+
+
+def test_C2_dataset_swap_between_verify_and_approval_appends_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """N2 (R2 test_FINDING_A5_approve_verifies_one_folder_and_approves_anothers_manifest)."""
+    e = make_env(tmp_path)
+    bad = _tampered_twin(tmp_path)
+    real = ex.usability_blockers_in
+
+    def swap_after(d: Dir, **kw: Any) -> Any:
+        out = real(d, **kw)
+        os.rename(e.ds, tmp_path / "genuine")
+        os.rename(bad, e.ds)
+        return out
+
+    monkeypatch.setattr(ex, "usability_blockers_in", swap_after)
+    with pytest.raises(HistoryError, match="dataset_path_replaced_during_approval"):
+        approve(e)
+    assert e.store.entries() == []
+
+
+def test_C3_each_chunk_is_read_exactly_once_and_hashed_bytes_are_parsed_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """N3 (R2 test_FINDING_A3_chunk_swapped_between_hash_and_parse_is_not_noticed): the old
+    exploit swapped the file between the hash open and the parse/recompute opens. Those opens
+    no longer exist: one open per file, and the parser receives the very bytes that were hashed."""
+    e = make_env(tmp_path)
+    opens: dict[str, int] = {}
+    real_open = Dir.open_regular
+
+    def counting(self: Dir, name: str) -> Any:
+        opens[name] = opens.get(name, 0) + 1
+        return real_open(self, name)
+
+    hashed: list[bytes] = []
+    parsed: list[bytes] = []
+    real_snap, real_scan = ex._snapshot, ex._scan_bytes
+
+    def snap(d: Dir, name: str, limit: int) -> bytes:
+        data = real_snap(d, name, limit)
+        if name.startswith("chunk-"):
+            hashed.append(data)
+        return data
+
+    def scan(data: bytes, *a: Any) -> Any:
+        parsed.append(data)
+        # the old attack: replace the file at this name right now
+        name = e.manifest["chunks"][len(parsed) - 1]["file"]
+        (e.ds / ".x").write_bytes(data.replace(b"100.1", b"100.2"))
+        os.replace(e.ds / ".x", e.ds / name)
+        return real_scan(data, *a)
+
+    monkeypatch.setattr(Dir, "open_regular", counting)
+    monkeypatch.setattr(ex, "_snapshot", snap)
+    monkeypatch.setattr(ex, "_scan_bytes", scan)
+    assert verify_dataset(e.ds) == []  # consistent: it verified ONE snapshot
+    assert all(n == 1 for n in opens.values()), opens
+    assert [id(x) for x in hashed] == [id(x) for x in parsed]
+    monkeypatch.undo()
+    assert verify_dataset(e.ds)  # the swapped files are not what was verified
+
+
+def test_C4_same_directory_rename_after_trust_is_caught_by_the_trusted_reader(
+    tmp_path: Path,
+) -> None:
+    e = make_env(tmp_path)
+    approve(e)
+    with _open_trusted(e) as td:
+        name = td.manifest["chunks"][0]["file"]
+        original = (e.ds / name).read_bytes()
+        (e.ds / ".x").write_bytes(original.replace(b"100.1", b"100.2"))
+        os.replace(e.ds / ".x", e.ds / name)
+        with pytest.raises(HistoryError, match="trusted_dataset_changed"):
+            list(td.iter_ticks())
+
+
+def test_C5_symlink_replacement_is_refused(tmp_path: Path) -> None:
+    e = make_env(tmp_path)
+    approve(e)
+    name = e.manifest["chunks"][0]["file"]
+    os.rename(e.ds / name, tmp_path / "real-chunk")
+    os.symlink(tmp_path / "real-chunk", e.ds / name)
+    assert any("integrity:chunk_is_symlink" in r for r in _reasons(e))
+    e2 = make_env(tmp_path / "b")
+    approve(e2)
+    os.rename(e2.ds, tmp_path / "b" / "elsewhere")
+    os.symlink(tmp_path / "b" / "elsewhere", e2.ds)
+    assert any(r.startswith("integrity:dataset_dir_unsafe") for r in _reasons(e2))
+
+
+def test_C6_hardlink_alias_is_detected_on_the_open_descriptor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The alias is created AFTER the name check and BEFORE the open (the old stat-then-open
+    gap); the link count is now read from the open descriptor."""
+    e = make_env(tmp_path)
+    approve(e)
+    name = e.manifest["chunks"][0]["file"]
+    real_kind = Dir.kind
+
+    def kind_then_link(self: Dir, n: str) -> str:
+        k = real_kind(self, n)
+        if n == name and not (tmp_path / "alias").exists():
+            os.link(e.ds / name, tmp_path / "alias")
+        return k
+
+    monkeypatch.setattr(Dir, "kind", kind_then_link)
+    assert any(f"integrity:chunk_multiple_links:{name}" in r for r in _reasons(e))
+
+
+def test_C7_manifest_replacement_or_alias_is_refused(tmp_path: Path) -> None:
+    e = make_env(tmp_path)
+    approve(e)
+    os.link(e.ds / "manifest.json", tmp_path / "m-alias")
+    assert "integrity:manifest_multiple_links" in _reasons(e)
+    os.unlink(tmp_path / "m-alias")
+    reseal(e.ds, lambda m: m["provenance"].update(retrieval_note="replaced"))
+    assert "custody:binding_mismatch:manifest_sha256" in _reasons(e)
+
+
+def test_C8_file_mutation_during_verification_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    e = make_env(tmp_path)
+    approve(e)
+    name = e.manifest["chunks"][0]["file"]
+    (e.ds / name).chmod(0o644)  # the attacker owns the file
+    real_open = Dir.open_regular
+
+    class MutatesOnFirstRead:
+        """Delegates to the real handle; the first read() appends to the same inode first, i.e.
+        after the reader took its 'before' fstat (in-place mutation mid-read)."""
+
+        def __init__(self, fh: Any) -> None:
+            self.fh, self.done = fh, False
+
+        def __enter__(self) -> Any:
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            self.fh.close()
+
+        def fileno(self) -> int:
+            return int(self.fh.fileno())
+
+        def read(self, n: int = -1) -> bytes:
+            if not self.done:
+                self.done = True
+                with open(e.ds / name, "ab") as w:
+                    w.write(b"\n")
+            return bytes(self.fh.read(n))
+
+    def mutate_on_open(self: Dir, n: str) -> Any:
+        fh = real_open(self, n)
+        return MutatesOnFirstRead(fh) if n == name else fh
+
+    monkeypatch.setattr(Dir, "open_regular", mutate_on_open)
+    r = _reasons(e)
+    assert any(f"integrity:chunk_unreadable:{name}" in x for x in r), r
+
+
+def test_C9_cross_process_swapping_never_feeds_tampered_bytes_to_a_trusted_reader(
+    tmp_path: Path,
+) -> None:
+    """A separate process flips one chunk between its genuine and a tampered version as fast as
+    it can, while this process repeatedly decides trust and reads through the trusted reader.
+    Every completed read must yield exactly the genuine ticks; anything else must raise."""
+    e = make_env(tmp_path)
+    approve(e)
+    genuine = list(ex._iter_ticks(open(e.ds / e.manifest["chunks"][0]["file"], "rb")))
+    expected = [t for c in e.manifest["chunks"]
+                for t in ex._iter_ticks(open(e.ds / c["file"], "rb"))]  # fmt: skip
+    assert genuine
+    name = e.manifest["chunks"][0]["file"]
+    code = textwrap.dedent(
+        """
+        import os, sys, time
+        d, name = sys.argv[1], sys.argv[2]
+        good = open(os.path.join(d, name), "rb").read()
+        bad = good.replace(b"100.1", b"100.2")
+        end = time.time() + float(sys.argv[3])
+        i = 0
+        while time.time() < end:
+            tmp = os.path.join(d, ".flip")
+            with open(tmp, "wb") as fh:
+                fh.write(bad if i % 2 == 0 else good)
+            os.replace(tmp, os.path.join(d, name))
+            i += 1
+        with open(os.path.join(d, ".flip"), "wb") as fh:
+            fh.write(good)
+        os.replace(os.path.join(d, ".flip"), os.path.join(d, name))
+        """
+    )
+    proc = subprocess.Popen([sys.executable, "-c", code, str(e.ds), name, "4"])
+    trusted_reads = refused = 0
+    try:
+        for _ in range(40):
+            try:
+                with _open_trusted(e) as td:
+                    got = list(td.iter_ticks())
+            except HistoryError:
+                refused += 1
+                continue
+            assert got == expected  # never the tampered bytes
+            trusted_reads += 1
+    finally:
+        proc.wait(30)
+    assert refused > 0  # the race was really exercised
+
+
+def test_C10_unsupported_filesystem_capability_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    e = make_env(tmp_path)
+    approve(e)
+    from nexora.market_history import fsutil
+
+    monkeypatch.setattr(fsutil, "DIR_FD_SUPPORTED", False)
+    r = _reasons(e)
+    assert "capability:verifier_lacks_dir_fd_nofollow" in r
+    monkeypatch.undo()
+    reseal(e.ds, lambda m: m["filesystem_capabilities"].update(fs_class="network"))
+    assert "capability:filesystem_unproven:network" in _reasons(e)
+
+
+def test_C11_legitimate_stable_dataset_is_trusted_and_digests_are_returned(
+    tmp_path: Path,
+) -> None:
+    e = make_env(tmp_path)
+    approve(e)
+    s = status(e)
+    assert s.trusted
+    assert (s.dataset_id, s.manifest_sha256, s.content_sha256) == (
+        e.manifest["dataset_id"], e.manifest["manifest_sha256"], e.manifest["content_sha256"]
+    )
+    with _open_trusted(e) as td:
+        assert len(list(td.iter_ticks())) == e.manifest["tick_count"]
+        assert td.status.manifest_sha256 == e.manifest["manifest_sha256"]
+    with pytest.raises(HistoryError, match="dataset_untrusted"):
+        open_trusted(e.ds, store=e.store, registry=e.registry, pin=None,  # type: ignore[arg-type]
+                     max_pin_age=MAX_PIN_AGE, now=CHECK)  # fmt: skip
+
+
+def test_C12_interruption_during_pinned_io_fails_closed_and_leaks_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    e = make_env(tmp_path)
+    approve(e)
+    real = ex._snapshot
+    calls = [0]
+
+    def flaky(d: Dir, name: str, limit: int) -> bytes:
+        calls[0] += 1
+        if calls[0] == 2:
+            raise OSError("EIO")
+        return real(d, name, limit)
+
+    before = len(os.listdir("/proc/self/fd"))
+    monkeypatch.setattr(ex, "_snapshot", flaky)
+    s = status(e)
+    assert not s.trusted and any(r.startswith("integrity:") for r in s.reasons)
+    monkeypatch.undo()
+    assert len(os.listdir("/proc/self/fd")) == before  # pinned descriptor closed
+    killer = textwrap.dedent(
+        """
+        import os, signal, sys
+        from pathlib import Path
+        import nexora.market_history.extract as ex
+        real = ex._snapshot
+        def die(d, name, limit):
+            if name.startswith("chunk-"): os.kill(os.getpid(), signal.SIGKILL)
+            return real(d, name, limit)
+        ex._snapshot = die
+        ex.verify_dataset(Path(sys.argv[1]))
+        """
+    )
+    r = subprocess.run([sys.executable, "-c", killer, str(e.ds)], cwd=ROOT, env=ENVV, timeout=60)
+    assert r.returncode != 0
+    assert status(e).trusted  # a killed reader leaves nothing behind

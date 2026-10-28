@@ -8,12 +8,13 @@ crash can leave only ignorable temp files, never a truncated final file.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import re
 import stat
 import time
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -22,7 +23,7 @@ from typing import Any, BinaryIO
 
 from nexora.market_history import SCHEMA_VERSION, SUPPORTED_SCHEMAS
 from nexora.market_history.clock import ClockAttestation, check_attestation
-from nexora.market_history.convert import TimeConversion, TimeSegment, normalize
+from nexora.market_history.convert import TimeConversion, TimeSegment
 from nexora.market_history.custody import (
     ChainHead,
     CustodianRegistry,
@@ -62,10 +63,11 @@ from nexora.market_history.models import (
     RawTick,
     canonical_json,
     decimal_str,
+    exact_sub,
     sha256_hex,
 )
 from nexora.market_history.provider import HistoricalTickSource, TransientSourceError
-from nexora.market_history.quality import QualityConfig, hard_defects, quality_report
+from nexora.market_history.quality import QualityAccumulator, QualityConfig, hard_defects
 
 EXTRACTOR_VERSION = "nexora.market-history-extractor/5"
 CHUNK_NAME = re.compile(r"chunk-(\d+)-(\d+)\.jsonl")
@@ -95,6 +97,8 @@ _HEX64 = re.compile(r"[0-9a-f]{64}")
 _NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 _NONBLOCK = getattr(os, "O_NONBLOCK", 0)  # never hang on a FIFO swapped in after the check
 DEFAULT_MAX_CHUNK_TICKS = 1_000_000
+_MAX_LINE_BYTES = 512  # generous bound for one encoded tick line (snapshot size limit)
+_MAX_MANIFEST_BYTES = 64 << 20
 RETRIEVAL_NOTE = (
     "historical_retrieval: retrieved_at is when this extraction ran, not when ticks were "
     "originally received; it must never be used as point-in-time knowledge time"
@@ -177,11 +181,6 @@ def _iter_ticks(fh: BinaryIO) -> Iterator[RawTick]:
 
 def read_chunk(path: Path) -> Iterator[RawTick]:
     with _open_regular(path) as fh:
-        yield from _iter_ticks(fh)
-
-
-def _read_chunk_in(d: Dir, name: str) -> Iterator[RawTick]:
-    with d.open_regular(name) as fh:
         yield from _iter_ticks(fh)
 
 
@@ -349,6 +348,10 @@ def _extract_locked(
     chunks: list[dict[str, Any]] = []
     content = hashlib.sha256()
     total = 0
+    # Quality is computed from the exact ticks that were encoded, hashed and written, never by
+    # reading the files back (a swap between write and read-back could otherwise feed it bytes
+    # that are not the ones recorded in the manifest).
+    acc = QualityAccumulator(quality)
     for a, b in _windows(request):
         ticks, attempts = _fetch(source, request, a, b, sleep)
         if len(ticks) > request.max_chunk_ticks:
@@ -366,6 +369,9 @@ def _extract_locked(
                 raise HistoryError("chunk_exists_with_different_content", name) from None
         content.update(body)
         total += len(inside)
+        for t in inside:
+            acc.add(_normalize_one(t, conversion))
+        acc.end_segment()
         chunks.append(
             {
                 "file": name,
@@ -380,7 +386,7 @@ def _extract_locked(
         )
         del ticks, inside, body
 
-    report = quality_report(_normalized_stream(out_dir, chunks, conversion), quality)
+    report = acc.report()
     manifest: dict[str, Any] = {
         "schema": SCHEMA_VERSION,
         "symbol": request.symbol,
@@ -473,11 +479,38 @@ def _file_sha256(d: Dir, name: str) -> str:
     return h.hexdigest()
 
 
-def _normalized_stream(
-    directory: Dir, chunks: Iterable[dict[str, Any]], conversion: TimeConversion
-) -> Iterator[NormalizedTick]:
-    for c in chunks:
-        yield from normalize(_read_chunk_in(directory, c["file"]), conversion)
+def _normalize_one(t: RawTick, conversion: TimeConversion) -> NormalizedTick:
+    return NormalizedTick(
+        conversion.to_utc_msc(t.time_msc), t.time_msc, t.bid, t.ask, exact_sub(t.ask, t.bid),
+        t.flags,
+    )
+
+
+def _snapshot(d: Dir, name: str, limit: int) -> bytes:
+    """Read `name` ONCE through one descriptor of the pinned directory and return its bytes.
+    Hashing, parsing, counting and the quality recompute all use these bytes, never a reopen of
+    the name (N3). Link count and identity are taken from the open descriptor (not a separate
+    lstat), and a change of size, inode, mtime or ctime while reading is refused."""
+    with d.open_regular(name) as fh:
+        before = os.fstat(fh.fileno())
+        if before.st_nlink != 1:
+            raise HistoryError("multiple_links", name)
+        if before.st_size > limit:
+            raise HistoryError("file_too_large", name)
+        buf = bytearray()
+        while len(buf) <= before.st_size:
+            block = fh.read(min(1 << 20, before.st_size + 1 - len(buf)))
+            if not block:
+                break
+            buf += block
+        data = bytes(buf)
+        after = os.fstat(fh.fileno())
+    ident = ("st_ino", "st_dev", "st_size", "st_mtime_ns", "st_ctime_ns", "st_nlink")
+    if len(data) != before.st_size or any(
+        getattr(before, k) != getattr(after, k) for k in ident
+    ):
+        raise HistoryError("changed_during_read", name)
+    return data
 
 
 def _fetch(
@@ -583,16 +616,22 @@ def verify_dataset(
 def _verify(
     directory: Path, conversion_check: bool, expected_manifest_sha256: str | None
 ) -> list[Problem]:
+    opened = _open_dataset_dir(directory)
+    if isinstance(opened, list):
+        return opened
+    with opened as d:
+        return _verify_in(d, conversion_check, expected_manifest_sha256)[0]
+
+
+def _open_dataset_dir(directory: Path) -> Dir | list[Problem]:
     try:
-        d = Dir.open(directory)
+        return Dir.open(directory)
     except HistoryError as exc:
         if exc.code == "out_dir_missing":
             return [Problem("manifest_missing")]
         return [Problem("dataset_dir_unsafe", exc.code)]
     except OSError as exc:
         return [Problem("dataset_dir_unsafe", type(exc).__name__)]
-    with d:
-        return _verify_in(d, conversion_check, expected_manifest_sha256)
 
 
 def _read_manifest(d: Dir) -> dict[str, Any] | list[Problem]:
@@ -604,11 +643,13 @@ def _read_manifest(d: Dir) -> dict[str, Any] | list[Problem]:
             Problem("manifest_is_symlink" if kind == "symlink" else "manifest_not_regular_file")
         ]
     try:
-        if d.stat(MANIFEST_NAME).st_nlink != 1:
+        data = _snapshot(d, MANIFEST_NAME, _MAX_MANIFEST_BYTES)
+        manifest = json.loads(data)
+    except HistoryError as exc:
+        if exc.code == "multiple_links":
             return [Problem("manifest_multiple_links")]
-        with d.open_regular(MANIFEST_NAME) as mfh:
-            manifest = json.loads(mfh.read())
-    except (HistoryError, OSError, ValueError, UnicodeDecodeError) as exc:
+        return [Problem("manifest_unreadable", exc.code)]
+    except (OSError, ValueError, UnicodeDecodeError) as exc:
         return [Problem("manifest_unreadable", type(exc).__name__)]
     if not isinstance(manifest, dict):
         return [Problem("manifest_malformed", "not_an_object")]
@@ -617,23 +658,25 @@ def _read_manifest(d: Dir) -> dict[str, Any] | list[Problem]:
 
 def _verify_in(
     directory: Dir, conversion_check: bool, expected_manifest_sha256: str | None
-) -> list[Problem]:
+) -> tuple[list[Problem], dict[str, Any] | None]:
+    """Verify the pinned directory. Returns (problems, the manifest object that was verified).
+    Callers that decide trust MUST use that returned object, never a re-read (F3)."""
     loaded = _read_manifest(directory)
     if isinstance(loaded, list):
-        return loaded
+        return loaded, None
     manifest = loaded
     missing = [k for k in _REQUIRED if k not in manifest]
     if missing:
-        return [Problem("manifest_malformed", f"missing_{k}") for k in missing]
+        return [Problem("manifest_malformed", f"missing_{k}") for k in missing], None
     if manifest["schema"] not in SUPPORTED_SCHEMAS:
-        return [Problem("schema_unsupported", str(manifest["schema"])[:60])]
+        return [Problem("schema_unsupported", str(manifest["schema"])[:60])], None
     if manifest["schema"] == SCHEMA_VERSION:
         missing = [k for k in _REQUIRED_V4 if k not in manifest]
         if missing:
-            return [Problem("manifest_malformed", f"missing_{k}") for k in missing]
+            return [Problem("manifest_malformed", f"missing_{k}") for k in missing], None
     shape = _check_shape(manifest)
     if shape:
-        return shape
+        return shape, None
 
     problems: list[Problem] = []
     stored = manifest.pop("manifest_sha256", None)
@@ -681,6 +724,17 @@ def _verify_in(
         if TMP_MARKER not in n
     ]
 
+    # The quality recompute is fed from the same bytes that are hashed below (one read per
+    # chunk), so the count, the hash and the quality can never describe different objects.
+    acc: QualityAccumulator | None = None
+    conv: TimeConversion | None = None
+    try:
+        conv = conversion_from_manifest(manifest)
+        acc = QualityAccumulator(QualityConfig(manifest["quality"]["config"]["max_gap_ms"]))
+    except (HistoryError, KeyError, TypeError, ValueError):
+        acc = None  # reported below (attestation / recompute), never silently skipped
+    quality_error = ""
+    limit = _chunk_byte_limit(manifest)
     cursor = manifest["window_raw_msc"][0]
     content = hashlib.sha256()
     total = 0
@@ -705,25 +759,28 @@ def _verify_in(
             elif kind == "other":
                 problems.append(Problem("chunk_not_regular_file", name))
             continue
-        digest = hashlib.sha256()
         try:
-            if directory.stat(name).st_nlink != 1:
+            data = _snapshot(directory, name, limit)
+        except HistoryError as exc:
+            if exc.code == "multiple_links":
                 problems.append(Problem("chunk_multiple_links", name))
-                parse_ok = False
-                continue
-            with directory.open_regular(name) as cfh:
-                for block in iter(lambda: cfh.read(1 << 20), b""):
-                    digest.update(block)
-                    content.update(block)
-        except (HistoryError, OSError) as exc:
-            problems.append(Problem("chunk_unreadable", name, getattr(exc, "code", "os_error")))
+            else:
+                problems.append(Problem("chunk_unreadable", name, exc.code))
             parse_ok = False
             continue
-        if digest.hexdigest() != c["sha256"]:
+        except OSError:
+            problems.append(Problem("chunk_unreadable", name, "os_error"))
+            parse_ok = False
+            continue
+        content.update(data)
+        if sha256_hex(data) != c["sha256"]:
             problems.append(Problem("chunk_hash_mismatch", name))
             parse_ok = False
             continue
-        count, outside, error = _scan_chunk(directory, name, c["from_raw_msc"], c["to_raw_msc"])
+        count, outside, error, qerr = _scan_bytes(
+            data, c["from_raw_msc"], c["to_raw_msc"], conv, acc
+        )
+        quality_error = quality_error or qerr
         total += count
         if error:
             problems.append(Problem("chunk_malformed", name, error))
@@ -741,6 +798,7 @@ def _verify_in(
         if total != manifest["tick_count"]:
             problems.append(Problem("tick_count_mismatch"))
 
+    manifest["manifest_sha256"] = stored
     try:
         conv = conversion_from_manifest(manifest)
         att = ClockAttestation.from_json(manifest["clock_attestation"])
@@ -748,7 +806,7 @@ def _verify_in(
     except (HistoryError, KeyError, TypeError, ValueError) as exc:
         code = getattr(exc, "code", type(exc).__name__)
         problems.append(Problem("clock_attestation_invalid", code))
-        return problems
+        return problems, manifest
     if manifest["time_conversion"] != conv.to_json():
         # derived_fold_ranges (and the version) are recomputed, never trusted from the file
         problems.append(Problem("time_conversion_not_canonical"))
@@ -757,24 +815,29 @@ def _verify_in(
         margin = validate_margin(manifest["provenance"].get("protected_margin_ms"))
     except HistoryError as exc:
         problems.append(Problem("protected_ranges_invalid", exc.code))
-        return problems
+        return problems, manifest
     if not conv.covers(*manifest["window_raw_msc"]):
         problems.append(Problem("time_conversion_does_not_cover_window"))
-        return problems
+        return problems, manifest
     lo, hi = _utc_span(conv, *manifest["window_raw_msc"])
     if overlaps(lo, hi, prot, margin):
         problems.append(Problem("window_overlaps_recorded_protected_range"))
 
     if conversion_check and parse_ok and not problems:
-        try:
-            cfg = QualityConfig(manifest["quality"]["config"]["max_gap_ms"])
-            recomputed = quality_report(_normalized_stream(directory, chunks, conv), cfg)
-        except (HistoryError, KeyError, TypeError, ValueError) as exc:
-            problems.append(Problem("quality_recompute_failed", type(exc).__name__))
-        else:
-            if canonical_json(recomputed) != canonical_json(manifest["quality"]):
-                problems.append(Problem("quality_report_not_reproducible"))
-    return problems
+        if acc is None or quality_error:
+            problems.append(Problem("quality_recompute_failed", quality_error or "config"))
+        elif canonical_json(acc.report()) != canonical_json(manifest["quality"]):
+            problems.append(Problem("quality_report_not_reproducible"))
+    return problems, manifest
+
+
+def _chunk_byte_limit(manifest: Mapping[str, Any]) -> int:
+    """Upper bound for one chunk file read into memory: generous per-tick allowance times the
+    manifest's own tick bound (a hostile manifest can only make the limit smaller than real)."""
+    ticks = manifest.get("max_chunk_ticks")
+    if type(ticks) is not int or ticks < 1:
+        ticks = DEFAULT_MAX_CHUNK_TICKS
+    return max(1 << 20, min(ticks, DEFAULT_MAX_CHUNK_TICKS * 4) * _MAX_LINE_BYTES)
 
 
 def _check_shape(manifest: dict[str, Any]) -> list[Problem]:
@@ -820,21 +883,31 @@ def _check_shape(manifest: dict[str, Any]) -> list[Problem]:
     return out
 
 
-def _scan_chunk(d: Dir, name: str, lo: int, hi: int) -> tuple[int, bool, str]:
-    """(rows, any row outside [lo, hi), error text). Streams; a bad row stops the scan."""
+def _scan_bytes(
+    data: bytes,
+    lo: int,
+    hi: int,
+    conv: TimeConversion | None,
+    acc: QualityAccumulator | None,
+) -> tuple[int, bool, str, str]:
+    """(rows, any row outside [lo, hi), parse error text, quality error text) over ONE snapshot.
+    Streams; a bad row stops the scan. Each parsed tick is also fed to `acc` (if any)."""
     count = 0
     outside = False
+    quality_error = ""
     try:
-        with d.open_regular(name) as fh:
-            for lineno, line in enumerate(fh, 1):
-                row = json.loads(line)
-                t = RawTick(row["t"], Decimal(row["b"]), Decimal(row["a"]), row.get("f"))
-                if type(t.time_msc) is not int or (
-                    t.flags is not None and type(t.flags) is not int
-                ):
-                    return count, outside, f"line {lineno}: bad field type"
-                count += 1
-                outside = outside or not (lo <= t.time_msc < hi)
+        for lineno, line in enumerate(io.BytesIO(data), 1):
+            row = json.loads(line)
+            t = RawTick(row["t"], Decimal(row["b"]), Decimal(row["a"]), row.get("f"))
+            if type(t.time_msc) is not int or (t.flags is not None and type(t.flags) is not int):
+                return count, outside, f"line {lineno}: bad field type", quality_error
+            count += 1
+            outside = outside or not (lo <= t.time_msc < hi)
+            if acc is not None and conv is not None and not quality_error:
+                try:
+                    acc.add(_normalize_one(t, conv))
+                except (HistoryError, ArithmeticError, ValueError) as exc:
+                    quality_error = type(exc).__name__
     except (
         HistoryError,
         ValueError,
@@ -843,8 +916,10 @@ def _scan_chunk(d: Dir, name: str, lo: int, hi: int) -> tuple[int, bool, str]:
         ArithmeticError,
         UnicodeDecodeError,
     ) as exc:
-        return count, outside, f"line {count + 1}: {type(exc).__name__}"
-    return count, outside, ""
+        return count, outside, f"line {count + 1}: {type(exc).__name__}", quality_error
+    if acc is not None:
+        acc.end_segment()
+    return count, outside, "", quality_error
 
 
 def usability_blockers(
@@ -854,14 +929,26 @@ def usability_blockers(
     data defects. An empty list does NOT mean TRUSTED: that needs `dataset_status` and an
     independently stored anchor. Gaps are reported by the quality report, not judged here (Quant
     decision MD-6)."""
-    problems = verify_dataset(directory, expected_manifest_sha256=expected_manifest_sha256)
+    opened = _open_dataset_dir(directory)
+    if isinstance(opened, list):
+        return [str(p) for p in opened]
+    with opened as d:
+        return usability_blockers_in(d, expected_manifest_sha256=expected_manifest_sha256)[0]
+
+
+def usability_blockers_in(
+    d: Dir, *, expected_manifest_sha256: str | None = None
+) -> tuple[list[str], dict[str, Any] | None]:
+    """`usability_blockers` on an already pinned directory, returning the verified manifest so a
+    caller (the custodian tool) acts on exactly the object it checked (N2). Never raises."""
+    try:
+        problems, manifest = _verify_in(d, True, expected_manifest_sha256)
+    except Exception as exc:  # defensive: same contract as verify_dataset_report
+        return [str(Problem("verify_internal_error", type(exc).__name__))], None
     if problems:
-        return problems
-    with Dir.open(directory) as d:
-        manifest = _read_manifest(d)
-    if isinstance(manifest, list):
-        return [str(p) for p in manifest]
-    return [f"hard_defect:{x}" for x in manifest["quality_hard_defects"]]
+        return [str(p) for p in problems], None
+    assert manifest is not None
+    return [f"hard_defect:{x}" for x in manifest["quality_hard_defects"]], manifest
 
 
 # ---- trust: integrity is not provenance ----------------------------------------------------
@@ -872,6 +959,11 @@ class DatasetStatus:
 
     status: str
     reasons: tuple[str, ...]
+    # Digests of the object the decision was made on (set whenever integrity verified). A
+    # consumer binds its own reads to these, or reads through `open_trusted` (F3).
+    dataset_id: str | None = None
+    manifest_sha256: str | None = None
+    content_sha256: str | None = None
 
     @property
     def trusted(self) -> bool:
@@ -970,6 +1062,28 @@ def _dataset_status(
     pin: Mapping[str, Any] | None = None,
     max_pin_age: timedelta | None = None,
 ) -> DatasetStatus:
+    opened = _open_dataset_dir(directory)
+    if isinstance(opened, list):
+        return DatasetStatus("UNTRUSTED", tuple(f"integrity:{p}" for p in opened))
+    with opened as d:
+        return _status_in(
+            d, directory, anchor, store, registry, expected_head, now, pin, max_pin_age
+        )[0]
+
+
+def _status_in(
+    d: Dir,
+    directory: Path,
+    anchor: Mapping[str, Any] | None,
+    store: EvidenceStore | None,
+    registry: CustodianRegistry | None,
+    expected_head: ChainHead | None,
+    now: datetime | None,
+    pin: Mapping[str, Any] | None,
+    max_pin_age: timedelta | None,
+) -> tuple[DatasetStatus, dict[str, Any] | None]:
+    """Integrity, defects, capabilities and custody, ALL decided on the one pinned directory `d`
+    and the one manifest object that `_verify_in` hashed (F3: no second open of the path)."""
     reasons: list[str] = []
     expected: str | None = None
     if anchor is None:
@@ -983,15 +1097,13 @@ def _dataset_status(
             expected = str(anchor["manifest_sha256"])
             if store is None or registry is None:
                 reasons.append("legacy_anchor_is_not_custody_evidence")
-    problems = verify_dataset_report(directory, expected_manifest_sha256=expected)
+    try:
+        problems, manifest = _verify_in(d, True, expected)
+    except Exception as exc:  # defensive: same contract as verify_dataset_report
+        problems, manifest = [Problem("verify_internal_error", type(exc).__name__)], None
     reasons += [f"integrity:{p}" for p in problems]
-    if problems:
-        return DatasetStatus("UNTRUSTED", tuple(reasons))
-    with Dir.open(directory) as d:
-        manifest = _read_manifest(d)
-    if isinstance(manifest, list):
-        reasons.append("integrity:manifest_unreadable_after_verify")
-        return DatasetStatus("UNTRUSTED", tuple(reasons))
+    if problems or manifest is None:
+        return DatasetStatus("UNTRUSTED", tuple(reasons)), None
     if manifest["schema"] != SCHEMA_VERSION:
         reasons.append(f"legacy_schema_cannot_be_trusted:{manifest['schema']}")
     reasons += [f"hard_defect:{x}" for x in manifest["quality_hard_defects"]]
@@ -1008,7 +1120,17 @@ def _dataset_status(
     reasons += _custody_reasons(
         directory, manifest, store, registry, expected_head, now, pin, max_pin_age
     )
-    return DatasetStatus("TRUSTED" if not reasons else "UNTRUSTED", tuple(reasons))
+    if not d.same_inode_as_path():
+        # the verdict is about the pinned object; the path now names something else (C1)
+        reasons.append("integrity:dataset_path_replaced_during_check")
+    status = DatasetStatus(
+        "TRUSTED" if not reasons else "UNTRUSTED",
+        tuple(reasons),
+        manifest["dataset_id"],
+        manifest["manifest_sha256"],
+        manifest["content_sha256"],
+    )
+    return status, manifest
 
 
 def _custody_reasons(
@@ -1058,3 +1180,60 @@ def require_trusted(
     if not status.trusted:
         raise HistoryError("dataset_untrusted", ",".join(status.reasons)[:300])
     return status
+
+
+class TrustedDataset:
+    """A TRUSTED dataset held open on its pinned directory. Consumers read ticks ONLY through
+    `iter_ticks`, which re-reads each chunk once through the pinned descriptor and checks it
+    against the verified manifest before yielding anything, so the bytes a consumer uses are the
+    bytes that were trusted (F3/N3). Any change raises `trusted_dataset_changed`."""
+
+    def __init__(self, d: Dir, manifest: dict[str, Any], status: DatasetStatus) -> None:
+        self._d = d
+        self.manifest = manifest
+        self.status = status
+
+    def __enter__(self) -> TrustedDataset:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self._d.close()
+
+    def iter_ticks(self) -> Iterator[RawTick]:
+        limit = _chunk_byte_limit(self.manifest)
+        for c in self.manifest["chunks"]:
+            try:
+                data = _snapshot(self._d, c["file"], limit)
+            except (HistoryError, OSError):
+                raise HistoryError("trusted_dataset_changed", c["file"]) from None
+            if sha256_hex(data) != c["sha256"]:
+                raise HistoryError("trusted_dataset_changed", c["file"])
+            yield from _iter_ticks(io.BytesIO(data))
+
+
+def open_trusted(
+    directory: Path,
+    *,
+    store: EvidenceStore,
+    registry: CustodianRegistry,
+    pin: Mapping[str, Any],
+    max_pin_age: timedelta,
+    now: datetime | None = None,
+) -> TrustedDataset:
+    """Decide trust and keep the decided object pinned for reading. Raises `dataset_untrusted`
+    (fail closed). Use as a context manager."""
+    opened = _open_dataset_dir(directory)
+    if isinstance(opened, list):
+        raise HistoryError("dataset_untrusted", ",".join(f"integrity:{p}" for p in opened))
+    try:
+        status, manifest = _status_in(
+            opened, directory, None, store, registry, None, now, pin, max_pin_age
+        )
+    except BaseException:
+        opened.close()
+        raise
+    if not status.trusted or manifest is None:
+        opened.close()
+        raise HistoryError("dataset_untrusted", ",".join(status.reasons)[:300])
+    return TrustedDataset(opened, manifest, status)
+

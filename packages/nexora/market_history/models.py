@@ -89,6 +89,7 @@ class NormalizedTick:
     bid: Decimal
     ask: Decimal
     spread: Decimal  # ask - bid, in price units as quoted
+    flags: int | None = None  # source quote flags, part of tick identity (N6)
 
 
 @dataclass(frozen=True, slots=True)

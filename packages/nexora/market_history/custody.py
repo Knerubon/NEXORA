@@ -869,18 +869,23 @@ def approve_dataset(
 ) -> dict[str, Any]:
     """Custodian action. Independently re-verifies the dataset, then runs the SAME checks the
     verifier will run before appending, so an invalid or self-approval is refused at the door."""
-    from nexora.market_history.extract import _read_manifest, usability_blockers
+    from nexora.market_history.extract import usability_blockers_in
 
     if approved_at.tzinfo is None:
         raise HistoryError("invalid_timestamp", "approved_at")
     approver = _principal_for(signer, registry, "custodian")
-    blockers = usability_blockers(directory)
-    if blockers:
-        raise HistoryError("dataset_not_approvable", ",".join(blockers)[:300])
-    with Dir.open(directory) as d:
-        manifest = _read_manifest(d)
-    if isinstance(manifest, list):
-        raise HistoryError("dataset_not_approvable", str(manifest[0]))
+    try:
+        d = Dir.open(directory)
+    except (HistoryError, OSError) as exc:
+        raise HistoryError("dataset_not_approvable", type(exc).__name__) from None
+    with d:
+        # verify, read and bind ONE pinned object: the manifest approved is the one verified (N2)
+        blockers, verified = usability_blockers_in(d)
+        if blockers or verified is None:
+            raise HistoryError("dataset_not_approvable", ",".join(blockers)[:300])
+        if not d.same_inode_as_path():
+            raise HistoryError("dataset_not_approvable", "dataset_path_replaced_during_approval")
+    manifest = verified
     location = getattr(store, "location", None)
     if isinstance(location, Path) and _inside(location, directory):
         raise HistoryError("store_inside_dataset")

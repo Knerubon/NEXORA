@@ -114,5 +114,6 @@ def normalize(ticks: Iterable[RawTick], conversion: TimeConversion) -> Iterator[
     """Order-preserving; drops nothing, reorders nothing (quality checks report disorder)."""
     for t in ticks:
         yield NormalizedTick(
-            conversion.to_utc_msc(t.time_msc), t.time_msc, t.bid, t.ask, exact_sub(t.ask, t.bid)
+            conversion.to_utc_msc(t.time_msc), t.time_msc, t.bid, t.ask, exact_sub(t.ask, t.bid),
+            t.flags,
         )

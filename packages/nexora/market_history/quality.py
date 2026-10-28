@@ -33,63 +33,82 @@ def _day(utc_msc: int) -> str:
     return datetime.fromtimestamp(utc_msc // 1000, tz=UTC).strftime("%Y-%m-%d")
 
 
-def quality_report(ticks: Iterable[NormalizedTick], config: QualityConfig) -> dict[str, Any]:
-    total = non_monotonic = same_ts_diff_quote = exact_dups = 0
-    crossed = nonpositive = zero_spread = nonfinite = 0
-    first: int | None = None
-    last: int | None = None
-    prev: NormalizedTick | None = None
-    gaps: list[list[int]] = []
-    gap_count = 0
-    per_day: dict[str, int] = {}
-    for t in ticks:
-        total += 1
-        first = t.utc_msc if first is None else min(first, t.utc_msc)
-        last = t.utc_msc if last is None else max(last, t.utc_msc)
+class QualityAccumulator:
+    """Push-style form of `quality_report`, so a verifier can feed the SAME bytes it hashed, one
+    chunk at a time, without reopening any file (N3)."""
+
+    def __init__(self, config: QualityConfig) -> None:
+        self.config = config
+        self.total = self.non_monotonic = self.same_ts_diff_quote = self.exact_dups = 0
+        self.crossed = self.nonpositive = self.zero_spread = self.nonfinite = 0
+        self.first: int | None = None
+        self.last: int | None = None
+        self.prev: NormalizedTick | None = None
+        self.gaps: list[list[int]] = []
+        self.gap_count = 0
+        self.per_day: dict[str, int] = {}
+
+    def add(self, t: NormalizedTick) -> None:
+        self.total += 1
+        self.first = t.utc_msc if self.first is None else min(self.first, t.utc_msc)
+        self.last = t.utc_msc if self.last is None else max(self.last, t.utc_msc)
         d = _day(t.utc_msc)
-        per_day[d] = per_day.get(d, 0) + 1
+        self.per_day[d] = self.per_day.get(d, 0) + 1
         if not (t.bid.is_finite() and t.ask.is_finite()):
-            nonfinite += 1  # counted; never compared (NaN ordering raises)
-            continue
+            self.nonfinite += 1  # counted; never compared (NaN ordering raises)
+            return
         if t.bid <= 0 or t.ask <= 0:
-            nonpositive += 1
+            self.nonpositive += 1
         if t.ask < t.bid:
-            crossed += 1
+            self.crossed += 1
         if t.ask == t.bid:
-            zero_spread += 1
+            self.zero_spread += 1
+        prev = self.prev
         if prev is not None:
             if t.utc_msc < prev.utc_msc:
-                non_monotonic += 1
+                self.non_monotonic += 1
             elif t.utc_msc == prev.utc_msc:
                 if (t.bid, t.ask) == (prev.bid, prev.ask):
-                    exact_dups += 1
+                    self.exact_dups += 1
                 else:
-                    same_ts_diff_quote += 1
-            elif t.utc_msc - prev.utc_msc > config.max_gap_ms:
-                gap_count += 1
-                if len(gaps) < MAX_GAP_LIST:
-                    gaps.append([prev.utc_msc, t.utc_msc])
-        prev = t
-    return {
-        "version": QUALITY_VERSION,
-        "config": {"max_gap_ms": config.max_gap_ms},
-        "tick_count": total,
-        "first_utc_msc": first,
-        "last_utc_msc": last,
-        "non_monotonic_count": non_monotonic,
-        "exact_duplicate_count": exact_dups,
-        "same_timestamp_different_quote_count": same_ts_diff_quote,
-        "crossed_quote_count": crossed,
-        "nonfinite_quote_count": nonfinite,
-        "nonpositive_price_count": nonpositive,
-        "zero_spread_count": zero_spread,
-        "gap_count": gap_count,
-        "gaps_utc_msc": gaps,
-        "gaps_truncated": gap_count > len(gaps),
-        "ticks_per_utc_day": dict(sorted(per_day.items())),
-        "distribution_statistics_included": False,
-        "note": "counts and coverage only; no price/spread distributions (holdout custody)",
-    }
+                    self.same_ts_diff_quote += 1
+            elif t.utc_msc - prev.utc_msc > self.config.max_gap_ms:
+                self.gap_count += 1
+                if len(self.gaps) < MAX_GAP_LIST:
+                    self.gaps.append([prev.utc_msc, t.utc_msc])
+        self.prev = t
+
+    def end_segment(self) -> None:
+        """Called between chunks. Reserved for per-chunk state; no effect on these counters."""
+
+    def report(self) -> dict[str, Any]:
+        return {
+            "version": QUALITY_VERSION,
+            "config": {"max_gap_ms": self.config.max_gap_ms},
+            "tick_count": self.total,
+            "first_utc_msc": self.first,
+            "last_utc_msc": self.last,
+            "non_monotonic_count": self.non_monotonic,
+            "exact_duplicate_count": self.exact_dups,
+            "same_timestamp_different_quote_count": self.same_ts_diff_quote,
+            "crossed_quote_count": self.crossed,
+            "nonfinite_quote_count": self.nonfinite,
+            "nonpositive_price_count": self.nonpositive,
+            "zero_spread_count": self.zero_spread,
+            "gap_count": self.gap_count,
+            "gaps_utc_msc": self.gaps,
+            "gaps_truncated": self.gap_count > len(self.gaps),
+            "ticks_per_utc_day": dict(sorted(self.per_day.items())),
+            "distribution_statistics_included": False,
+            "note": "counts and coverage only; no price/spread distributions (holdout custody)",
+        }
+
+
+def quality_report(ticks: Iterable[NormalizedTick], config: QualityConfig) -> dict[str, Any]:
+    acc = QualityAccumulator(config)
+    for t in ticks:
+        acc.add(t)
+    return acc.report()
 
 
 def hard_defects(report: dict[str, Any]) -> list[str]:
