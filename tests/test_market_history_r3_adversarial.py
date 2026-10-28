@@ -337,6 +337,25 @@ def test_B4_valid_new_reapproval_after_revocation_restores_trust(tmp_path: Path)
     assert status(e).trusted
 
 
+def test_B4b_signed_reapproval_reusing_the_revoked_candidate_does_not_restore_trust(
+    tmp_path: Path,
+) -> None:
+    """F2: a real custodian appending directly (no tool check) a fresh, correctly signed approval
+    that acknowledges the revocation but reuses the OLD operator attestation is refused by the
+    verifier itself: trust withdrawn by a revocation needs a fresh operator attestation."""
+    e = make_env(tmp_path)
+    approve(e)
+    rv = _revoke(e)
+    e.store.append(
+        body_for(
+            e, approval_id="34" * 16, acknowledged_revocations=[rv["revocation_id"]],
+            approved_at=(LATER + timedelta(hours=2)).isoformat(),
+        )
+    )  # fmt: skip
+    r = _reasons(e)
+    assert "custody:approval_3_rejected:candidate_reused" in r
+
+
 def test_B5_missing_revocation_entry_breaks_lineage(tmp_path: Path) -> None:
     """Approve, revoke, re-approve; then the revocation is deleted and the chain re-sealed. The
     re-approval names a revocation that is gone: history was removed, never TRUSTED."""

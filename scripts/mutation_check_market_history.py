@@ -1,5 +1,5 @@
 # ruff: noqa: E501
-"""Manual mutation check for the V4 market-history safeguards (developer tool; not run by CI).
+"""Manual mutation check for the V4 + round-3 market-history safeguards (developer tool; not run by CI).
 
 Applies each deliberate regression to the source, runs the V4 tests, and requires them to FAIL
 (mutant killed). The original file is always restored. Usage (repo root):
@@ -16,7 +16,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 PKG = "packages/nexora/market_history/"
 TESTS = ["tests/test_market_history_v4_lock.py", "tests/test_market_history_v4_fs.py",
-         "tests/test_market_history_v4_custody.py"]  # fmt: skip
+         "tests/test_market_history_v4_custody.py", "tests/test_market_history_r3_adversarial.py"]  # fmt: skip
 
 # (label, file, exact old text, replacement)
 MUTANTS: list[tuple[str, str, str, str]] = [
@@ -38,21 +38,58 @@ MUTANTS: list[tuple[str, str, str, str]] = [
     ("fsutil: unproven probe values accepted", "fsutil.py",
      "        if probes.get(key) is not True:", "        if probes.get(key) is False:"),
     ("custody: self-approval check disabled", "custody.py",
-     "        if normalize_identity(ident) in mine:", "        if False:"),
-    ("custody: registry membership not required", "custody.py",
-     '    if custodian is None:\n        return "approver_not_authorized"', "    if False:\n        return \"approver_not_authorized\""),
+     "    if approver.id == cand[\"operator\"]:\n        return \"self_approval_by_operator\"", "    if False:\n        return \"self_approval_by_operator\""),
+    ("custody: registry membership/role not required for approver", "custody.py",
+     "    if approver is None or akey is None:\n        return f\"approver_{why}\"", "    if False:\n        return f\"approver_{why}\""),
     ("custody: chain prev-link not checked", "custody.py",
      "        if e.get(\"prev_sha256\") != prev:", "        if False:"),
     ("custody: approval need not bind the manifest hash", "custody.py",
      '"content_sha256", "manifest_sha256", "symbol")\n    return {k: manifest[k] for k in keys}', '"content_sha256", "symbol")\n    return {k: manifest[k] for k in keys}'),
     ("custody: later revocation ignored", "custody.py",
-     "    if revoked:\n        return CustodyVerdict(False", "    if False:\n        return CustodyVerdict(False"),
+     "    if later:\n        revoked = ", "    if False:\n        revoked = "),
     ("extract: custody evidence not consulted for TRUSTED", "extract.py",
-     "    reasons += _custody_reasons(directory, manifest, store, registry, expected_head, now)\n", ""),
+     "    reasons += _custody_reasons(\n        directory, manifest, store, registry, expected_head, now, pin, max_pin_age\n    )\n", ""),
     ("extract: hard-link count not checked on chunks", "extract.py",
-     "            if directory.stat(name).st_nlink != 1:", "            if False:"),
+     "        if before.st_nlink != 1:\n            raise HistoryError(\"multiple_links\", name)", "        if False:\n            raise HistoryError(\"multiple_links\", name)"),
     ("extract: capability blockers ignored by status", "extract.py",
      '    reasons += [\n        f"capability:{c}" for c in capability_blockers(manifest.get("filesystem_capabilities"))\n    ]\n', ""),
+    # ---- round 3 (F1-F6, N1-N6) ----
+    ("R3 F1: approval signature not verified", "custody.py",
+     "        return \"approval_signature_invalid\"", "        pass"),
+    ("R3 F1: operator attestation signature not verified", "custody.py",
+     "        return \"operator_signature_invalid\"", "        pass"),
+    ("R3 F2: replayed approval_id counted", "custody.py",
+     "        if not why and replay:\n            why = \"replayed_approval_id\"", "        if False:\n            why = \"replayed_approval_id\""),
+    ("R3 F2: candidate reuse allowed", "custody.py",
+     "            if e[\"candidate_sha256\"] in candidates:\n                why = \"candidate_reused\"", "            if False:\n                why = \"candidate_reused\""),
+    ("R3 F2: lineage (acknowledged revocations) not checked", "custody.py",
+     "            why = _lineage_problem(e, revocations, blocking)", "            why = \"\""),
+    ("R3 F2: unidentifiable revocation does not block", "custody.py",
+     "                blocking.append(f\"custody:revocation_{e['seq']}_unidentifiable\")", "                pass"),
+    ("R3 F5: missing head pin accepted", "custody.py",
+     "        return [\"custody:independent_pin_missing\"], None", "        return [], None"),
+    ("R3 F5: pin signature not verified", "custody.py",
+     "        return [\"custody:pin_signature_invalid\"], None", "        pass"),
+    ("R3 F5: stale pin accepted", "custody.py",
+     "        out.append(\"custody:pin_stale\")", "        pass"),
+    ("R3 F5: pin head mismatch ignored", "custody.py",
+     "        out.append(\"custody:pin_head_mismatch\")", "        pass"),
+    ("R3 F5/N4: pin authority need not be independent", "custody.py",
+     "        blocking.append(\"custody:pin_not_independent\")", "        pass"),
+    ("R3 F4: approvals after the pin counted", "custody.py",
+     "    if e[\"seq\"] > pinned.seq:\n        return \"approval_not_covered_by_pin\"", "    if False:\n        return \"approval_not_covered_by_pin\""),
+    ("R3 F3: path replacement during status not detected", "extract.py",
+     "        reasons.append(\"integrity:dataset_path_replaced_during_check\")", "        pass"),
+    ("R3 F3/N3: snapshot change during read not detected", "extract.py",
+     "        raise HistoryError(\"changed_during_read\", name)\n    return data", "        pass\n    return data"),
+    ("R3 N2: approval path replacement not detected", "custody.py",
+     "            raise HistoryError(\"dataset_not_approvable\", \"dataset_path_replaced_during_approval\")", "            pass"),
+    ("R3 F6: directory lock never contended", "lock.py",
+     "        if not _try_lock(fd):\n            raise HistoryError(\"writer_lock_held\", \"directory lock held by another writer\")", "        if False:\n            raise HistoryError(\"writer_lock_held\", \"directory lock held by another writer\")"),
+    ("R3 F6: lost lock record not detected", "lock.py",
+     "        if self.released or not _same_file_ids(self.directory, self.dev, self.ino):", "        if self.released:"),
+    ("R3 N6: duplicate identity ignores flags", "quality.py",
+     "        ident = (t.raw_msc, bid, ask, flags)", "        ident = (t.raw_msc, bid, ask)"),
 ]  # fmt: skip
 
 
