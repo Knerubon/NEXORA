@@ -164,8 +164,9 @@ re-anchor a rewritten store is recorded. `head` prints the unsigned head (never 
 
 Verification (a second person):
 `uv run --no-sync python scripts/verify_market_history.py --dataset <folder> --store <dir>
---registry <registry.json> --pin <pin.json> --max-pin-age-seconds <policy value> --require-trusted`
-(exit 0 only if `TRUSTED`). Consumers read the data through `open_trusted`, which re-hashes every
+--registry <registry.json> --pin <pin.json> --max-pin-age-seconds <policy value>`
+(exit codes: `0` only if `TRUSTED`; `1` UNTRUSTED; `2` invalid input; `3` operational error; any non-zero
+means do not use the dataset as evidence; `--require-trusted` is a deprecated no-op). Consumers read the data through `open_trusted`, which re-hashes every
 chunk as it is read. `TRUSTED` needs ALL of: clean verification on one pinned copy; no hard defects; a
 proven `filesystem_capabilities` record and a supported verifier platform; a signed operator
 attestation by the recorded operator; a custodian-signed approval bound to this exact dataset id,
@@ -177,6 +178,11 @@ Crash recovery: `custody_market_history.py recover-store --store <dir>` finishes
 crashed between link and temp unlink; `scripts/recover_market_history.py <dataset-folder>` does the
 same for a dataset publication (extract re-runs do it automatically). Both remove only temp names
 that are the same file as their published entry and print what they removed.
+
+After a `revoke`, the pin authority must re-pin (`pin --previous <last-pin>`) so the new pin covers the
+revocation, and verifiers must use only the newest pin: a revocation newer than the latest pin can be
+hidden by truncating the store tail until that pin becomes stale (`max_pin_age`; THREAT-MODEL-V4.md
+section 9). `revoke` prints `repin_required` as a reminder.
 
 Process controls this code cannot prove: registry upkeep, private-key custody, that the store really
 is append-only, and that the pin authority and custodian are independent people.

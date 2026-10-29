@@ -42,6 +42,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from nexora.market_history import jsonio
 from nexora.market_history.fsutil import Dir
 from nexora.market_history.models import HistoryError
 
@@ -155,8 +156,8 @@ def _classify(raw: bytes) -> str:
     if not raw.strip():
         return "empty"
     try:
-        data = json.loads(raw)
-    except (ValueError, UnicodeDecodeError):
+        data = jsonio.loads(raw, "writer_lock")
+    except (ValueError, UnicodeDecodeError):  # HistoryError (deep/invalid JSON) is a ValueError
         return "unverifiable"
     if not isinstance(data, dict) or data.get("format") != LOCK_FORMAT:
         return "unverifiable"  # V3 record (never took an OS lock), garbage or a partial write

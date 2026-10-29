@@ -9,54 +9,114 @@ through the pin authority's own channel, outside the dataset) and `--max-pin-age
 that pin may be: a governance parameter, no default). A head read from the store being verified is
 not independent and never qualifies. `--store-head SEQ:SHA256` is an extra, unsigned truncation
 check only.
-Exit code: 0 = TRUSTED, or (without --require-trusted) cleanly verified; 1 = not; 2 = bad input.
+
+EXIT-CODE CONTRACT (stable; a calling script may rely on it, and ONLY 0 means "trusted"):
+
+    0  TRUSTED. Every required condition held: dataset integrity, no hard defects, proven
+       capabilities, a valid un-revoked custodian approval, a fresh signed head pin.
+    1  UNTRUSTED. The check ran to a verdict and the dataset is NOT trusted. This includes a
+       dataset that verifies cleanly but has no custody evidence (development use only), and one
+       that fails integrity or custody. Read `status_reasons` for why. Never approval.
+    2  INVALID INPUT. The command line or an input file (anchor, registry, pin, store head,
+       max pin age) is missing, unreadable, malformed or out of range. No verdict was reached.
+    3  OPERATIONAL ERROR. An internal error prevented a verdict. Fail closed: treat as not trusted.
+
+Any code other than 0 must be treated as "do not use as evidence". The JSON line on stdout repeats
+the verdict: {"status", "trusted", "exit_code", "exit_meaning", "status_reasons"}. The historical
+`--require-trusted` flag is accepted and is a NO-OP (the behaviour it used to request is now the
+only behaviour); it can never turn a non-zero exit into 0.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import re
+import sys
 from datetime import timedelta
 from pathlib import Path
 
+from nexora.market_history import jsonio
 from nexora.market_history.custody import ChainHead, LocalAppendOnlyStore, _inside, load_registry
 from nexora.market_history.extract import _open_regular, dataset_status, load_anchor
 from nexora.market_history.models import HistoryError
 
-_FAILURE_PREFIXES = (
-    "integrity:",
-    "hard_defect:",
-    "anchor_malformed:",
-    "anchor_mismatch:",
-    "custody:chain_invalid",
-    "custody:binding_mismatch",
-    "custody:store_unreadable",
-    "custody:revoked",
-    "custody:revocation_lineage_broken",
-    "custody:pin_",
-)
+EXIT_TRUSTED = 0
+EXIT_UNTRUSTED = 1
+EXIT_INVALID_INPUT = 2
+EXIT_OPERATIONAL = 3
+EXIT_MEANING = {
+    EXIT_TRUSTED: "trusted",
+    EXIT_UNTRUSTED: "untrusted",
+    EXIT_INVALID_INPUT: "invalid_input",
+    EXIT_OPERATIONAL: "operational_error",
+}
+_INTERNAL_MARKERS = ("status_internal_error", "verify_internal_error")
+_STORE_HEAD = re.compile(r"([0-9]{1,18}):([0-9a-f]{64})", re.ASCII)
 
 
 def _head(text: str) -> ChainHead:
-    seq, _, digest = text.partition(":")
-    if not seq.isdigit() or int(seq) < 1 or len(digest) != 64:
+    m = _STORE_HEAD.fullmatch(text)
+    if not m or int(m.group(1)) < 1:
         raise HistoryError("invalid_store_head", "expected SEQ:SHA256")
-    return ChainHead(int(seq), digest)
+    return ChainHead(int(m.group(1)), m.group(2))
+
+
+def _max_age(seconds: int) -> timedelta:
+    if seconds <= 0 or seconds > jsonio.MAX_AGE_SECONDS_SANITY:
+        raise HistoryError("invalid_max_pin_age", f"must be 1..{jsonio.MAX_AGE_SECONDS_SANITY}")
+    return timedelta(seconds=seconds)
+
+
+def _seconds(text: str) -> int:
+    """ASCII digits only (int() would also take Arabic-Indic or fullwidth digits)."""
+    if not re.fullmatch(r"[0-9]{1,18}", text, re.ASCII):
+        raise argparse.ArgumentTypeError("expected a positive integer number of seconds")
+    return int(text)
+
+
+def _emit(status: str, reasons: list[str], code: int) -> int:
+    print(
+        json.dumps(
+            {
+                "status": status,
+                "trusted": code == EXIT_TRUSTED,
+                "exit_code": code,
+                "exit_meaning": EXIT_MEANING[code],
+                "status_reasons": reasons,
+            }
+        )
+    )
+    return code
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__)
+    try:
+        return _main()
+    except Exception as exc:  # defensive: never an uncontrolled traceback, never exit 0
+        return _emit("UNTRUSTED", [f"cli_internal_error:{type(exc).__name__}"], EXIT_OPERATIONAL)
+
+
+def _main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
     ap.add_argument("--dataset", type=Path, required=True)
     ap.add_argument("--anchor", type=Path, help="V3 hash-only anchor, OUTSIDE the dataset folder")
     ap.add_argument("--store", type=Path, help="append-only evidence store directory (outside)")
     ap.add_argument("--registry", type=Path, help="custodian registry JSON (outside the dataset)")
     ap.add_argument("--store-head", help="unsigned store head SEQ:SHA256 (truncation check only)")
     ap.add_argument("--pin", type=Path, help="signed head pin JSON from the pin authority")
-    ap.add_argument("--max-pin-age-seconds", type=int, help="maximum pin age (no default)")
-    ap.add_argument("--require-trusted", action="store_true")
-    args = ap.parse_args()
+    ap.add_argument("--max-pin-age-seconds", type=_seconds, help="maximum pin age (no default)")
+    ap.add_argument(
+        "--require-trusted", action="store_true", help="deprecated no-op (always in force)"
+    )
+    try:
+        args = ap.parse_args()
+    except SystemExit as exc:  # argparse exits 2 on bad usage: keep it, but as a JSON verdict too
+        if exc.code in (0, None):
+            raise
+        return _emit("UNTRUSTED", ["invalid_arguments"], EXIT_INVALID_INPUT)
     if bool(args.store) != bool(args.registry):
-        ap.error("--store and --registry go together")
+        return _emit("UNTRUSTED", ["store_and_registry_go_together"], EXIT_INVALID_INPUT)
     anchor = None
     store = registry = head = pin = None
     max_age = None
@@ -72,25 +132,27 @@ def main() -> int:
             if _inside(args.pin, args.dataset):
                 raise HistoryError("pin_inside_dataset")
             with _open_regular(args.pin) as fh:
-                pin = json.loads(fh.read(1 << 16))
+                pin = jsonio.loads(fh.read(1 << 16), "pin")
         if args.max_pin_age_seconds is not None:
-            if args.max_pin_age_seconds <= 0:
-                raise HistoryError("invalid_max_pin_age")
-            max_age = timedelta(seconds=args.max_pin_age_seconds)
-    except (HistoryError, ValueError) as exc:
-        code = exc.code if isinstance(exc, HistoryError) else "pin_unreadable"
-        print(json.dumps({"status": "UNTRUSTED", "status_reasons": [code]}))
-        return 2
+            max_age = _max_age(args.max_pin_age_seconds)
+    except (HistoryError, ValueError, OSError) as exc:
+        code = exc.code if isinstance(exc, HistoryError) else "input_unreadable"
+        if code in ("json_invalid", "json_too_deep"):
+            code = "pin_unreadable"
+        return _emit("UNTRUSTED", [code], EXIT_INVALID_INPUT)
     status = dataset_status(
         args.dataset, anchor, store=store, registry=registry, expected_head=head, pin=pin,
         max_pin_age=max_age,
     )  # fmt: skip
-    print(json.dumps({"status": status.status, "status_reasons": list(status.reasons)}))
-    if status.trusted:
-        return 0
-    cleanly_verified = not any(r.startswith(_FAILURE_PREFIXES) for r in status.reasons)
-    return 0 if cleanly_verified and not args.require_trusted else 1
+    reasons = list(status.reasons)
+    if any(r.startswith(_INTERNAL_MARKERS) or ":verify_internal_error" in r for r in reasons):
+        return _emit(status.status, reasons, EXIT_OPERATIONAL)
+    # exit 0 only for a TRUSTED verdict that also carries every input TRUSTED requires
+    complete = all(x is not None for x in (store, registry, pin, max_age))
+    if status.trusted and status.status == "TRUSTED" and not reasons and complete:
+        return _emit(status.status, reasons, EXIT_TRUSTED)
+    return _emit(status.status, reasons, EXIT_UNTRUSTED)
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    sys.exit(main())

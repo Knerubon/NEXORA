@@ -13,6 +13,9 @@ must extend the previous pin (`--previous`), or state `--initial` / `--reanchor-
 independent authorization to re-anchor a rewritten store is recorded). `keygen` creates an Ed25519
 key pair: the private key file stays with its holder (mode 0600, never in Git, never next to the
 data); the printed public key goes into the principal registry.
+
+Exit codes: 0 done; 1 a store chain problem was reported (`head`, `recover-store`); 2 refused or
+invalid input (`{"refused": <code>}`); 3 internal error (fail closed; nothing was appended).
 """
 
 from __future__ import annotations
@@ -22,6 +25,7 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
+from nexora.market_history import jsonio
 from nexora.market_history.custody import (
     LocalAppendOnlyStore,
     approve_dataset,
@@ -98,7 +102,7 @@ def main() -> int:
             previous = None
             if args.previous is not None:
                 with _open_regular(args.previous) as fh:
-                    previous = json.loads(fh.read(1 << 16))
+                    previous = jsonio.loads(fh.read(1 << 16), "previous_pin")
             pin = make_pin(
                 store.entries(), signer=signer, pinned_by=found[0].id,
                 captured_at=datetime.now(UTC), previous=previous, initial=args.initial,
@@ -114,7 +118,7 @@ def main() -> int:
         now = datetime.now(UTC)
         if args.cmd == "approve":
             with _open_regular(args.candidate) as fh:
-                candidate = json.loads(fh.read(1 << 20))
+                candidate = jsonio.loads(fh.read(1 << 20), "candidate")
             entry = approve_dataset(
                 args.dataset, candidate, store=store, registry=registry, signer=signer,
                 evidence_ref=args.evidence_ref, approved_at=now,
@@ -131,7 +135,17 @@ def main() -> int:
             code = "file_exists" if isinstance(exc, FileExistsError) else "input_unreadable"
         print(json.dumps({"refused": code, "detail": str(exc)[:300]}))
         return 2
-    print(json.dumps({"seq": entry["seq"], "entry_sha256": entry["entry_sha256"]}))
+    except Exception as exc:  # defensive: no uncontrolled traceback on hostile input (N-01)
+        print(json.dumps({"refused": "internal_error", "detail": type(exc).__name__}))
+        return 3
+    result: dict[str, object] = {"seq": entry["seq"], "entry_sha256": entry["entry_sha256"]}
+    if args.cmd == "revoke":
+        # Process control, not enforcement (THREAT-MODEL-V4 section 9, R-1): a revocation newer
+        # than the latest pin can be hidden by truncating the store until that pin goes stale.
+        # The pin authority must pin a head that includes this entry; verifiers must then use it.
+        result["repin_required"] = True
+        result["repin_covers_seq"] = entry["seq"]
+    print(json.dumps(result))
     return 0
 
 

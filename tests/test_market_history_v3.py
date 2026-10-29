@@ -862,9 +862,9 @@ def test_verify_cli_reports_untrusted_without_custody_and_for_a_hash_only_anchor
         return code, json.loads(capsys.readouterr().out)
 
     code, out = run()
-    assert (code, out["status"]) == (0, "UNTRUSTED") and "no_independent_anchor" in out[
-        "status_reasons"
-    ]
+    # N-03: a cleanly verified but UNTRUSTED dataset is exit 1, never 0 (0 means TRUSTED only)
+    assert (code, out["status"], out["trusted"]) == (1, "UNTRUSTED", False)
+    assert "no_independent_anchor" in out["status_reasons"]
     assert run("--require-trusted")[0] == 1
     good = tmp_path / "anchor.json"
     good.write_text(json.dumps(anchored(tmp_path / "d", m)))

@@ -21,7 +21,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, BinaryIO
 
-from nexora.market_history import SCHEMA_VERSION, SUPPORTED_SCHEMAS
+from nexora.market_history import SCHEMA_VERSION, SUPPORTED_SCHEMAS, jsonio
 from nexora.market_history.clock import ClockAttestation, check_attestation
 from nexora.market_history.convert import TimeConversion, TimeSegment
 from nexora.market_history.custody import (
@@ -70,7 +70,7 @@ from nexora.market_history.provider import HistoricalTickSource, TransientSource
 from nexora.market_history.quality import QualityAccumulator, QualityConfig, hard_defects
 
 EXTRACTOR_VERSION = "nexora.market-history-extractor/6"
-CHUNK_NAME = re.compile(r"chunk-(\d+)-(\d+)\.jsonl")
+CHUNK_NAME = re.compile(r"chunk-([0-9]+)-([0-9]+)\.jsonl", re.ASCII)  # ASCII digits only (N-01)
 MANIFEST_NAME = "manifest.json"
 ANCHOR_SCHEMA = "nexora.market-history-anchor/1"
 # Every dataset is born UNTRUSTED. The manifest can never grant trust: TRUSTED is only ever the
@@ -175,7 +175,7 @@ def _open_regular(path: Path) -> BinaryIO:
 
 def _iter_ticks(fh: BinaryIO) -> Iterator[RawTick]:
     for line in fh:
-        row = json.loads(line)
+        row = jsonio.loads(line, "chunk_row", check_depth=False)
         yield RawTick(row["t"], Decimal(row["b"]), Decimal(row["a"]), row.get("f"))
 
 
@@ -684,7 +684,7 @@ def _read_manifest(d: Dir) -> dict[str, Any] | list[Problem]:
         ]
     try:
         data = _snapshot(d, MANIFEST_NAME, _MAX_MANIFEST_BYTES)
-        manifest = json.loads(data)
+        manifest = jsonio.loads(data, "manifest")
     except HistoryError as exc:
         if exc.code == "multiple_links":
             return [Problem("manifest_multiple_links")]
@@ -940,7 +940,7 @@ def _scan_bytes(
     quality_error = ""
     try:
         for lineno, line in enumerate(io.BytesIO(data), 1):
-            row = json.loads(line)
+            row = jsonio.loads(line, "chunk_row", check_depth=False)
             t = RawTick(row["t"], Decimal(row["b"]), Decimal(row["a"]), row.get("f"))
             if type(t.time_msc) is not int or (t.flags is not None and type(t.flags) is not int):
                 return count, outside, f"line {lineno}: bad field type", quality_error
@@ -1041,7 +1041,7 @@ def load_anchor(path: Path, *, dataset_dir: Path) -> dict[str, Any]:
         raise HistoryError("anchor_inside_dataset")
     try:
         with _open_regular(path) as fh:
-            data = json.loads(fh.read(65536))
+            data = jsonio.loads(fh.read(65536), "anchor")
     except (HistoryError, ValueError, UnicodeDecodeError):
         raise HistoryError("anchor_unreadable") from None
     problem = _anchor_problem(data)
@@ -1062,10 +1062,10 @@ def _anchor_problem(data: Any) -> str:
         if type(data.get(key)) is not str or not data[key].strip():
             return key
     try:
-        when = datetime.fromisoformat(str(data.get("recorded_at")))
-    except ValueError:
+        jsonio.aware_utc(data.get("recorded_at"), "recorded_at")
+    except HistoryError:
         return "recorded_at"
-    return "" if when.tzinfo is not None else "recorded_at"
+    return ""
 
 
 def dataset_status(

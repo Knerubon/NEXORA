@@ -4,6 +4,11 @@ Status: self-authored by the implementer; **independent review pending** (Review
 Round 3 replaced string-based custody with Ed25519-signed statements, revocation lineage and an
 independently signed head pin, and closed the verify/trust TOCTOU (rows R3-* below). Rows C2, C3,
 C4, C5, C9 and C10 are superseded where an R3 row says so.
+Wave V9 (stacked delta over PR #96 at 1c536d5; self-authored, **independent review pending**) added
+hostile-input hardening (N-01), a stable verifier exit-code contract (N-03), mutation-driven
+regressions (N-04), a characterisation of the revocation-latency window (R-1) and the writer-lock
+create/write window (N-05); see rows N01-N05 and sections 8-10. Nothing in V9 is gate-approved and
+no governance decision was made.
 Scope: `nexora.market_history` datasets and their trust decision. Not covered: MT5/terminal behaviour
 (WINDOWS-INTEGRATION), broker data terms, Dukascopy (BLOCKED), anything touching PROD.
 
@@ -92,6 +97,17 @@ Legend: E = eliminated by construction, F = fails closed, M = machine-enforced c
 | R3-F6 | Lock file unlinked externally; second writer takes a new one | an additional `flock` on the pinned DIRECTORY fd (cannot be unlinked); the writer re-checks its record before each chunk and the manifest (`writer_lock_lost`); new required probe `directory_lock_exclusion` | M | `test_D1_*`, `test_D1b_*`, `test_D2_*`, `test_D12_*` |
 | R3-N5 | Crash between link and temp unlink wedges the store or the dataset | readers tolerate same-inode temp twins; `recover-store` and `recover_market_history.py` remove only same-inode twins; extract re-runs recover first; no evidence is deleted | M | `test_D3_*`..`test_D5_*` |
 | R3-N6 | Duplicate count disagrees with PR #95's oracle | tick-quality/2 identity = (raw_msc, canonical bid, canonical ask, flags or ABSENT) per segment; legacy v1 still verifies; duplicates are reported, not hard defects (Quant decision OPEN) | M | `test_D0_*`, `test_D6_D7_D8_*`, `test_D9_*`..`test_D11_*` |
+| N01 | Hostile timestamp at a calendar edge (`9999-12-31T23:59:59-12:00`, `0001-01-01T00:00:00+14:00`) in a signed approval, a signed pin, a registry key window or an anchor: `astimezone` raises `OverflowError`, which escaped as `status_internal_error` / a CLI traceback | one parser (`jsonio.aware_utc`) turns `ValueError` and `OverflowError` into `invalid_timestamp`; callers map it to typed reasons (`approval_N_rejected:invalid:invalid_timestamp`, `pin_malformed:pinned_by_or_captured_at`, `registry_malformed`, `anchor_malformed`) | F | `tests/test_market_history_v9_hostile_input.py` (timestamp group) |
+| N01b | Deep JSON nesting (100000 levels) in a store entry, manifest, chunk row, registry, pin, anchor, candidate or lock record: `RecursionError` | `jsonio.loads` rejects nesting above `MAX_JSON_DEPTH` (32; legitimate files nest about 5) by a linear scan that ignores brackets inside strings, and also catches `RecursionError` for row streams; result is `json_too_deep`, mapped to `manifest_unreadable`, `store_unreadable`, `chunk_malformed`, `registry_unreadable`, `anchor_unreadable`, `pin_unreadable` | F | same file (nesting group) |
+| N01c | `filesystem_capabilities.platform` is a list/dict in a resealed manifest: `TypeError` from `not in PROVEN_PLATFORMS` | type check before membership; any non-string is `capability:platform_unproven` | F | same file (platform group) |
+| N01d | Arabic-Indic / fullwidth digits accepted by `\d` (chunk names, store entry names, `--store-head`, `--max-pin-age-seconds`) | ASCII-only patterns (`re.ASCII`, `[0-9]`); CLI numeric arguments parsed with an ASCII regex | F | same file (digits group) |
+| N01e | `--max-pin-age-seconds 99999999999999999999`: `OverflowError` traceback | accepted range is 1..`MAX_AGE_SECONDS_SANITY` (10 years): a mechanical overflow guard, NOT a statement of acceptable pin age (governance still owns the real value); out of range is exit 2 `invalid_max_pin_age` | F | same file (CLI group) |
+| N01f | Unknown field-type mutations anywhere in manifest, store entry, pin or registry | seeded type-mutation fuzz (seed 20261029 + 0..3, 300 rounds each for manifest/entry/pin, 600 for registry): no `*_internal_error` reason, registry errors only `registry_malformed` | F | `test_fuzz_*` |
+| N03 | Verifier exit 0 for a cleanly verified but UNTRUSTED dataset unless the caller added `--require-trusted`; a CI `&&` chain read that as approval | exit-code contract (section 8): **0 only for TRUSTED**; `--require-trusted` kept as a no-op | M | `tests/test_market_history_v9_cli_contract.py` |
+| N04 | Seven valid mutants outside what the V4 suite killed (gap boundary, key `valid_from`, chunk contiguity, approval-before-retrieval, `orders_submitted`, revocation acknowledgement, candidate/operator mismatch) | one specific regression per mutant | M | `tests/test_market_history_v9_mutation_regressions.py` (see section 9) |
+| R1 | A revocation newer than the latest pin is hidden by truncating the store tail: TRUSTED until the pin goes stale | NOT closed by code; characterised exactly, bounded by `max_pin_age`; mitigated by the process control in section 9 | P | `tests/test_market_history_v9_revocation_latency.py` |
+| N05 | "Create-then-write" window of `.writer.lock` (file exists and is empty before the record is written) | not an exclusion gap in V4: ownership is the OS lock held before the write; empty file without a holder is free; only a V3 writer (no OS lock) can collide (row L10) | E / P | `tests/test_market_history_v9_writer_window.py` |
+| X1-X4 | Round-2 exploits F1 forged approval, F2 revocation replay, F3 verify/approve TOCTOU, N1 confusable/pseudonymous self-approval | replayed against BOTH `d6a7cda` (exploit works, tests fail) and this head (rejected, tests pass) | M | `tests/test_market_history_v9_exploit_replay.py` |
 | V3 | V3 datasets/anchors | still verify (integrity) but never TRUSTED; V3 anchor never grants trust | M | `test_v3_datasets_still_verify...`, V3 suite |
 
 ## 5. What is machine-enforced vs process control
@@ -145,5 +161,63 @@ no-follow solution (the pure `lstat` fallback cannot close the check-then-use wi
 7. Mode bits are advisory; `root`/admin can alter files, which the hashes and the custody approval then expose.
 8. Native-library or kernel bugs in `flock`/`openat` semantics and in the `cryptography` package are
    assumed absent.
-9. Duplicate counting is per chunk (bounded memory): a duplicate split across a chunk boundary is not
-   counted; PR #95's oracle agrees on the synthetic vectors (D0-D10), not on real data.
+9. Duplicate counting uses per-chunk state, but a duplicate cannot be split across chunks: identity
+   contains the raw timestamp and chunks partition raw time into `[from, to)` windows, so every
+   occurrence of one identity lands in the same chunk (pinned by
+   `test_a_duplicate_pair_can_never_be_split_across_a_chunk_boundary`; the earlier wording here and in
+   RISK-REVIEW.md claimed otherwise and was wrong). PR #95's oracle agrees on the synthetic vectors
+   (D0-D10), not on real data.
+10. Revocation latency (R-1): a revocation appended after the newest pin and then removed from the
+    store tail is undetected until that pin exceeds `max_pin_age` or a newer pin covers it (section 9).
+11. `non_monotonic_count` has two defensible definitions that give different numbers (section 10).
+12. Hostile-input handling is by construction for the parsers named in rows N01-N01f, plus a seeded
+    fuzz; it is not a proof that no other input can crash another code path.
+
+## 8. Verifier exit-code contract (`scripts/verify_market_history.py`)
+| Exit | Meaning | When |
+|---|---|---|
+| 0 | TRUSTED | and only then: every required condition held (integrity, no hard defects, capabilities, signed un-revoked approval, fresh covering pin) and store, registry, pin and max age were all supplied |
+| 1 | UNTRUSTED | a verdict was reached and it is not trusted: no custody evidence (even if the data verifies cleanly), failed integrity or custody, stale or missing pin, revoked, missing dataset directory |
+| 2 | invalid input | usage error, unreadable or malformed anchor, registry, pin, store head or max age (including out of range); no verdict was reached |
+| 3 | operational error | an internal error prevented a verdict; fail closed, treat as not trusted |
+
+Any non-zero exit means "do not use as evidence". The JSON line repeats the verdict
+(`status`, `trusted`, `exit_code`, `exit_meaning`, `status_reasons`) and `trusted` is true only for
+exit 0. `--require-trusted` is accepted and ignored: it used to be the only way to get exit 1 for an
+untrusted dataset, and the safe behaviour is now unconditional. The custody tool exits 0 done, 1 chain
+problem reported, 2 refused or invalid input, 3 internal error (nothing appended). A shell gate such
+as `verify_market_history.py ... && use_dataset` is therefore safe.
+
+## 9. Revocation latency (R-1) and the re-pin procedure
+A hash chain proves consistency of what is present, never that nothing newer was removed; only a
+signed pin proves the store held at least N entries when the pin authority looked. Exact behaviour,
+each case pinned by a test:
+
+| Situation | Result |
+|---|---|
+| revocation in the store, newest pin older than it, store intact | UNTRUSTED (`custody:revoked_at_seq_N`) |
+| same, then the revocation entry is deleted from the tail | **TRUSTED** while `now - pin.captured_at <= max_pin_age` (inclusive) |
+| same, `now - pin.captured_at > max_pin_age` | UNTRUSTED (`custody:pin_stale`) |
+| pin authority pins a head that includes the revocation, store then truncated | UNTRUSTED (`custody:pin_ahead_of_store_truncated`) |
+| pin created after the revocation, store intact | UNTRUSTED (revoked) |
+
+**Maximum undetected latency = the verifier's own `max_pin_age`, measured from the newest pin's
+capture time** (worst case: the revocation is appended just after that pin was captured). There is no
+code default for `max_pin_age`; the CLI now refuses values above 10 years (`MAX_AGE_SECONDS_SANITY`),
+which is an overflow guard and not a policy: with a very large value the latency is correspondingly
+large. This code does **not** provide immediate revocation detection and must not be described as
+doing so.
+
+Mitigation (process control; no policy invented here): after every `revoke`, the pin authority reads
+the store through its own channel and issues a new pin (`custody_market_history.py pin --previous
+<last-pin>`) that covers the revocation, and verifiers use only the newest pin. `revoke` prints
+`repin_required: true` and `repin_covers_seq` as a reminder. Choosing the real `max_pin_age`, the
+re-pin deadline after a revocation and who may waive them are governance decisions (section 10).
+
+## 10. Open decisions (escalated; not decided here)
+| # | Question | Decision owner | Why it matters |
+|---|---|---|---|
+| E1 | Designate the pin authority and the `max_pin_age` policy; set the re-pin deadline after a revocation | Rin / governance | no dataset can be TRUSTED without it; sets the R-1 latency |
+| E2 | Which `non_monotonic_count` is the contract: adjacent descent (this code, in manifests since quality/1) or running maximum (PR #95 oracle `out_of_order`)? | Rin / Quant-engineering | the number differs on streams with an early high value (e.g. `1000,3000,2000,2500`: 1 vs 2); the yes/no that drives `hard_defects` is identical (proved exhaustively for streams of up to 6 ticks). Changing it means `tick-quality/3`, new manifest hashes and re-verification of existing datasets |
+| E3 | Whether duplicates / gaps are hard defects (MD-6 and the duplicate question) | Quant | unchanged from earlier rounds |
+| E4 | Whether to enforce a clock-based grace period for an empty lock file | Architect | would reintroduce the V3 wedge; not needed for V4 writers (N05) |
