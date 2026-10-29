@@ -19,8 +19,7 @@ WINDOWS-INTEGRATION, read-only, no credentials, no orders).
   terminal state and trading-rule metadata (swaps, volume limits, stop levels) are not identity; they
   are in `manifest_sha256`. Extraction needs a recorded clock attestation and an explicit protected-range declaration (both validated before any provider access). Chunks are write-once, created atomically (temp + fsync + no-overwrite link) and read-only; the manifest is written last, write-once, with a self hash and
   `dataset_id`; `verify_dataset` re-derives hashes, counts, contiguity and the quality report
-  from files alone. Only regular files count as chunks; symlinks, directories and FIFOs are problems.
-  Only regular files count as chunks; symlinks, directories, FIFOs and hard-linked files are problems.
+  from files alone. Only regular files count as chunks; symlinks, directories, FIFOs and hard-linked files are problems.
   One writer owns an output folder through an OS advisory lock on `.writer.lock` (V4: never reaped,
   crash-safe; fail closed when ownership cannot be established). `--out` is pinned by descriptor with
   no-follow semantics: a symlinked folder or **parent** is refused, and a path swap after validation
@@ -37,6 +36,13 @@ WINDOWS-INTEGRATION, read-only, no credentials, no orders).
   rejected; a hash-only (V3) anchor never grants trust. V3 datasets still verify but stay `UNTRUSTED`
   (migration: re-extract under V4). Anything used as G1-G5 / freeze evidence must pass
   `require_trusted`. What is machine-enforced vs process control: `THREAT-MODEL-V4.md`.
+- **Verifier exit codes** (`scripts/verify_market_history.py`): `0` only for `TRUSTED`; `1` UNTRUSTED
+  (a dataset that verifies cleanly but has no custody evidence is still `1`); `2` invalid input;
+  `3` operational error. Anything other than `0` means "do not use as evidence"
+  (`THREAT-MODEL-V4.md` section 8). `--require-trusted` is a deprecated no-op.
+- **Hostile input.** Evidence files are read through `nexora.market_history.jsonio` (bounded JSON
+  depth, calendar-safe UTC timestamps); a malformed or hostile file yields a typed reason code, never
+  a crash. Revocation detection is bounded by the pin age, not immediate (section 9).
 - Commission is recorded `unavailable` (not exposed by `symbol_info`), never zero.
 - The quality report has counts and coverage only (no price/spread distributions) so it does not
   breach holdout custody. `max_gap_ms` has no default (Quant decision, OPEN).
