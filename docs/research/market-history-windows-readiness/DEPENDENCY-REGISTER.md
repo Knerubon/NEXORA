@@ -3,7 +3,7 @@
 Owned by the PR #95 remediation orchestrator. Recorded on 2026-10-22 against the SHAs below. A
 dependency is never marked RESOLVED because its CI is green; it needs the named evidence.
 
-Extractor stack: #89 -> #91 -> #92 -> #93 -> #96. The pinned #96 candidate head is `1c536d5acdef2c9fe47ef5a6ecfb127595ef42b8`
+Extractor stack: #89 -> #91 -> #92 -> #93 -> #96. The pinned #96 candidate head is `d2e8ee9ef4f6eb438dc79c5e04ad43ed46de764d`
 (single source: [dependency-manifest.json](dependency-manifest.json)). **The candidate head is not a gate-approved baseline**; `gate_approved_baseline_sha` is `null`. None of these is merged. This package reads them
 with `git show` only and never modifies them.
 
@@ -32,6 +32,19 @@ changed.
 | X4 Duplicate oracle mismatch | `duplicate_oracle.py` is independent of `quality.py`; EXT-DEF-1 recorded below | `test_duplicate_oracle.py::test_known_shared_blind_spot_is_detected` | Resolved at the candidate (differential evidence); ordering metric differs by definition | PR #96 owner / Rin | Re-run the differential at any re-pin; decide the ordering metric |
 | X5 Identity grammar | `custody_gate.identity_problem` applies the strict raw-string grammar `[a-z0-9][a-z0-9._@-]{0,127}` of the candidate (no normalisation first, no `+`, no uppercase, non-ASCII refused); it never accepts what #96 refuses (checked by `test_v9_pr96_live_export.py`) | `test_r4_custody_gate.py::test_b3_*` | None on the PR #95 side; the stricter rule may refuse names #96 accepts | PR #95 (this package) | Re-align if #96 changes `normalize_identity` |
 | X6 Operator/custodian independence | Self-approval compared over the approver's id and every alias; every bundle BLOCKED on `operator_identity_not_authenticated` / `dep01_principal_authentication_unavailable` | `test_r4_custody_gate.py::test_b1_*`, `test_b2_*`, `test_b4_*` | PR #96 N1: identities are declared strings on both sides | PR #96 owner | Candidate signs operator, approver and pin with Ed25519 keys (key ids recorded); principal authentication is still not independently approved, so the bundle stays BLOCKED (DEP-03); independent re-review |
+
+## Re-pin to PR #99 candidate `d2e8ee9e...` (phase 2)
+
+The pin moved from the phase 1 candidate (recorded as a prior, superseded reference in the manifest) to
+the PR #99 head (branch `claude/market-history-fix-v5`, stacked on #96). It is still a candidate:
+not gate-approved, not independently reviewed. Executed against a `git archive` of the new head:
+schemas, extractor/manifest/quality versions, flag sets, identity grammar, pin skew and the MT5
+allow-list are unchanged (X2/X3/X5/X6 fixtures regenerated from the new export); the verifier now has
+an exit-code contract (0 = TRUSTED only, 1 untrusted, 2 invalid input, 3 operational) and
+`--require-trusted` is a no-op. Incompatibilities found in this package and fixed: the gate accepted
+a `--store-head` or `--max-pin-age-seconds` the candidate refuses (trailing newline, more than 18
+digits, more than 10 years), and the validator accepted a trailing newline on hex ids, signatures,
+principal ids and pins. See [V4-CUSTODY-COMPATIBILITY.md](V4-CUSTODY-COMPATIBILITY.md).
 
 ## Open contract decision: out-of-order metric (escalation, no choice made here)
 

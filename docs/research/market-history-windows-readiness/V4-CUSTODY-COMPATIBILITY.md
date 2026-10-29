@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Reference | PR #96 `claude/market-history-fix-v4` at the **candidate** head `1c536d5acdef2c9fe47ef5a6ecfb127595ef42b8` (single source: [dependency-manifest.json](dependency-manifest.json)), exported read-only. PR #96 was not checked out, changed, commented on or reviewed here. |
+| Reference | PR #96 line, candidate PR #99 `claude/market-history-fix-v5` (stacked on #96) at the **candidate** head `d2e8ee9ef4f6eb438dc79c5e04ad43ed46de764d` (single source: [dependency-manifest.json](dependency-manifest.json)), exported read-only. PR #96 was not checked out, changed, commented on or reviewed here. |
 | Status of the reference | **Candidate head, not a gate-approved baseline.** The candidate head is not the gate-approved baseline: `gate_approved_baseline_sha` is `null`, `custody_gate.V4_BASELINE_APPROVED` is `False`. A pin match proves only that a reviewed contract was read at that commit. |
 | Consequence | Every TRUSTED step in this package is **BLOCKED** (DEP-01, DEP-03). The procedure below describes the candidate contract so the package is ready when the dependency resolves; it does not make TRUSTED reachable. |
 | Re-pin | The pin is one parameter (`pr96_candidate.head_sha`). A new #96 head is adopted only by changing the manifest, re-running the live-export contract test and updating the compatibility tests; an abbreviated, mismatched, stale or unapproved head is refused (`extractor_sha_not_pinned_pr96_candidate:<class>`). |
@@ -33,6 +33,24 @@ checklist.
 | 5 | TRUSTED eligibility | `verify_market_history.py --dataset --store --registry --pin <pin.json> --max-pin-age-seconds <N> --require-trusted` | Second person, clean checkout, different session | Exit 0 only when `TRUSTED`. The pin must be signed by a registry principal, fresh within `--max-pin-age-seconds` (skew limit 300 s) and consistent with the store. |
 | 6 | Revocation lineage | `custody_market_history.py revoke ...`; approvals list `acknowledged_revocations` | Custodian; verifier | A later revoke wins whoever wrote it. A re-approval must acknowledge every revocation id; replay of a revoked approval is refused. |
 | 7 | Writer-lock ownership | Inside `extract`; lock file `.writer.lock`, format `nexora.writer-lock/2` | Extractor | OS advisory lock on a held descriptor (`flock` on POSIX, one-byte `msvcrt.locking` on Windows). **Nothing is ever reaped.** A second writer, or an unverifiable or foreign record, gives `writer_lock_held` (fail closed). The Windows path is "implemented, UNVERIFIED". An external `rm .writer.lock` admits a second writer (Reviewer A F6), so this package never instructs removing a lock while any run could be active. |
+
+## Verifier exit-code contract (candidate PR #99 head)
+
+| Exit | Meaning | Gate reading |
+|---|---|---|
+| 0 | TRUSTED only | Still not approval: the gate also needs status `TRUSTED`, no reasons and every other check; the validator rejects exit 0 with any other status (`verifier_exit_zero_without_trusted_status`). |
+| 1 | UNTRUSTED (includes a cleanly verified dataset with no custody evidence) | not trusted |
+| 2 | invalid input (arguments, anchor, registry, pin, store head, max pin age) | not trusted |
+| 3 | operational error | not trusted, fail closed |
+| other | outside the contract | `verifier_exit_code_outside_contract` |
+
+`--require-trusted` is accepted and is a no-op at the candidate. This package still requires it in
+the recorded invocation (over-blocking, never weakening) so a record cannot be read against the
+older behaviour in which exit 0 without it meant "cleanly verified, UNTRUSTED". `--max-pin-age-seconds`
+is bounded at 10 years (an overflow guard, not a policy). `custody revoke` prints
+`repin_required`: a revocation newer than the latest pin must be covered by a fresh signed pin
+(`revocation_outside_pinned_chain` otherwise). Hostile input yields typed reason codes
+(`invalid_timestamp`, `json_too_deep`, `platform_unproven:<x>`) instead of `*_internal_error`.
 
 ## Why TRUSTED is unreachable today (DEP-01)
 
@@ -126,6 +144,7 @@ planner classify them `STALE`.
 
 | Head | Status | Why it is not compatible |
 |---|---|---|
+| `1c536d5acdef2c9fe47ef5a6ecfb127595ef42b8` | prior candidate, superseded by the current pin (PR #96 head, phase 1) | verifier exit 0 could mean "cleanly verified but UNTRUSTED" when `--require-trusted` was absent; no exit-code contract (1 / 2 / 3); hostile input produced `*_internal_error`; `revoke` printed no `repin_required` |
 | `d6a7cda72a88600e2ccf6554605f1c50478893ea` | stale, obsolete, superseded by the candidate | extractor `/5`; approvals took `--custodian` (declared name, no signature); verifier had only an unsigned `--store-head`; looser identity grammar |
 | `e74ad035e7f21aa07528965da6ebe190c0512793` | stale, obsolete, superseded (stack tip #93) | V3 anchor era; no custody store, signing or pin |
 

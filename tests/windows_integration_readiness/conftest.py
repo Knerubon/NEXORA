@@ -66,3 +66,31 @@ def expect_tripwires() -> Iterator[list[str]]:
     """For tests that deliberately touch a tripwire: yields the live log, cleared at teardown."""
     yield fakes.TRIPWIRE_LOG
     fakes.TRIPWIRE_LOG.clear()
+
+
+def _pinned_git(*args: str) -> Any:
+    import subprocess
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parents[2]
+    return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, check=False)
+
+
+@pytest.fixture(scope="session")
+def export(tmp_path_factory: pytest.TempPathFactory) -> Any:
+    """Read-only `git archive` of the pinned PR #96 candidate head (skip, never pass, if absent)."""
+    import subprocess
+
+    from tests.windows_integration_readiness import dependency_pin as dp
+
+    sha = dp.CANDIDATE_SHA
+    if _pinned_git("cat-file", "-e", f"{sha}^{{commit}}").returncode != 0:
+        pytest.skip(
+            f"pinned PR #96 candidate {sha[:12]} is not in this clone's object store "
+            "(shallow CI checkout); live contract check NOT run here"
+        )
+    dest = tmp_path_factory.mktemp("pr96-export")
+    archive = _pinned_git("archive", sha, "packages/nexora", "scripts")
+    assert archive.returncode == 0, archive.stderr[:200]
+    subprocess.run(["tar", "-x", "-C", str(dest)], input=archive.stdout, check=True)
+    return dest

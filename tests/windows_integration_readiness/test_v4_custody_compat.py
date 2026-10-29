@@ -247,7 +247,7 @@ def test_untrusted_verifier_output_is_never_recordable(monkeypatch: pytest.Monke
 def test_quoted_v4_interface_constants() -> None:
     """Guard against silent edits: these are quotes from PR #96 at V4_REF_SHA, re-verified by
     the operator at the running SHA (checklist A3), not values this package may choose."""
-    assert cg.V4_REF_SHA == dp.CANDIDATE_SHA == "1c536d5acdef2c9fe47ef5a6ecfb127595ef42b8"
+    assert cg.V4_REF_SHA == dp.CANDIDATE_SHA == "d2e8ee9ef4f6eb438dc79c5e04ad43ed46de764d"
     assert cg.V4_PROVEN_PLATFORMS == frozenset({"linux"})
     assert {"--anchor", "--store-head", "--pin", "--max-pin-age-seconds"} <= cg.V4_VERIFY_FLAGS
     assert cg.V4_CUSTODY_SUBCOMMANDS == (

@@ -73,7 +73,7 @@ IDENTITY_BASIS = "declared_not_authenticated"
 _SHA40 = r"^[0-9a-f]{40}$"
 _SHA256 = r"^[0-9a-f]{64}$"
 _UTC = r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|\+00:00)$"
-_HEAD_PIN = r"^[1-9][0-9]*:[0-9a-f]{64}$"
+_HEAD_PIN = r"^[1-9][0-9]{0,17}:[0-9a-f]{64}$"
 _HEX32 = r"^[0-9a-f]{32}$"
 _HEX64 = r"^[0-9a-f]{64}$"
 _SIG = r"^[0-9a-f]{128}$"
@@ -198,6 +198,12 @@ KINDS: dict[str, dict[str, Any]] = {
     "sig_hex": {"type": "string", "pattern": _SIG},
     "principal_id": {"type": "string", "pattern": _PRINCIPAL},
     "pos_int": {"type": "integer", "minimum": 1},
+    "max_pin_age": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 10 * 366 * 86400,
+    },  # candidate bound
+    "verify_exit_code": {"type": "integer", "minimum": 0, "maximum": 3},  # 0 trusted, 1-3 not
     "hex32_list": {
         "type": "array",
         "uniqueItems": True,
@@ -332,7 +338,7 @@ SECTIONS: dict[str, dict[str, str]] = {
         "extraction_platform": "text",
         "writer_lock": "text",
         "verifier_argv": "text_list",
-        "verifier_exit_code": "int",
+        "verifier_exit_code": "verify_exit_code",
         "verifier_status": "enum:verifier_status",
         "verifier_status_reasons": "reason_list",
         "pin_ref": "ref",
@@ -344,7 +350,7 @@ SECTIONS: dict[str, dict[str, str]] = {
         "pin_entry_sha256": "sha256",
         "pin_store_genesis_sha256": "sha256",
         "pin_captured_at_utc": "utc_ts",
-        "max_pin_age_seconds": "pos_int",
+        "max_pin_age_seconds": "max_pin_age",
         "verified_at_utc": "utc_ts",
         "approved_at_utc": "utc_ts",
         "operator_key_id": "hex64",
@@ -712,7 +718,10 @@ class Report:
 
 
 def _re(pattern: str, value: Any) -> bool:
-    return isinstance(value, str) and re.search(pattern, value) is not None
+    # `$` also matches before a trailing newline in Python; the candidate fullmatches, so anchor
+    # the end with \Z here (the JSON Schema keeps ECMA `$`, which has no such exception)
+    strict = pattern[:-1] + r"\Z" if pattern.endswith("$") else pattern
+    return isinstance(value, str) and re.search(strict, value) is not None
 
 
 def _is_int(v: Any) -> bool:
@@ -736,6 +745,8 @@ def _kind_ok(kind: str, v: Any) -> bool:
         "sig_hex": lambda x: _re(_SIG, x),
         "principal_id": lambda x: _re(_PRINCIPAL, x),
         "pos_int": lambda x: _is_int(x) and x >= 1,
+        "verify_exit_code": lambda x: _is_int(x) and 0 <= x <= 3,
+        "max_pin_age": lambda x: _is_int(x) and 1 <= x <= 10 * 366 * 86400,
         "hex32_list": lambda x: (
             isinstance(x, list) and all(_re(_HEX32, i) for i in x) and len(set(x)) == len(x)
         ),
@@ -1237,6 +1248,8 @@ def validate_record(
         r.errors.append("dataset_trusted_without_trusted_verifier_status")
     if cu.get("verifier_status") == "TRUSTED" and cu.get("verifier_exit_code") not in (0, None):
         r.errors.append("verifier_trusted_with_nonzero_exit")
+    if cu.get("verifier_exit_code") == 0 and cu.get("verifier_status") not in (None, "TRUSTED"):
+        r.errors.append("verifier_exit_zero_without_trusted_status")  # exit 0 is TRUSTED only
     if cu.get("verifier_status") == "TRUSTED" and cu.get("verifier_status_reasons"):
         r.errors.append("verifier_trusted_with_reasons")
 

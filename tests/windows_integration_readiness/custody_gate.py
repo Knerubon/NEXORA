@@ -53,6 +53,8 @@ REQUIRED_VERIFY_FLAGS = frozenset(dp.CONTRACT["verify_required_by_this_package"]
 # scripts/custody_market_history.py subcommands, as read at V4_REF_SHA.
 V4_CUSTODY_SUBCOMMANDS = tuple(dp.CONTRACT["custody_subcommands"])
 V4_EXTRACTOR_VERSION = dp.CONTRACT["extractor_version"]  # extract.EXTRACTOR_VERSION
+V4_MAX_PIN_AGE_SECONDS = int(dp.CONTRACT["max_pin_age_seconds_sanity_max"])
+V4_VERIFY_EXIT_CODES = frozenset(int(k) for k in dp.CONTRACT["verify_exit_codes"])
 V4_MANIFEST_SCHEMA = dp.CONTRACT["manifest_schema"]  # SCHEMA_VERSION
 V4_PROVEN_PLATFORMS = frozenset(dp.CONTRACT["proven_platforms"])  # fsutil.PROVEN_PLATFORMS
 PIN_MAX_SKEW = timedelta(seconds=int(dp.CONTRACT["pin_max_skew_seconds"]))
@@ -89,12 +91,14 @@ RECORDABLE = "RECORDABLE_PENDING_REVIEW"
 BLOCKED = "BLOCKED"
 STOP = "STOP"
 
-_HEAD_PIN = re.compile(r"^([1-9][0-9]*):([0-9a-f]{64})$")
+_HEAD_PIN = re.compile(
+    r"([1-9][0-9]{0,17}):([0-9a-f]{64})", re.ASCII
+)  # fullmatch: no trailing newline
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _HEX32 = re.compile(r"^[0-9a-f]{32}$")
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 _SIG = re.compile(r"^[0-9a-f]{128}$")
-_POSITIVE_INT = re.compile(r"^[1-9][0-9]*$")
+_POSITIVE_INT = re.compile(r"[1-9][0-9]{0,17}", re.ASCII)  # fullmatch
 # PR #96 `custody.normalize_identity`: the ONLY accepted principal id, ASCII, matched on the raw
 # string with no normalisation. This package accepts exactly that grammar, never a superset.
 _IDENTITY = re.compile(dp.CONTRACT["principal_id_grammar"])
@@ -174,13 +178,13 @@ class VerifyInvocation:
 
     @property
     def store_head(self) -> tuple[int, str] | None:
-        m = _HEAD_PIN.match(self.flags.get("--store-head", ""))
+        m = _HEAD_PIN.fullmatch(self.flags.get("--store-head", ""))
         return (int(m.group(1)), m.group(2)) if m else None
 
     @property
     def max_pin_age_seconds(self) -> int | None:
         text = self.flags.get("--max-pin-age-seconds", "")
-        return int(text) if _POSITIVE_INT.match(text) else None
+        return int(text) if _POSITIVE_INT.fullmatch(text) else None
 
 
 def identity_problem(identity: object) -> str:
@@ -244,10 +248,13 @@ def parse_verify_argv(argv: Sequence[str]) -> VerifyInvocation:
         i += 2
     for f in sorted(REQUIRED_VERIFY_FLAGS - set(flags)):
         problems.append(f"verifier_argv_missing:{f}")
-    if "--store-head" in flags and not _HEAD_PIN.match(flags["--store-head"]):
+    if "--store-head" in flags and not _HEAD_PIN.fullmatch(flags["--store-head"]):
         problems.append("verifier_argv_store_head_malformed")
-    if "--max-pin-age-seconds" in flags and not _POSITIVE_INT.match(flags["--max-pin-age-seconds"]):
-        problems.append("verifier_argv_max_pin_age_malformed")
+    age = flags.get("--max-pin-age-seconds")
+    if age is not None and not (
+        _POSITIVE_INT.fullmatch(age) and int(age) <= V4_MAX_PIN_AGE_SECONDS
+    ):
+        problems.append("verifier_argv_max_pin_age_malformed")  # candidate: 1..10 years, ASCII
     return VerifyInvocation(flags, tuple(problems), tuple(unknown))
 
 
@@ -294,7 +301,10 @@ def _signed_pin_and_attestation(
     age_arg = inv.max_pin_age_seconds
     if b.max_pin_age_seconds is None:
         blocked.append("max_pin_age_not_recorded")
-    elif type(b.max_pin_age_seconds) is not int or b.max_pin_age_seconds <= 0:
+    elif (
+        type(b.max_pin_age_seconds) is not int
+        or not 0 < b.max_pin_age_seconds <= V4_MAX_PIN_AGE_SECONDS
+    ):
         blocked.append("max_pin_age_malformed")
     elif age_arg is not None and age_arg != b.max_pin_age_seconds:
         blocked.append("recorded_max_pin_age_differs_from_verifier_invocation")
@@ -520,6 +530,14 @@ def trust_gate(b: CustodyBundle) -> GateDecision:
 
     # a verifier TRUSTED that contradicts the recorded evidence is itself a finding; the
     # dependency blocks below are not evidence, so they are added after this check
+    # EXIT-CODE CONTRACT of the pinned candidate: 0 = TRUSTED only, 1 = UNTRUSTED, 2 = invalid
+    # input, 3 = operational error. Anything else is outside the contract. An earlier #96 head let
+    # a cleanly verified but UNTRUSTED dataset exit 0, so exit 0 is never read as approval by
+    # itself: it must come with status TRUSTED and every other check below.
+    if type(b.verifier_exit_code) is not int or b.verifier_exit_code not in V4_VERIFY_EXIT_CODES:
+        blocked.append("verifier_exit_code_outside_contract")
+    elif b.verifier_exit_code == 0 and b.verifier_status != "TRUSTED":
+        blocked.append("verifier_exit_zero_without_trusted_status")
     if b.verifier_status == "TRUSTED" and (blocked or b.verifier_exit_code != 0):
         blocked.append("verifier_trusted_contradicts_recorded_evidence")
     if b.verifier_status != "TRUSTED" or b.verifier_exit_code != 0:

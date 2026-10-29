@@ -5,12 +5,12 @@
   "identity": {
     "record_id": "SYNTHETIC-0001",
     "package_version": "0123456789abcdef0123456789abcdef01234567",
-    "extractor_sha": "1c536d5acdef2c9fe47ef5a6ecfb127595ef42b8",
+    "extractor_sha": "d2e8ee9ef4f6eb438dc79c5e04ad43ed46de764d",
     "extractor_version": "nexora.market-history-extractor/6",
     "manifest_schema": "nexora.market-history/4"
   },
   "checkout": {
-    "head": "1c536d5acdef2c9fe47ef5a6ecfb127595ef42b8",
+    "head": "d2e8ee9ef4f6eb438dc79c5e04ad43ed46de764d",
     "status_short": "",
     "status_ref": {
       "path": "synthetic/git-status.txt",

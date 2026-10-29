@@ -126,7 +126,7 @@ V4 custody interface of PR #96 at the pinned candidate head (`dependency-manifes
 [V4-CUSTODY-COMPATIBILITY.md](V4-CUSTODY-COMPATIBILITY.md). `store_head` is `SEQ:SHA256` as accepted
 by `verify_market_history.py --store-head`. `store_head_channel_kind` is
 `independent_prior_channel` or `same_store_at_verification`; `gate_outcome` is
-`RECORDABLE_PENDING_REVIEW`, `BLOCKED` or `STOP`. There is deliberately no V3 `anchor_ref` field: a
+`RECORDABLE_PENDING_REVIEW`, `BLOCKED` or `STOP`. `verifier_exit_code` is 0-3 (0 = TRUSTED only, 1 untrusted, 2 invalid input, 3 operational error); `PASS` needs 0 and status `TRUSTED`, exit 0 with any other status is an error. There is deliberately no V3 `anchor_ref` field: a
 V3 anchor never grants trust at V4.
 
 ## Case evidence (`cases.<n>.evidence`)

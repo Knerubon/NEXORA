@@ -21,8 +21,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-import pytest
-
 from tests.windows_integration_readiness import custody_gate as cg
 from tests.windows_integration_readiness import dependency_pin as dp
 from tests.windows_integration_readiness import execution_contract as ec
@@ -41,20 +39,6 @@ PKG = "packages/nexora/market_history"
 
 def _git(*args: str) -> subprocess.CompletedProcess[bytes]:
     return subprocess.run(["git", "-C", str(REPO), *args], capture_output=True, check=False)
-
-
-@pytest.fixture(scope="module")
-def export(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    if _git("cat-file", "-e", f"{SHA}^{{commit}}").returncode != 0:
-        pytest.skip(
-            f"pinned PR #96 candidate {SHA[:12]} is not in this clone's object store "
-            "(shallow CI checkout); live contract check NOT run here"
-        )
-    dest = tmp_path_factory.mktemp("pr96-export")
-    archive = _git("archive", SHA, "packages/nexora", "scripts")
-    assert archive.returncode == 0, archive.stderr[:200]
-    subprocess.run(["tar", "-x", "-C", str(dest)], input=archive.stdout, check=True)
-    return dest
 
 
 def _tree(export: Path, rel: str) -> ast.Module:

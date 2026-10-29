@@ -26,7 +26,7 @@ SHA = dp.CANDIDATE_SHA
 
 
 def test_the_current_pin_and_its_status() -> None:
-    assert SHA == "1c536d5acdef2c9fe47ef5a6ecfb127595ef42b8"  # update with the manifest on re-pin
+    assert SHA == "d2e8ee9ef4f6eb438dc79c5e04ad43ed46de764d"  # update with the manifest on re-pin
     assert re.fullmatch(r"[0-9a-f]{40}", SHA)
     cand = RAW["pr96_candidate"]
     assert cand["status"] == "CANDIDATE_NOT_APPROVED"
@@ -135,6 +135,7 @@ def test_no_stale_pr96_reference_outside_the_manifest_and_the_historical_section
         "V4-CUSTODY-COMPATIBILITY.md",
         "test_v9_dependency_pin.py",
         "test_v9_custody_signed_pin.py",
+        "test_v9_repin_exit_codes.py",
     }
     offenders: list[str] = []
     for path in _scan_files():
