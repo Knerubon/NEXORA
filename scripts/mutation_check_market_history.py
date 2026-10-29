@@ -123,7 +123,7 @@ MUTANTS: list[tuple[str, str, str, str]] = [
     ("V9 N01: timestamp OverflowError not caught", "jsonio.py",
      "    except (ValueError, OverflowError):\n        raise HistoryError(\"invalid_timestamp\", what) from None", "    except ValueError:\n        raise HistoryError(\"invalid_timestamp\", what) from None"),
     ("V9 N01: JSON depth bound not enforced", "jsonio.py",
-     "    if check_depth and json_depth(raw) > MAX_JSON_DEPTH:", "    if False:"),
+     "    if check_depth and json_depth(raw, MAX_JSON_DEPTH) > MAX_JSON_DEPTH:", "    if False:"),
     ("V9 N01: platform type not checked", "fsutil.py",
      "    if type(platform) is not str or platform not in PROVEN_PLATFORMS:", "    if platform not in PROVEN_PLATFORMS:"),
 ]  # fmt: skip
