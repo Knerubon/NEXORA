@@ -10,11 +10,19 @@ This module derives the exposure model's inputs from QUARANTINE-IDENTITY.md cont
 * ``exposure_identity``: the exposure key is Track C's ``multiset_fingerprint`` under Track C's
   canonicalization version, so a reordered copy is the same exposure content (Track C MULTISET).
 * ``content_relation``: Track C's record-hash relation (EXACT_ORDERED, MULTISET, SUBSET, SUPERSET,
-  PARTIAL_OVERLAP, NONE).
+  PARTIAL_OVERLAP, NONE) plus REPRESENTATION_DRIFT (V9 F-4): the two datasets share more records
+  under Track C's flags-insensitive, trailing-zero-insensitive shadow key than under exact record
+  hashes, so one re-expresses the other's values (flags dropped or rewritten, trailing zeros).
 * ``derive_lineage``: a dataset that is a SUBSET of a known dataset is DERIVED from it on its own
   time span (the superset side needs no edge: exposure flows both ways through the subset's edge).
   PARTIAL_OVERLAP with any known dataset cannot be mapped to a parent interval here, so its lineage
   is UNKNOWN and every exposure outcome touching it is UNVERIFIED.
+  REPRESENTATION_DRIFT under a DIFFERENT instrument label is treated the same way (UNKNOWN): a
+  trivial representation change must not let a relabelled copy escape exposure. Whether two
+  instrument labels denote the same instrument is NOT defined by any approved contract (ADR-025
+  fixes canonical ids, not equivalence), so the bridge reports the unresolved mapping as UNKNOWN
+  lineage instead of guessing. Under the SAME label the instrument key already carries exposure.
+  Copies changed by anything outside the shadow key (time shift, price scaling) are NOT detected.
 
 Time is the synthetic tick ``raw_msc`` treated as verified UTC ms. Real data would need MD-2
 (offset) first; nothing here asserts that mapping.
@@ -31,7 +39,13 @@ from tests import md6_exposure_reference as B
 from tests import md6_quarantine_reference as C
 
 ContentRelation = Literal[
-    "EXACT_ORDERED", "MULTISET", "SUBSET", "SUPERSET", "PARTIAL_OVERLAP", "NONE"
+    "EXACT_ORDERED",
+    "MULTISET",
+    "SUBSET",
+    "SUPERSET",
+    "PARTIAL_OVERLAP",
+    "REPRESENTATION_DRIFT",
+    "NONE",
 ]
 
 
@@ -68,6 +82,13 @@ def content_relation(a: Sequence[C.TickRecord], b: Sequence[C.TickRecord]) -> Co
     if pa.identity.multiset_fingerprint == pb.identity.multiset_fingerprint:
         return "MULTISET"
     ca, cb = Counter(pa.record_hashes), Counter(pb.record_hashes)
+    exact_shared = sum((ca & cb).values())
+    shadow_shared = sum(
+        (Counter(pa.shadow_record_hashes) & Counter(pb.shadow_record_hashes)).values()
+    )
+    if shadow_shared > exact_shared:
+        # Some records of one dataset re-express values of the other without being equal to them.
+        return "REPRESENTATION_DRIFT"
     if not ca & cb:
         return "NONE"
     if not ca - cb:
@@ -95,6 +116,8 @@ def derive_lineage(
             parents.append(B.LineageEdge(exposure_identity(k.records), k.instrument_id, start, end))
         elif relation == "PARTIAL_OVERLAP":
             unknown = True
+        elif relation == "REPRESENTATION_DRIFT" and k.instrument_id != instrument_id:
+            unknown = True
         # SUPERSET: ``k`` is the subset and carries the edge to this dataset; exposure then flows
         # both ways through that edge (X3).
     if unknown:
@@ -107,15 +130,24 @@ def derive_lineage(
 def lineage_registry(
     datasets: Sequence[KnownDataset],
 ) -> dict[B.ContentIdentity, B.DatasetLineage]:
-    """Registry over ``datasets``; each one is related to every other one."""
+    """Registry over ``datasets``; each one is related to every other one.
+
+    The result does not depend on the order of ``datasets`` (V9 F-4 permutation tests). Identical
+    content under two instrument labels is ambiguous: BOTH sides become UNKNOWN (instrument
+    equivalence is not defined by any approved contract), so every outcome touching it is
+    UNVERIFIED whichever dataset was listed first.
+    """
     registry: dict[B.ContentIdentity, B.DatasetLineage] = {}
+    labels: dict[B.ContentIdentity, set[str]] = {}
     for index, d in enumerate(datasets):
         others = [o for j, o in enumerate(datasets) if j != index]
         node = derive_lineage(d.instrument_id, d.records, others)
-        existing = registry.get(node.content_identity)
-        if existing is not None and existing.instrument_id != node.instrument_id:
-            # Same content under two instrument labels: keep a conflicting record so that the
-            # exposure model's instrument check fails closed for the relabelled one.
-            continue
+        labels.setdefault(node.content_identity, set()).add(node.instrument_id)
         registry[node.content_identity] = node
+    for identity, seen in labels.items():
+        if len(seen) > 1:
+            node = registry[identity]
+            registry[identity] = B.DatasetLineage(
+                identity, min(seen), node.start_ms, node.end_ms, "UNKNOWN"
+            )
     return registry

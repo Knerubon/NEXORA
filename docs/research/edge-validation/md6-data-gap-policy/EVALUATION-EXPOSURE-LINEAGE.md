@@ -5,8 +5,15 @@ Every numeric value stays `OPEN`. All examples are SYNTHETIC. This document sets
 grants no gate eligibility to any real result.
 
 Executable specification (test-only, not runtime enforcement): `tests/md6_exposure_reference.py`,
-`tests/md6_cross_track_reference.py`, `tests/test_md6_exposure_lineage.py` and
-`tests/test_md6_exposure_n1_remediation.py`.
+`tests/md6_cross_track_reference.py`, `tests/test_md6_exposure_lineage.py`,
+`tests/test_md6_exposure_n1_remediation.py` and, from Wave V9, `tests/test_md6_v9_structural.py`
+(structural behaviour only) and `tests/test_md6_v9_policy_dependent.py` plus
+`tests/md6_exposure_frozen_prefix_proposal.py` (behaviour that depends on unresolved Quant decisions;
+every test there names its QE item). **Production runtime enforcement: NOT VERIFIED.**
+
+Relation to ADR-030 (VALID-1, G9 pre-registration): see [ADR-030-RECONCILIATION.md](ADR-030-RECONCILIATION.md).
+This proposal's registration ledger is NOT the VALID-1 run manifest and does not replace it; the
+reconciliation lists the contradictions and the decisions that need a human Quant.
 
 ## 1. Problem
 
@@ -37,6 +44,14 @@ peek or a protected-statistics view placed between registration and evaluation. 
 changed an earlier outcome) and N3 (content identity compared only as an opaque key) are closed by R2/D-4
 and by section 2.
 
+Wave V8 independent review of head `930af2aef829fa14064d0ad0be0cfa4bda12fbec` (Wave V9 remediation, this
+revision): F-1 (R2 "nothing appended later changes an outcome" was false for invalid and later-discovered
+appends), F-2 (free text accepted as Quant authority), F-3 (declared members with disjoint footprints were
+each INDEPENDENT alone), F-4 (flags-dropped and trailing-zero copies under a relabelled instrument evaded
+exposure matching), and the minors F-5 to F-7. Dispositions: R2 is restated truthfully (section 5.5) with
+the unresolved choice isolated as QE-9; M5 and M7 (section 5.4) close F-2 and F-3; I6 (section 2) closes F-4
+as far as an approved contract allows (the remaining evasions are the open item QE-10).
+
 ## 2. Dependency on QUARANTINE-IDENTITY.md (Track C)
 
 This document uses two definitions owned by `QUARANTINE-IDENTITY.md` (written in parallel; not
@@ -61,10 +76,21 @@ content relation would match them, that is equal `ordered_content_hash`, equal `
   outcome touching it is UNVERIFIED.
 - I4. Two content identities under different canonicalization versions are not comparable. Any such
   comparison is a `CANONICALIZATION_CONFLICT` and the outcome is UNVERIFIED.
-- I5. The same content under two instrument labels conflicts with the lineage record: UNVERIFIED.
+- I5. The same content under two instrument labels conflicts with the lineage record: UNVERIFIED. Both
+  sides become UNKNOWN, so the outcome does not depend on which dataset was listed first (V9: the earlier
+  rule kept the first-listed label and made the first run's outcome depend on registry order).
+- I6. Representation drift (V9 F-4). Two datasets that share more records under Track C's shadow key
+  (time, bid, ask with trailing zeros and sign of zero ignored, `flags` ignored) than under exact record
+  hashes, with one record set re-expressing the other's values, are `REPRESENTATION_DRIFT`. Under a
+  different instrument label the lineage of both is UNKNOWN (UNVERIFIED): a trivial representation change
+  must not let a relabelled copy escape exposure. Under the same label the instrument key already carries
+  the exposure (EXPLORATORY). Whether two different labels denote the same instrument is NOT defined by any
+  approved contract; the model reports the unresolved mapping as UNKNOWN and does not guess (QE-10).
+  Time-shifted or price-scaled copies are not detected (`xfail` tests in
+  `tests/test_md6_v9_policy_dependent.py`).
 
-`tests/md6_cross_track_reference.py` computes I1 to I3 from Track C's `content_profile` and feeds them to
-the exposure model; I4 is enforced in the exposure model itself. Runtime enforcement stays a D18
+`tests/md6_cross_track_reference.py` computes I1 to I3, I5 and I6 from Track C's `content_profile` and feeds
+them to the exposure model; I4 is enforced in the exposure model itself. Runtime enforcement stays a D18
 dependency.
 
 ## 3. Definitions
@@ -171,8 +197,13 @@ Outcomes, in precedence order:
    timestamp contradicts the ledger. Fails closed; not eligible.
 2. **REJECTED_RETROSPECTIVE**: the registration's ledger position is after the evaluation it covers.
    A claimed timestamp cannot override position.
-3. **EXPLORATORY**: any of G-c to G-i fails, or the evaluation cites no preregistration. Never eligible.
-4. **INDEPENDENT**: otherwise.
+3. **EXPLORATORY**: any of G-c to G-i fails, or the evaluation cites no preregistration, or its
+   registration is a member of a multiplicity declaration (M5). Never eligible.
+4. **PENDING_QUANT_AUTHORITY** (declared multiplicity sets only, section 5.4): every structural and exposure
+   check passed, but the Quant authority and correction references are free text that no verifier has
+   confirmed. Never gate eligible; never relabelled to INDEPENDENT. It is distinct from UNVERIFIED (a
+   defect) and from EXPLORATORY (exposure): it says only that an authority check is missing.
+5. **INDEPENDENT**: otherwise. Only INDEPENDENT is gate eligible.
 
 Consequences:
 
@@ -184,35 +215,91 @@ Consequences:
 ### 5.4 Several variants on one exposure unit (multiplicity)
 
 No default allows several pre-declared variants on one exposure unit to yield gate evidence. If the
-Quant wants to allow it, the only route is an explicit, Quant-authorised **multiplicity declaration**
-appended to the ledger:
+Quant wants to allow it, the only route is an explicit **multiplicity declaration** appended to the
+ledger:
 
 - M1. It names two or more ACTIVE registrations that appear earlier in the ledger, a Quant authority
   reference and a reference to the Quant-decided correction. A registration may be in at most one
-  declaration (otherwise the ledger fails to verify).
+  declaration, and a declaration needs two or more distinct members (otherwise the ledger fails to
+  verify). Both references must be structurally well formed: text, not blank, no leading or trailing
+  whitespace, printable ASCII without whitespace, at least one alphanumeric character, and not a literal
+  that asserts absence (`NONE`, `NULL`, `N/A`, `TBD`, `PENDING`, `UNKNOWN`, ...). A malformed reference
+  makes the set UNVERIFIED. This is structure only: the real reference format is OPEN (QE-1, QE-7).
 - M2. It must be appended before the first evaluation of any member.
 - M3. Every member must have exactly one evaluation; an incomplete set is UNVERIFIED.
 - M4. The members' contention with each other and their evaluations' exposure of each other are set
   aside. Anything else still counts: an outside registration, an unregistered peek or a protected view
   makes the set EXPLORATORY.
-- M5. The set as a whole yields **one** qualification. No member is ever INDEPENDENT on its own, so a
-  member cannot be cited alone.
-- M6. The correction method, and any number in it, is OPEN (QE-7). The model checks only that the
-  references exist; it does not apply or invent a correction.
+- M5. The set as a whole yields **one** qualification. No member is ever INDEPENDENT on its own, in any
+  order and wherever the declaration sits in the ledger: a member's evaluation cited alone is EXPLORATORY
+  and carries the declaration id, also when its footprint is disjoint from every other member and also when
+  the set itself qualifies. The set outcome does not depend on the order in which members were evaluated.
+  (V9 F-3: before this rule was implemented, members on disjoint windows were each INDEPENDENT alone.)
+- M6. The correction method, and any number in it, is OPEN (QE-7). The model does not apply or invent a
+  correction.
+- M7. Authority is never inferred from free text. A declaration with well-formed references yields
+  PENDING_QUANT_AUTHORITY unless a verifier supplied from outside approves the pair; a verifier that
+  fails or raises makes the set UNVERIFIED. What a verifier checks (a registry, a signed record, a
+  commit) is OPEN (QE-7). The reference model injects a callable and ships none; its tests use a
+  SYNTHETIC test double that is not an authority registry. Until a verified authority exists no declared
+  set is INDEPENDENT, which is the structural default consistent with "no default allows several
+  variants to yield gate evidence".
 
 Without a declaration, G-i applies and every contending registration is EXPLORATORY.
 
-### 5.5 Relabelling and frozen outcomes
+Selection ACROSS footprints is not governed by this section (QE-7, finding F-5): five registrations on
+five disjoint windows give five INDEPENDENT results, adjacent half-open windows do not contend, and
+correlated instruments over one period do not contend. Nothing counts, corrects or limits the choice among
+them, and no independence threshold is proposed (any such value would be a Quant decision). The tests
+`test_qe7_characterization_*` record this behaviour; they do not endorse it.
+
+### 5.5 Relabelling and outcome stability
 
 - R1. The outcome is computed from the ledger. No record field holds it and no one sets it by hand.
-- R2. An evaluation's outcome is computed from the ledger prefix that ends at the evaluation. Nothing
-  appended later (registration, supersede, abandonment, view, evaluation, declaration) changes it. The one
-  later entry the check looks at is the cited registration itself: if it appears only after the
-  evaluation, the outcome is REJECTED_RETROSPECTIVE, which is never eligible.
+- R2. **Default semantics: monotone non-improving.** An evaluation's outcome is computed from the ledger
+  prefix that ends at the evaluation, plus two ledger-wide fail-closed inputs (whole-ledger validity and
+  the lineage registry). Consequently:
+  - R2a. An append that keeps the ledger valid (registration, supersede, abandonment, view, evaluation)
+    never changes an earlier outcome. The one later entry the check looks at is the cited registration
+    itself: if it appears only after the evaluation, the outcome is REJECTED_RETROSPECTIVE.
+  - R2b. A multiplicity declaration appended later that names the evaluation's registration downgrades the
+    standalone outcome to EXPLORATORY (M5).
+  - R2c. An append that makes the ledger invalid (duplicate preregistration or evaluation id, a member in
+    two declarations, a declaration with fewer than two distinct members, abandonment or supersede of an
+    unknown id, a broken chain) fails whole-ledger verification: every outcome, including earlier
+    INDEPENDENT ones, becomes UNVERIFIED.
+  - R2d. Lineage is one registry input, not captured per ledger entry. A dataset added or discovered later
+    that partially overlaps or re-expresses an earlier one (I3, I6), or that carries identical content
+    under another label (I5), makes both sides UNKNOWN, so every outcome touching either becomes UNVERIFIED.
+  - R2e. No append of any kind makes a non-INDEPENDENT outcome INDEPENDENT.
+  The earlier wording "nothing appended later changes it" was wrong for R2b to R2d; this restatement
+  replaces it (V9 F-1). All of R2b to R2d move toward UNVERIFIED or EXPLORATORY, never toward eligibility.
 - R3. A request to change an outcome is refused, except a voluntary downgrade INDEPENDENT to
-  EXPLORATORY by the result family. EXPLORATORY, UNVERIFIED and REJECTED_RETROSPECTIVE evidence can never
-  become INDEPENDENT. A downgrade or a later supersede does not remove the evaluation from disclosure
-  (D-4): an unfavourable INDEPENDENT result cannot be filed away.
+  EXPLORATORY by the result family. EXPLORATORY, PENDING_QUANT_AUTHORITY, UNVERIFIED and
+  REJECTED_RETROSPECTIVE evidence can never become INDEPENDENT. A downgrade or a later supersede does not
+  remove the evaluation from disclosure (D-4): an unfavourable INDEPENDENT result cannot be filed away.
+
+#### 5.5.1 Frozen or revisable outcomes (QE-9, F-1): competing semantics, BLOCKED pending the Quant
+
+Finding F-1 is a defect in BOTH layers. Specification: R2 promised stability while section 6 failed the
+whole ledger closed, so the text contradicted itself. Implementation: `classify_evaluation` verifies the
+whole ledger and takes lineage from one external registry. The reference model keeps the fail-closed
+behaviour (B) as the default because every deviation of B from A moves toward UNVERIFIED; changing to A
+would allow a previously issued outcome to stand after later events, which is a policy relaxation that only
+a human Quant and governance owner may approve.
+
+| | A: frozen prefix (proposal) | B: whole-ledger fail-closed (DEFAULT, implemented) |
+|---|---|---|
+| Later invalid append | earlier outcomes stand; the defect is reported as a ledger integrity alarm | every outcome UNVERIFIED |
+| Later partial overlap or drift dataset | earlier outcome uses lineage captured at its ledger position | both sides UNKNOWN, earlier outcome UNVERIFIED |
+| Later declaration naming the registration | earlier standalone outcome stands; set is EXPLORATORY (M2) | standalone outcome EXPLORATORY (M5) |
+| Needs | lineage snapshot digest recorded in each registration and evaluation entry (a change to a shared contract, AGENTS.md section 3, depends on QE-1 and QE-6) | nothing new |
+| Risk | an issued INDEPENDENT survives tampering of later entries; disagreement between alarm and label | a single bad append, accidental or hostile, voids all evidence (denial of evidence, F-7) |
+| Code | `tests/md6_exposure_frozen_prefix_proposal.py`, NOT the default | `tests/md6_exposure_reference.py` |
+| Tests | `tests/test_md6_v9_policy_dependent.py` `test_qe9_*` | `tests/test_md6_v9_structural.py` `test_f1_*`, `test_append_order_*` |
+
+No document or test may cite A as policy. Until the Quant decides, B is the reference behaviour and R2 is
+stated as R2a to R2e.
 
 ### 5.6 Disclosure (forking paths)
 
@@ -249,20 +336,26 @@ the shared units releases the contention (C9).
 | Footprint of a possibly contending registration does not resolve | UNVERIFIED |
 | Content identities under different canonicalization versions compared | UNVERIFIED |
 | Records partially overlap a known dataset (no parent interval) | UNVERIFIED |
-| Multiplicity declaration without Quant authority or correction reference, or with a member not evaluated exactly once | UNVERIFIED |
+| Multiplicity declaration with a blank or structurally malformed Quant authority or correction reference, or with a member not evaluated exactly once, or a verifier that fails | UNVERIFIED |
+| Multiplicity declaration with well-formed references and no verified authority | PENDING_QUANT_AUTHORITY (not gate eligible) |
+| Any later append that makes the ledger invalid (R2c) | every outcome UNVERIFIED (QE-9) |
+| Same content under two instrument labels, or a representation-drift copy under another label (I5, I6) | UNVERIFIED for both sides, whatever the registry order |
+| Declared multiplicity member cited alone (M5) | EXPLORATORY with the declaration id |
 
 ## 7. What stays OPEN
 
 | ID | Question | Owner |
 |---|---|---|
-| QE-1 | Physical home and format of the ledger and its anchor (signed commit, custodian store); entry hash serialization | Architect, Rin |
+| QE-1 | Physical home and format of the ledger and its anchor (signed commit, custodian store); entry hash serialization; and the time authority: `LedgerAnchor(position, entry_hash)` carries no time, `recorded_at` is a synthetic counter, so no rule can say that an anchor existed before a given wall-clock event (F-6). No timestamp authority is invented here | Architect, Rin |
 | QE-2 | Who may append protected statistics views, and how views outside tooling are logged | Custodian, Rin |
 | QE-3 | Whether count-and-coverage statistics on non-protected evaluation windows (Part A acceptance) are exempt from exposure (X5) | Quant |
 | QE-4 | Whether one registration may pre-declare a finite set of evaluations (G-g currently allows one) | Quant |
 | QE-5 | Treatment of evidence UNVERIFIED only because history predates the ledger (no grandfathering proposed) | Quant, Rin |
 | QE-6 | Final `content_identity` and lineage schema | Track C, QUARANTINE-IDENTITY.md |
-| QE-7 | Whether several pre-declared variants on one exposure unit may yield gate evidence at all (section 5.4) and, if so, the correction method and its parameters. Default until decided: no; every contending registration is EXPLORATORY | Quant |
-| QE-8 | Whether withdrawing (superseding or abandoning) a registration before any exposure of the shared units should release contention (current structural default: yes, G-i) | Quant |
+| QE-7 | Whether several pre-declared variants on one exposure unit may yield gate evidence at all (section 5.4) and, if so, the correction method and its parameters; what counts as verified Quant authority (M7); and whether and how selection across disjoint footprints, adjacent windows and correlated instruments is governed (F-5; no independence threshold is proposed). Default until decided: no; every contending registration is EXPLORATORY and no declared set is INDEPENDENT | Quant |
+| QE-8 | Whether withdrawing (superseding or abandoning) a registration before any exposure of the shared units should release contention (current structural default: yes, G-i), and whether a withdrawal needs an authenticated appender: today any registration that lists `supersedes` releases contention without an authority check (F-7). Also the denial-of-evidence side effects of fail-closed lookups: one registration with unknown lineage, or content under another canonicalization version, makes later evaluations that could contend with it UNVERIFIED (F-7) | Quant, Architect |
+| QE-9 | Frozen or revisable outcomes (section 5.5.1): may an issued outcome be revised by a later invalid append, later lineage discovery or later declaration (B, default) or must it stand (A, BLOCKED)? | Quant, Rin (governance) |
+| QE-10 | Which relabelled copies are the same market data: instrument equivalence (aliases, contract rolls, scaling) and time or price mappings. No approved contract defines them (ADR-025 fixes canonical ids, MD-2 leaves the offset UNVERIFIED), so the model detects only representation drift (I6) and reports the rest as an unresolved mapping | Architect, Market data, Quant |
 
 No numeric value is introduced by this document.
 
@@ -323,6 +416,24 @@ N1 remediation cases, all in `tests/test_md6_exposure_n1_remediation.py`:
 | N2 | Later supersede on another window (R-B4); voluntary downgrade | outcome unchanged; downgraded result must be disclosed | `test_n2_*` (2 tests) |
 | N3 | Reordered copy; plus relabelled instrument; other canonicalization version (R-B5); subset; superset; partial overlap; disjoint | EXPLORATORY / UNVERIFIED / UNVERIFIED / EXPLORATORY / EXPLORATORY / UNVERIFIED / INDEPENDENT | `test_n3_*` (7 tests) |
 
+Wave V9 cases. Structural ones are in `tests/test_md6_v9_structural.py`; those that depend on an unresolved
+Quant decision are in `tests/test_md6_v9_policy_dependent.py` (marked with the QE item):
+
+| ID | Input | Expected | Test |
+|---|---|---|---|
+| F-1 | Later invalid append (duplicate preregistration id, member in two declarations, abandon unknown id, supersede unknown id, duplicate evaluation id) after an INDEPENDENT run | DEFAULT B: UNVERIFIED (pinned); alternative A: INDEPENDENT with an integrity alarm (BLOCKED, QE-9) | `test_f1_default_semantics_*`, `test_qe9_alternative_a_*` |
+| F-1 | Later partially overlapping dataset | B: UNVERIFIED; A with captured lineage: INDEPENDENT | `test_f1_default_semantics_a_later_partially_overlapping_dataset_*`, `test_qe9_alternative_a_lineage_captured_*` |
+| F-1 | Valid non-declaration appends, seeded random ledgers | earlier outcomes identical; no append ever grants eligibility | `test_append_order_*` (seeds 11, 2026, 94096) |
+| F-2 | Blank, whitespace, padded, non-ASCII, `NONE`/`TBD` references, with and without an approve-everything verifier | UNVERIFIED | `test_f2_malformed_authority_or_correction_reference_is_unverified` |
+| F-2 | Well-formed free text (`x`, `QA-SYN`), default | PENDING_QUANT_AUTHORITY, never INDEPENDENT; verifier approval needed; failing verifier UNVERIFIED | `test_f2_*` |
+| F-3 | Three declared members on disjoint windows, 6 evaluation orders x declaration before / between / after | members never INDEPENDENT alone; set outcome identical across orders; undeclared and non-member runs stay INDEPENDENT | `test_f3_*` |
+| F-4 | E0 on dataset D (instrument A); copy of D with flags dropped, flags rewritten, trailing zeros padded or stripped, reordered, subset, half-drifted, all at once, relabelled B; both registry orders; both run orders | UNVERIFIED for both runs; controls (disjoint content, same time grid with other prices) INDEPENDENT | `test_f4_*` |
+| F-4 | Time-shifted or price-scaled relabelled copy | NOT detected (`xfail(strict=True)`, QE-10) | `test_qe10_*` |
+| F-5 | Five disjoint windows; adjacent windows; correlated instruments | each INDEPENDENT today (characterization, QE-7) | `test_qe7_characterization_*` |
+| F-6 | Anchor structure | position and hash only, no time (QE-1) | `test_qe1_characterization_ledger_anchors_carry_no_time` |
+| F-7 | Rogue supersede; unknown-lineage registration; other canonicalization version | contention released / later runs UNVERIFIED (QE-8) | `test_qe8_characterization_*` |
+| N1 | Three overlapping variants, 36 registration x evaluation orders; seeded random orders over 3 to 5 variants | zero INDEPENDENT; identical outcomes per identity | `test_three_overlapping_variants_*`, `test_overlapping_variants_random_permutation_trials_*` |
+
 ## 9. Limitations
 
 - This is documentation plus a test-only reference model. It is not runtime enforcement and nothing
@@ -335,6 +446,13 @@ N1 remediation cases, all in `tests/test_md6_exposure_n1_remediation.py`:
   the exposure model trusts the lineage registry it is given and fails closed only when an entry is
   missing, `UNKNOWN` or inconsistent. The bridge treats synthetic `raw_msc` as verified UTC; real data
   would first need MD-2 (offset).
+- Production runtime enforcement: NOT VERIFIED. Everything here is a reference model plus tests.
+- The model cannot tell a genuine Quant authority from free text; it only refuses to treat free text as
+  verified (M7). The verifier is an injected callable that does not exist outside tests.
+- Copies changed by anything outside the shadow key (time shift, price scaling, contract roll, alias
+  symbols) are not detected (QE-10). A dataset whose time was re-expressed under a verified MD-2 offset is
+  such a case.
+- The lineage registry is trusted as supplied (R2d). Datasets that were never put in it are invisible.
 - G-i is deliberately conservative: a registration that can never be INDEPENDENT itself (its footprint
   was partly exposed already) still blocks others on the units it shares. This keeps outcomes
   independent of evaluation order; the cost is that such a registration can burn a fresh unit until it

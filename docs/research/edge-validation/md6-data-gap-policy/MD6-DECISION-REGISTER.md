@@ -24,7 +24,7 @@ Conventions:
 | MD6-D05 | Source disconnect / heartbeat evidence | DQ | PROPOSED | heartbeat tolerance OPEN | PENDING |
 | MD6-D06 | Window semantics, leading/trailing gaps | DQ | PROPOSED | edge tolerance OPEN | PENDING |
 | MD6-D07 | UTC measurement, offset, DST/fold | DQ | PROPOSED (offset UNVERIFIED) | offset never assumed | PENDING |
-| MD6-D08 | Defect severity classes | DQ | PROPOSED | soft-defect limits OPEN | PENDING |
+| MD6-D08 | Defect severity classes | DQ | PROPOSED | no value proposed; hard-defect tolerance and soft-defect limits OPEN (Q5, Q6) | PENDING |
 | MD6-D09 | Rejection / quarantine / annotate mapping | DQ | PROPOSED | limits OPEN | PENDING |
 | MD6-D10 | Same-timestamp semantics, duplicates, tie-breaking | DQ | PROPOSED | none | PENDING |
 | MD6-D11 | Quote validity (crossed, zero-spread, nonpositive, nonfinite) | DQ | PROPOSED | spread bounds OPEN | PENDING |
@@ -229,9 +229,11 @@ in the master reports) are outside MD-6 and must not be inferred from it.
 - **Proposed rule:** Three classes. **Hard:** defects that invalidate ordering or arithmetic and cannot be
   interpreted safely: non-monotonic timestamps, crossed quotes (ask < bid), nonpositive prices, non-finite
   quotes. These start from the existing `hard_defects` set as an observation. The structural proposal is
-  that any single hard defect triggers the D09 disposition, which is equivalent to a tolerance of zero. That
-  zero is itself a numeric value: it is a PROPOSED value pending Quant answer to Q5, not an approved or frozen
-  one, and any other tolerance is OPEN. **Soft:** defects
+  that any single hard defect triggers the D09 disposition. No tolerance value is proposed here: this is a
+  disposition rule, not a number, and whether any tolerance greater than none is wanted is OPEN (Q5). (Earlier
+  text called the effect "a tolerance of zero" and "a PROPOSED value"; that wording made the register read as
+  carrying a numeric proposal, contradicting "no numeric threshold", and is withdrawn. Numeric values in this
+  document set: none, apart from SYNTHETIC examples labelled as such.) **Soft:** defects
   with a plausible benign cause whose tolerance is a Quant value: over-threshold gaps (`unexplained`),
   same-timestamp-different-quote, zero spread, exact duplicates. **Annotate:** facts recorded but not
   judged (ticks per day, `expected_closed` gaps, `source_fault_evidenced` gaps below any rejection rule).
@@ -277,8 +279,10 @@ in the master reports) are outside MD-6 and must not be inferred from it.
 - **Question:** How are multiple ticks with the same millisecond handled?
 - **Options:** (a) keep all in source order; (b) drop exact duplicates; (c) collapse to last quote; (d)
   collapse to first; (e) reject window.
-- **Proposed rule:** Exact duplicate = same UTC ms and identical bid, ask (and identical flags where the
-  source supplies them, D14), regardless of adjacency; detection is over the whole window, not only
+- **Proposed rule:** Exact duplicate = same millisecond timestamp and identical bid, ask (and identical flags
+  where the source supplies them, D14), regardless of adjacency. The timestamp is the stored `raw_msc` until a
+  verified MD-2 offset exists; "UTC" applies only after that conversion (D07), and the reference models treat
+  synthetic `raw_msc` as verified UTC only as a stated simplification; detection is over the whole window, not only
   adjacent ticks. Same timestamp with a different quote is a distinct soft defect: source order is
   preserved exactly as stored (stable, source-defined), and no collapse rule is applied by the data layer.
   Any downstream collapse (for example "last quote at a timestamp") would be a semantics decision for
@@ -408,8 +412,14 @@ in the master reports) are outside MD-6 and must not be inferred from it.
   evaluation; and no other ACTIVE registration overlapping that footprint was in the ledger before the
   evaluation (one exposure unit, at most one qualification; outcome independent of evaluation order).
   Otherwise it is EXPLORATORY permanently. Several variants on one exposure unit can yield at most one
-  qualification, and only through a Quant-authorised multiplicity declaration whose correction is OPEN
-  (QE-7); there is no default allowing it. Outcomes are frozen at the evaluation's ledger position.
+  qualification, and only through a multiplicity declaration whose Quant authority is VERIFIED (what that
+  means is OPEN, QE-7) and whose correction is OPEN; free-text references never verify, a structurally sound
+  but unverified declaration is PENDING_QUANT_AUTHORITY (not gate eligible), and a declared member is never
+  INDEPENDENT on its own; there is no default allowing it. Outcomes are computed from the ledger prefix at the
+  evaluation's position plus whole-ledger validity and lineage; whether an issued outcome may be revised by later
+  events or must stand is OPEN (QE-9, section 5.5.1 of EVALUATION-EXPOSURE-LINEAGE.md; default: later events can
+  only downgrade, never upgrade). The relation to ADR-030 G9 pre-registration is in
+  [ADR-030-RECONCILIATION.md](ADR-030-RECONCILIATION.md).
   Missing or conflicting exposure history, or lineage that does not resolve, is UNVERIFIED. Every result
   family lists all preregistrations touching its instruments and windows, including superseded and
   abandoned ones, with a count, and every evaluation touching them, including downgraded ones.

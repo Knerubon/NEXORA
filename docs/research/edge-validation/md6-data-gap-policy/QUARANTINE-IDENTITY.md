@@ -242,3 +242,48 @@ Round-2 MINOR regressions, in `tests/test_md6_exposure_n1_remediation.py`:
   Undeclared transformations rely on D13 separation of duties and the provenance in the manifest.
 - Coincidental identical records across instruments are flagged, not silently cleared (QI-5).
 - Sign-off: **PENDING**.
+
+## 11. Mapping to the PR #96 tick storage format (Q2) and provenance linkage (Q3)
+
+Reference only. PR #96 (market_history V4, head `1c536d5acdef2c9fe47ef5a6ecfb127595ef42b8`) is unmerged and is NOT part of
+the base of this proposal; nothing here asserts its behaviour beyond what was read from a read-only `git archive`
+export. **End-to-end compatibility is NOT claimed.** The first table is the result of a one-off EXECUTED check
+(`evidence/verify_pr96_mapping.py`, output in `evidence/verify_pr96_mapping.output.txt`, 14 checks, all PASS on
+2026-10-29). It is not part of CI, because the PR #96 code is absent from this base; re-run it against any export.
+The second table is DESIGN ONLY.
+
+### 11.1 Verified by that executed check (PR #96 code run, QI-R4 grammar from `tests/md6_quarantine_reference.py`)
+
+| ID | Fact | Consequence for QUARANTINE-IDENTITY.md |
+|---|---|---|
+| V1 | `decimal_str` (PR #96) emits no exponent, strips trailing zeros and returns `0` for any zero, so every finite output matches the QI-R4 grammar `-?(0\|[1-9][0-9]*)(\.[0-9]+)?` | Stored finite price tokens of PR #96 data can be used verbatim as QI-R4 tokens |
+| V2, V3 | PR #96 normalizes before it hashes: `1.10` and `1.1` become one stored token `1.1` (`content_sha256` cannot tell them apart), whereas QI-R4 keeps `1.10` and `1.1` distinct (`record_hash` differs) | The two layers disagree on trailing zeros. For PR #96 data this is harmless (the extractor never emits `1.10`), but a candidate that reached the register through another extractor with `1.10` is drift here (REPRESENTATION_DRIFT) and identical there |
+| V4a, V4b | PR #96 stores `str(Decimal)` of a non-finite value verbatim. `NaN`, `Infinity`, `-Infinity` are inside the QI-R4 closed set; `sNaN`, `-NaN`, `-sNaN` and `NaN<payload>` are outside it | A dataset holding such a spelling cannot be registered as quarantined (QI-R4 refuses it: CanonicalizationError). The provider converts floats with `Decimal(repr(float))`, which yields only `NaN` and `Infinity` spellings, so this is a latent gap, not an observed one (QI-8) |
+| V5a to V5d | A stored row is `{"a":"<ask>","b":"<bid>","f":<int>,"t":<raw_msc>}`; `f` is a JSON integer and is omitted when the source gives none. The mapping `raw_msc = t`, `bid = b`, `ask = a`, `flags = str(f)` or `None` gives a `TickRecord`; a negative `f` is outside the QI flags grammar | This is the concrete answer to QI-2 for PR #96 data; it is not frozen until QI-2 is decided |
+| V6a, V6b | PR #96 `content_sha256` is the SHA-256 of the concatenated row bytes in stored order: independent of chunk layout, sensitive to tick order | Same axis as `ordered_content_hash` |
+| V6c, V6d | A reordered copy has an equal QI `multiset_fingerprint` but another `content_sha256`; the two hashes are different constructions with no derivable relation | A PR #96 manifest alone cannot yield a QI `content_identity`; the tick rows must be re-read and canonicalized under the QI version |
+| V7 | PR #96 sources contain no reference to a quarantine register, `multiset_fingerprint`, `ordered_content_hash` or shadow hashes | There is no code-level linkage between the two layers (see 11.3) |
+
+### 11.2 Design only (no executed evidence)
+
+- Computing `content_identity` and `shadow_record_hashes` from a PR #96 chunk directory (a reader that maps rows as in V5)
+  is a design; no such reader exists in this proposal.
+- The quarantine `dataset_id` field is a free label in this register. PR #96's `dataset_id` is a SHA-256 over an identity
+  object that also covers the time conversion, clock attestation, source and units (`_identity`), so it changes when
+  the offset declaration changes while the QI content identity does not. Whether the register should cite the PR #96
+  `dataset_id` in `previous_aliases` is a design question (QI-7).
+- Offset and time: PR #96 `t` is the raw broker-clock value, not UTC. The bridge in `tests/md6_cross_track_reference.py` treats
+  synthetic `raw_msc` as verified UTC only as a stated simplification; real data needs MD-2 first.
+
+### 11.3 Missing provenance and alias linkage (Q3), reported, not solved
+
+1. PR #96 custody approval and revocation are keyed by PR #96 `dataset_id`, `content_sha256`, manifest hash, symbol and window. A
+   custody revocation (`revoke_dataset`) does not append a quarantine entry, and a quarantine entry does not
+   reference a custody record. A dataset can be revoked in one place and still pass `check_reentry` here, and the
+   reverse.
+2. `dataset_id` in the register is whatever the submitter supplied; nothing checks it against a PR #96 `dataset_id`.
+   `previous_aliases` and `lineage_parents` cite names, not custody-verified identities.
+3. PR #96 revocation can only deny trust (the verifier honours any revocation); this register's requalification can
+   restore PART_A eligibility. The two directions of authority are not reconciled.
+4. No end-to-end test exists for any of this, and none is claimed. Open items: QI-2, QI-3, QI-7, QI-8 in
+   [OPEN-QUESTIONS.md](OPEN-QUESTIONS.md).

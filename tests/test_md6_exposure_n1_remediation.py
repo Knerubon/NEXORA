@@ -442,7 +442,19 @@ def _declared(*, quant: str = "QA-SYN", correction: str = "CORR-SYN", peek: bool
 def test_multiplicity_declaration_yields_exactly_one_qualification() -> None:
     book = _declared()
     assert verify_chain(book.ledger) == ()
-    assert classify_set(book, "D-1").outcome is Outcome.INDEPENDENT
+    # V9 F-2: the references are free text, so by default the set is NOT gate eligible. Only an
+    # injected verifier (real definition OPEN, QE-7) can yield the single qualification; this one
+    # is a SYNTHETIC test double, not an authority registry.
+    assert classify_set(book, "D-1").outcome is Outcome.PENDING_QUANT_AUTHORITY
+    last = book.ledger[-1]
+    verified = classify_multiplicity_set(
+        (book.ledger,),
+        (LedgerAnchor(last.position, last.entry_hash),),
+        LINEAGE,
+        "D-1",
+        authority_verifier=lambda quant, correction: (quant, correction) == ("QA-SYN", "CORR-SYN"),
+    )
+    assert verified.outcome is Outcome.INDEPENDENT
     # No member can be cited on its own.
     assert set(_outcomes(book, ("E-a", "E-b", "E-c")).values()) == {Outcome.EXPLORATORY}
 
