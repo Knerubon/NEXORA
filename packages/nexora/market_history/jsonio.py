@@ -26,36 +26,33 @@ MAX_JSON_DEPTH = 32
 # choosing the real maximum remains a governance decision of the verifier.
 MAX_AGE_SECONDS_SANITY = 10 * 366 * 86400
 
-# Only the characters that matter to a depth scan. Matching single characters (never a whole
-# string with a back-tracking pattern) keeps the scan strictly linear: a quote-and-backslash
-# pattern made a 100 KB hostile input cost over a minute (found and fixed in V9).
-_TOKENS = re.compile(rb'[\\"\[\]{}]')
-_BACKSLASH, _QUOTE = 0x5C, 0x22
+# Depth scan, strictly linear and mostly C-speed:
+#   1. delete every string literal. The pattern ALWAYS matches from an opening quote (an
+#      unterminated string runs to the end of the input), so a failing match is never retried
+#      from the next quote; a first version did that and was quadratic (100 KB of `"\\` cost
+#      over a minute);
+#   2. keep only the four bracket characters;
+#   3. walk those (a Python loop over brackets alone, with an early exit past `stop_above`).
+_STRINGS = re.compile(rb'"(?:[^"\\]++|\\.)*+(?:"|\\?\Z)', re.DOTALL)
+_NOT_BRACKETS = bytes(sorted(set(range(256)) - set(b"[]{}")))
+_OPEN_CLOSE = bytes.maketrans(b"[{]}", b"\x01\x01\x00\x00")
 
 
-def json_depth(data: bytes) -> int:
+def json_depth(data: bytes, stop_above: int | None = None) -> int:
     """Maximum bracket nesting of `data`, ignoring brackets inside strings. Linear time, no
-    recursion. Malformed input is not diagnosed here; the real parser rejects it afterwards."""
+    recursion. Malformed input is not diagnosed here; the real parser rejects it afterwards. With
+    `stop_above` the walk stops as soon as the depth exceeds it (the returned value is then only
+    known to be greater than `stop_above`)."""
+    brackets = _STRINGS.sub(b"", data).translate(None, _NOT_BRACKETS).translate(_OPEN_CLOSE)
     depth = deepest = 0
-    in_string = False
-    skip_before = -1  # the character after a backslash inside a string is escaped
-    for m in _TOKENS.finditer(data):
-        pos = m.start()
-        if pos < skip_before:
-            continue
-        c = data[pos]
-        if in_string:
-            if c == _BACKSLASH:
-                skip_before = pos + 2
-            elif c == _QUOTE:
-                in_string = False
-        elif c == _QUOTE:
-            in_string = True
-        elif c in (0x5B, 0x7B):  # [ {
+    for opens in brackets:
+        if opens:
             depth += 1
             if depth > deepest:
                 deepest = depth
-        elif c in (0x5D, 0x7D):  # ] }
+                if stop_above is not None and deepest > stop_above:
+                    break
+        else:
             depth -= 1
     return deepest
 
@@ -65,7 +62,7 @@ def loads(data: bytes | str, what: str = "json", *, check_depth: bool = True) ->
     `json_too_deep`). `check_depth=False` is for streams of small flat rows, where the parser's
     own recursion limit is still caught."""
     raw = data.encode("utf-8", "surrogatepass") if isinstance(data, str) else data
-    if check_depth and json_depth(raw) > MAX_JSON_DEPTH:
+    if check_depth and json_depth(raw, MAX_JSON_DEPTH) > MAX_JSON_DEPTH:
         raise HistoryError("json_too_deep", what)
     try:
         return json.loads(data)
