@@ -33,7 +33,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
-from nexora.market_history import signing
+from nexora.market_history import jsonio, signing
 from nexora.market_history.fsutil import TMP_MARKER, Dir
 from nexora.market_history.models import HistoryError, canonical_json, sha256_hex
 from nexora.market_history.signing import Signer
@@ -47,7 +47,7 @@ GENESIS = "0" * 64
 MAX_SKEW = timedelta(minutes=5)
 _HEX64 = re.compile(r"[0-9a-f]{64}")
 _HEX32 = re.compile(r"[0-9a-f]{32}")
-_ENTRY_NAME = re.compile(r"entry-(\d{8})\.json")
+_ENTRY_NAME = re.compile(r"entry-([0-9]{8})\.json", re.ASCII)
 # Principal ids are plain lower-case ASCII. Anything else (upper case, whitespace, Unicode
 # confusables, compatibility forms, control characters) is REFUSED, never normalised: two encodings
 # that a human might read as one name must not silently compare equal or unequal.
@@ -70,13 +70,7 @@ def normalize_identity(identity: Any) -> str:
 
 
 def _aware(value: Any, what: str) -> datetime:
-    try:
-        when = datetime.fromisoformat(str(value))
-    except ValueError:
-        raise HistoryError("invalid_timestamp", what) from None
-    if when.tzinfo is None:
-        raise HistoryError("invalid_timestamp", what)
-    return when.astimezone(UTC)
+    return jsonio.aware_utc(value, what)
 
 
 def _hash_of(body: Mapping[str, Any], *drop: str) -> str:
@@ -241,8 +235,8 @@ def load_registry(path: Path, *, dataset_dir: Path | None = None) -> PrincipalRe
         flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
         fd = os.open(path, flags)
         with os.fdopen(fd, "rb") as fh:
-            data = json.loads(fh.read(_MAX_FILE))
-    except (OSError, ValueError, UnicodeDecodeError):
+            data = jsonio.loads(fh.read(_MAX_FILE), "registry")
+    except (OSError, ValueError, UnicodeDecodeError):  # HistoryError is a ValueError
         raise HistoryError("registry_unreadable") from None
     return PrincipalRegistry.from_json(data)
 
@@ -453,7 +447,7 @@ class LocalAppendOnlyStore:
                         twins = _completed_append_twins(d, name, st, temps)
                         if st.st_nlink != 1 + len(twins):
                             raise HistoryError("store_unexpected_entry", "multiple links")
-                        data = json.loads(fh.read(_MAX_FILE))
+                        data = jsonio.loads(fh.read(_MAX_FILE), "store_entry")
                 except HistoryError as exc:
                     if exc.code == "store_unexpected_entry":
                         raise

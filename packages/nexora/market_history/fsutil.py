@@ -390,8 +390,10 @@ def capability_blockers(caps: Any) -> list[str]:
     if not isinstance(caps, dict) or caps.get("schema") != FS_SCHEMA:
         return ["filesystem_capabilities_absent"]
     out: list[str] = []
-    if caps.get("platform") not in PROVEN_PLATFORMS:
-        out.append(f"platform_unproven:{str(caps.get('platform'))[:20]}")
+    platform = caps.get("platform")
+    # type check first: an unhashable value (list/dict) must not crash the frozenset lookup (N-01)
+    if type(platform) is not str or platform not in PROVEN_PLATFORMS:
+        out.append(f"platform_unproven:{str(platform)[:20]}")
     if caps.get("fs_class") != "local":
         out.append(f"filesystem_unproven:{str(caps.get('fs_class'))[:20]}")
     probes = caps.get("probes")

@@ -15,6 +15,7 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
+from nexora.market_history import jsonio
 from nexora.market_history.clock import ClockAttestation
 from nexora.market_history.convert import TimeConversion, TimeSegment
 from nexora.market_history.custody import make_candidate
@@ -106,11 +107,15 @@ def main() -> int:
     signer = load_signer(args.operator_key) if args.candidate_out is not None else None
 
     # Everything below up to the source is validated BEFORE attaching to the terminal.
-    raw = json.loads(args.time_conversion.read_text())
+    raw = jsonio.loads(args.time_conversion.read_bytes(), "time_conversion")
     conversion = TimeConversion(tuple(TimeSegment(**s) for s in raw["segments"]))
-    attestation = ClockAttestation.from_json(json.loads(args.clock_attestation.read_text()))
+    attestation = ClockAttestation.from_json(
+        jsonio.loads(args.clock_attestation.read_bytes(), "clock_attestation")
+    )
     protected_in = (
-        [] if args.no_protected_ranges else json.loads(args.protected_utc_ranges.read_text())
+        []
+        if args.no_protected_ranges
+        else jsonio.loads(args.protected_utc_ranges.read_bytes(), "protected_ranges")
     )
     request = ExtractionRequest(
         args.symbol,
