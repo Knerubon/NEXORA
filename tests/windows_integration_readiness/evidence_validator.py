@@ -17,8 +17,17 @@ invocation is a structured argv checked against the reviewed V4 CLI, mock/synthe
 refused in REAL records and guarantees owned by an unresolved dependency cannot be "evidenced"
 (R3-1); placeholder spellings of NOT VERIFIED are refused after NFKC normalisation (R3-4).
 
+V9 (V8 reviewer findings): `NOT VERIFIED` is accepted only as the WHOLE value of a field that is
+still unfilled; nested inside a list, a reference path or a structured value it is a refusal, as
+in the JSON Schema. Case 7 is checked against an ALLOW-list of MT5 names (`mt5_reference`): every
+observed reference that is not exactly an allowed read call counts. Case 6 flags are derived from
+the probe outcomes when the record carries them; flags with no underlying evidence in the record
+(`self_declared_flags` in the report) stay the operator's attestation. Custody evidence follows the
+PR #96 CANDIDATE named by `dependency-manifest.json` (signed pin, attestation, approval, lineage).
+
 What it can NOT prove: that any recorded value is true, that a person is who they claim to be
-(identities are DECLARED strings; there is no signature or key check here), or anything about
+(identities are DECLARED strings; no signature or key is verified here, only that the recorded
+signature/key fields are present, well formed and consistent), or anything about
 Windows/MT5. Its report therefore always carries `windows_verified: false`. Offline harness
 consistency (`structurally_valid`) is reported separately from `real_readiness`.
 
@@ -40,10 +49,20 @@ from pathlib import Path
 from typing import Any
 
 from tests.windows_integration_readiness import custody_gate as cg
+from tests.windows_integration_readiness import dependency_pin as dp
 from tests.windows_integration_readiness import execution_contract as ec
-from tests.windows_integration_readiness.vectors import FORBIDDEN_MT5_NAMES
+from tests.windows_integration_readiness.mt5_reference import (
+    mentions_forbidden_name,
+    non_allowed_keys,
+)
+from tests.windows_integration_readiness.text_hygiene import (
+    ascii_lookalikes,
+    fold,
+    strip_hidden,
+    within_one_edit,
+)
 
-SCHEMA_VERSION = "nexora.windows-readiness-evidence/3"
+SCHEMA_VERSION = "nexora.windows-readiness-evidence/4"
 NOT_VERIFIED = "NOT VERIFIED"
 RESULTS = ("PASS", "FAIL", "NOT_RUN")
 # overall only: a REAL record whose evidence is consistent but whose dependencies are BLOCKED
@@ -55,58 +74,114 @@ _SHA40 = r"^[0-9a-f]{40}$"
 _SHA256 = r"^[0-9a-f]{64}$"
 _UTC = r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|\+00:00)$"
 _HEAD_PIN = r"^[1-9][0-9]*:[0-9a-f]{64}$"
+_HEX32 = r"^[0-9a-f]{32}$"
+_HEX64 = r"^[0-9a-f]{64}$"
+_SIG = r"^[0-9a-f]{128}$"
+_PRINCIPAL = "^" + str(dp.CONTRACT["principal_id_grammar"]) + "$"
 _NONBLANK = r"\S"
 
-# R3-4: spellings that mean "not verified" (compared after NFKC, case-fold and removal of every
-# non-word character, so `not verified`, `NOT  VERIFIED`, `n/a`, fullwidth or zero-width variants
-# all collapse to one key). The empty key covers punctuation-only values such as `-` or `?`.
-# The exact literal NOT VERIFIED stays the one sentinel for an unfilled field.
+# R3-4: spellings that mean "not verified" (compared after NFKC, case-fold, look-alike letter
+# mapping and removal of every non-word character, so `not verified`, `NOT  VERIFIED`, `n/a`,
+# fullwidth, zero-width or Cyrillic-homoglyph variants all collapse to one key). The empty key
+# covers punctuation-only values such as `-` or `?`. The exact literal NOT VERIFIED stays the one
+# sentinel for an unfilled WHOLE field; anywhere nested it is refused (`is_missing_marker`).
+# A deny-list is inherently incomplete: this catches the documented spellings plus one edit
+# (typo, transposition) of the longer ones; positive validation does the real work.
 PLACEHOLDER_KEYS = frozenset(
     {
         "",
         "notverified",
         "unverified",
         "notyetverified",
+        "notverifiedyet",
         "na",
         "notapplicable",
         "notavailable",
+        "unavailable",
         "tbd",
         "tbc",
+        "tba",
         "tobedetermined",
+        "tobefilled",
         "todo",
         "fixme",
+        "fillme",
+        "changeme",
         "unknown",
+        "unspecified",
+        "undefined",
         "placeholder",
         "pending",
         "null",
+        "none",
+        "nil",
+        "empty",
+        "missing",
+        "unset",
+        "notset",
+        "notrun",
+        "notprovided",
+        "notrecorded",
+        "nodata",
         "xxx",
     }
 )
+_FUZZY_KEYS = tuple(sorted(k for k in PLACEHOLDER_KEYS if len(k) >= 7))
+_BRACKET = re.compile(r"[\(\[\{]")
 
 
 def placeholder_key(value: str) -> str:
-    text = unicodedata.normalize("NFKC", value).casefold()
-    return re.sub(r"[\W_]+", "", text)
+    return re.sub(r"[\W_]+", "", fold(value))
+
+
+def _key_is_placeholder(key: str) -> bool:
+    return key in PLACEHOLDER_KEYS or (
+        len(key) >= 6 and any(within_one_edit(key, k) for k in _FUZZY_KEYS)
+    )
 
 
 def is_placeholder(value: Any) -> bool:
+    """A spelling of "missing" other than the exact sentinel. `N/A (see notes)` counts: the part
+    before a first bracket is compared too. A value that merely STARTS with a bracket
+    (`(1, 'Success')`) is judged whole, so a legitimate tuple text is not mistaken for one."""
+    if not isinstance(value, str) or value == NOT_VERIFIED:
+        return False
+    if _key_is_placeholder(placeholder_key(value)):
+        return True
+    head = _BRACKET.split(value, maxsplit=1)[0]
     return (
-        isinstance(value, str)
-        and value != NOT_VERIFIED
-        and placeholder_key(value) in PLACEHOLDER_KEYS
+        head != value and bool(placeholder_key(head)) and _key_is_placeholder(placeholder_key(head))
     )
+
+
+def is_missing_marker(value: Any) -> bool:
+    """The exact sentinel or any placeholder spelling: a string that stands for missing evidence."""
+    return isinstance(value, str) and (value == NOT_VERIFIED or is_placeholder(value))
 
 
 def _ci(word: str) -> str:
     return "".join(f"[{c.upper()}{c}][\\W_]*" if c.isalpha() else re.escape(c) for c in word)
 
 
-# The schema can express the ASCII subset of the rule (case and separators); NFKC variants are
-# caught by the validator only, which stays authoritative.
+# The schema can express the ASCII subset of the rule (case, separators, a bracketed remark after
+# the placeholder); NFKC, homoglyph and one-edit variants are caught by the validator only, which
+# stays authoritative.
+_ALTS = "|".join(_ci(k) for k in sorted(PLACEHOLDER_KEYS) if k)
 _PLACEHOLDER_SCHEMA = (
-    "^[\\W_]*(?:" + "|".join(_ci(k) for k in sorted(PLACEHOLDER_KEYS) if k) + ")?$"
+    "^(?:[\\W_]*(?:" + _ALTS + ")?[\\W_]*|[\\W_]*(?:" + _ALTS + ")[\\W_]*"
+    "[\\(\\[\\{][^\\)\\]\\}]*[\\)\\]\\}][\\W_]*)$"
 )
-_TEXT = {"type": "string", "pattern": _NONBLANK, "not": {"pattern": _PLACEHOLDER_SCHEMA}}
+_TEXT: dict[str, Any] = {"$ref": "#/$defs/kind_text"}
+_TEXT_DEF = {"type": "string", "pattern": _NONBLANK, "not": {"pattern": _PLACEHOLDER_SCHEMA}}
+# a JSON evidence value: no string leaf may be a placeholder or the sentinel (any depth)
+_JSON_VALUE_DEF: dict[str, Any] = {
+    "anyOf": [
+        {"type": "string", "not": {"pattern": _PLACEHOLDER_SCHEMA}},
+        {"type": ["number", "boolean", "null"]},
+        {"type": "array", "items": {"$ref": "#/$defs/kind_json_value"}},
+        {"type": "object", "additionalProperties": {"$ref": "#/$defs/kind_json_value"}},
+    ]
+}
 
 # kind -> JSON Schema fragment for a VERIFIED value of that kind.
 KINDS: dict[str, dict[str, Any]] = {
@@ -118,6 +193,16 @@ KINDS: dict[str, dict[str, Any]] = {
     "bool": {"type": "boolean"},
     "int": {"type": "integer"},
     "git_status": {"type": "string"},  # `git status --short` output; empty means clean
+    "hex32": {"type": "string", "pattern": _HEX32},
+    "hex64": {"type": "string", "pattern": _HEX64},
+    "sig_hex": {"type": "string", "pattern": _SIG},
+    "principal_id": {"type": "string", "pattern": _PRINCIPAL},
+    "pos_int": {"type": "integer", "minimum": 1},
+    "hex32_list": {
+        "type": "array",
+        "uniqueItems": True,
+        "items": {"type": "string", "pattern": _HEX32},
+    },
     "text_list": {"type": "array", "minItems": 1, "items": _TEXT},
     "int_list": {"type": "array", "minItems": 1, "items": {"type": "integer"}},
     "reason_list": {"type": "array", "items": _TEXT},
@@ -140,8 +225,12 @@ KINDS: dict[str, dict[str, Any]] = {
     "ref_list": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/kind_ref"}},
     "json": {
         "anyOf": [
-            {"type": "object", "minProperties": 1},
-            {"type": "array", "minItems": 1},
+            {
+                "type": "object",
+                "minProperties": 1,
+                "additionalProperties": {"$ref": "#/$defs/kind_json_value"},
+            },
+            {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/kind_json_value"}},
         ]
     },
 }
@@ -220,8 +309,10 @@ SECTIONS: dict[str, dict[str, str]] = {
         "candidate_sha256": "sha256",
         "development_status": "enum:development_status",
     },
-    # V4 custody evidence (PR #96 at d6a7cda; see V4-CUSTODY-COMPATIBILITY.md). Round 4: enough
-    # to re-run custody_gate.trust_gate, and the gate decision the checklist recorded.
+    # V4 custody evidence (PR #96 candidate named by dependency-manifest.json; see
+    # V4-CUSTODY-COMPATIBILITY.md). Enough to re-run custody_gate.trust_gate, and the gate decision
+    # the checklist recorded. V9: signed head pin, operator attestation, custodian approval and
+    # revocation lineage (field names follow the #96 pin / candidate / approval entries).
     "custody": {
         "store_ref": "text",
         "registry_ref": "ref",
@@ -244,6 +335,26 @@ SECTIONS: dict[str, dict[str, str]] = {
         "verifier_exit_code": "int",
         "verifier_status": "enum:verifier_status",
         "verifier_status_reasons": "reason_list",
+        "pin_ref": "ref",
+        "pin_id": "hex32",
+        "pin_pinned_by": "principal_id",
+        "pin_key_id": "hex64",
+        "pin_signature": "sig_hex",
+        "pin_seq": "pos_int",
+        "pin_entry_sha256": "sha256",
+        "pin_store_genesis_sha256": "sha256",
+        "pin_captured_at_utc": "utc_ts",
+        "max_pin_age_seconds": "pos_int",
+        "verified_at_utc": "utc_ts",
+        "approved_at_utc": "utc_ts",
+        "operator_key_id": "hex64",
+        "operator_signature": "sig_hex",
+        "approver_key_id": "hex64",
+        "approval_signature": "sig_hex",
+        "approval_id": "hex32",
+        "candidate_sha256": "sha256",
+        "revocation_ids": "hex32_list",
+        "acknowledged_revocations": "hex32_list",
         "gate_outcome": "enum:gate_outcome",
         "gate_reasons": "reason_list",
     },
@@ -385,10 +496,13 @@ CLAIM_OWNER: dict[str, str | None] = {
 REAL_READINESS_REQUIRES = ("DEP-01", "DEP-03")
 RESOLVED = "RESOLVED"
 
-# R3-1: markers that a REAL record must not carry in the fields that name its provenance.
-_MOCK_MARKER = re.compile(
-    r"(?<![a-z0-9])(synthetic|mock|fixture|test[\W_]*only|dummy|fake)(?![a-z0-9])"
-)
+# R3-1 / V9: markers that a REAL record must not carry in the fields that name its provenance.
+# Token based (NFKC, hidden characters removed, look-alike letters mapped, camelCase and digit
+# boundaries split), so `SyntheticRun1`, `SYNTHETIC1`, `S<ZWSP>YNTHETIC-1`, `MockSource` and
+# `FixtureSource` are caught. Inherently a deny-list: a determined writer can still avoid it, which
+# is why a REAL record must also pass every positive check.
+_MARKER_PREFIXES = ("synthetic", "fixture", "mock", "dummy", "fake")
+_MARKER_TOKEN = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+")
 REAL_MARKER_FIELDS = (
     ("identity", "record_id"),
     ("node", "hostname_class"),
@@ -494,6 +608,8 @@ def build_schema() -> dict[str, Any]:
     pass_props["custody"]["properties"]["verifier_exit_code"] = {"const": 0}
     pass_props["custody"]["properties"]["revocations_after_approval"] = {"const": 0}
     pass_props["custody"]["properties"]["revocation_seqs"] = {"const": []}
+    pass_props["custody"]["properties"]["revocation_ids"] = {"const": []}
+    pass_props["custody"]["properties"]["acknowledged_revocations"] = {"const": []}
     pass_props["evidence_class"] = {"const": "REAL_WINDOWS_RUN"}
     pass_cases: dict[str, Any] = {}
     for n in CASE_FIELDS:
@@ -516,6 +632,8 @@ def build_schema() -> dict[str, Any]:
         "additionalProperties": False,
         "required": list(TOP_LEVEL),
         "$defs": {
+            "kind_text": _TEXT_DEF,
+            "kind_json_value": _JSON_VALUE_DEF,
             "kind_ref": KINDS["ref"],
             "kind_ref_list": {
                 "type": "array",
@@ -565,6 +683,8 @@ class Report:
     dependencies: dict[str, str] = field(default_factory=dict)
     dependency_source: str = "derived"  # "derived" or "test_override" (never from the CLI)
     gate: cg.GateDecision | None = None
+    # summary flags the record cannot back with underlying evidence: still the operator's word
+    self_declared_flags: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -585,6 +705,7 @@ class Report:
                 if self.gate is None
                 else {"outcome": self.gate.outcome, "reasons": list(self.gate.reasons)}
             ),
+            "self_declared_flags": sorted(self.self_declared_flags),
             "windows_verified": False,  # never: this tool checks structure, not Windows
             "identity_authenticated": False,  # never: identities are declared strings
         }
@@ -610,6 +731,14 @@ def _kind_ok(kind: str, v: Any) -> bool:
         "bool": lambda x: type(x) is bool,
         "int": _is_int,
         "git_status": lambda x: isinstance(x, str),
+        "hex32": lambda x: _re(_HEX32, x),
+        "hex64": lambda x: _re(_HEX64, x),
+        "sig_hex": lambda x: _re(_SIG, x),
+        "principal_id": lambda x: _re(_PRINCIPAL, x),
+        "pos_int": lambda x: _is_int(x) and x >= 1,
+        "hex32_list": lambda x: (
+            isinstance(x, list) and all(_re(_HEX32, i) for i in x) and len(set(x)) == len(x)
+        ),
         "text_list": lambda x: isinstance(x, list) and bool(x) and all(_text_ok(i) for i in x),
         "int_list": lambda x: isinstance(x, list) and bool(x) and all(_is_int(i) for i in x),
         "reason_list": lambda x: isinstance(x, list) and all(_text_ok(i) for i in x),
@@ -621,13 +750,15 @@ def _kind_ok(kind: str, v: Any) -> bool:
         ),
         "ref": _ref_ok,
         "ref_list": lambda x: isinstance(x, list) and bool(x) and all(_ref_ok(i) for i in x),
-        "json": lambda x: isinstance(x, (dict, list)) and bool(x),
+        "json": lambda x: isinstance(x, (dict, list)) and bool(x) and not _json_has_marker(x),
     }
     return bool(checks[kind](v))
 
 
 def _text_ok(v: Any) -> bool:
-    return _re(_NONBLANK, v) and not is_placeholder(v)
+    # V9: the sentinel is not text. As a whole field it is intercepted before this runs; nested in
+    # a list or a reference path it is a refusal, exactly as in the JSON Schema.
+    return _re(_NONBLANK, v) and not is_missing_marker(v)
 
 
 def _ref_ok(v: Any) -> bool:
@@ -640,13 +771,19 @@ def _ref_ok(v: Any) -> bool:
 
 
 def _has_placeholder(v: Any) -> bool:
+    """True when a missing-evidence marker (sentinel or placeholder spelling) stands anywhere inside
+    the value: a string, a list item, a reference path, a structured value at any depth."""
     if isinstance(v, str):
-        return is_placeholder(v)
+        return is_missing_marker(v)
     if isinstance(v, list):
         return any(_has_placeholder(i) for i in v)
-    if isinstance(v, dict) and set(v) == {"path", "sha256"}:
-        return is_placeholder(v["path"])
+    if isinstance(v, dict):
+        return any(_has_placeholder(i) for i in v.values())
     return False
+
+
+def _json_has_marker(v: Any) -> bool:
+    return _has_placeholder(v)
 
 
 def _parses(text: str) -> bool:
@@ -683,7 +820,7 @@ def _check_fields(
         v = obj[k]
         if v == NOT_VERIFIED:
             unresolved.append(f"{path}.{k}")
-        elif kind not in ("json", "git_status") and _has_placeholder(v):
+        elif kind != "git_status" and _has_placeholder(v):
             r.errors.append(f"placeholder_value:{path}.{k}")
             unresolved.append(f"{path}.{k}")
         elif not _kind_ok(kind, v):
@@ -702,8 +839,78 @@ def _pin(text: Any) -> tuple[int, str] | None:
     return int(seq), digest
 
 
+# probe outcomes a case 6 result node may carry (filesystem_probes.OUTCOMES)
+PROBE_OUTCOMES = ("observed", "unsupported", "manual_required", "error")
+# summary flags with no underlying evidence field in the record: self-declared, never derived
+SELF_DECLARED = {
+    "1": ("first_last_time_msc_in_window",),
+    "2": ("hostile_context_identical",),
+    "3": ("terminal_contacted_before_validation",),
+}
+
+
+def _outcomes(v: Any) -> list[Any]:
+    """Every `outcome` value found in dict nodes anywhere inside `v` (filesystem_probes shape)."""
+    if isinstance(v, dict):
+        found = [v["outcome"]] if "outcome" in v and not isinstance(v["outcome"], dict) else []
+        return found + [x for i in v.values() for x in _outcomes(i)]
+    if isinstance(v, list):
+        return [x for i in v for x in _outcomes(i)]
+    return []
+
+
+def _check_case6(ev: Mapping[str, Any], res: str, cls: Any, n: str, r: Report) -> None:
+    """N1 residual: the two probe counters are derived from the probe outcomes in the record."""
+    nodes = [
+        o
+        for key in ("reparse_results", "crash_results", "lock_results")
+        for o in _outcomes(ev.get(key))
+    ]
+    bad = [o for o in nodes if o not in PROBE_OUTCOMES]
+    if bad:
+        r.errors.append(f"invalid_value:cases.{n}.evidence:probe_outcome_unknown")
+    flags = ("probe_error_count", "probe_manual_unresolved_count")
+    if not nodes:
+        r.self_declared_flags += [f"cases.{n}.evidence.{f}" for f in flags if f in ev]
+        if res == "PASS" and cls == "REAL_WINDOWS_RUN":
+            r.errors.append("pass_requires_probe_outcomes_in_case6_results")
+        return
+    derived = {
+        "probe_error_count": sum(o == "error" for o in nodes),
+        "probe_manual_unresolved_count": sum(o == "manual_required" for o in nodes),
+    }
+    for flag, want in derived.items():
+        if flag in ev and ev[flag] != want:
+            r.errors.append(f"derived_flag_contradicts_evidence:cases.{n}.evidence.{flag}")
+
+
+def _check_case7(ev: Mapping[str, Any], res: str, n: str, r: Report) -> None:
+    """V8B-2: allow-list; every observed reference not exactly an allowed read call counts."""
+    names = ev.get("observed_mt5_names")
+    if isinstance(names, list):
+        derived = len(non_allowed_keys(names))
+        if "forbidden_names_observed" in ev and ev["forbidden_names_observed"] != derived:
+            r.errors.append("derived_flag_contradicts_evidence:cases.7.forbidden_names_observed")
+        if res == "PASS" and derived:
+            r.errors.append("pass_contradicted_by_evidence:cases.7.forbidden_name_observed")
+    for key in ("initialize_args", "shutdown_paths"):
+        for text in _strings(ev.get(key)):
+            if mentions_forbidden_name(text):
+                r.errors.append(f"case7_forbidden_reference_in_evidence:{key}")
+                break
+
+
+def _strings(v: Any) -> list[str]:
+    """Every string key and string leaf inside a JSON value."""
+    if isinstance(v, dict):
+        return [k for k in v if isinstance(k, str)] + [x for i in v.values() for x in _strings(i)]
+    if isinstance(v, list):
+        return [x for i in v for x in _strings(i)]
+    return [v] if isinstance(v, str) else []
+
+
 def _check_cases(
-    cases: Any, r: Report, unresolved: list[str]
+    cases: Any, r: Report, unresolved: list[str], cls: Any = None
 ) -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
     results: dict[str, str] = {}
     evidence: dict[str, dict[str, Any]] = {}
@@ -735,12 +942,13 @@ def _check_cases(
         for flag, (a, b) in DERIVED_EQUALITY_FLAGS.get(n, {}).items():
             if {flag, a, b} <= set(ev) and ev[flag] != (ev[a] == ev[b]):
                 r.errors.append(f"derived_flag_contradicts_evidence:cases.{n}.evidence.{flag}")
-        if n == "7" and {"observed_mt5_names", "forbidden_names_observed"} <= set(ev):
-            seen = set(ev["observed_mt5_names"]) & set(FORBIDDEN_MT5_NAMES)
-            if ev["forbidden_names_observed"] != len(seen):
-                r.errors.append(
-                    "derived_flag_contradicts_evidence:cases.7.forbidden_names_observed"
-                )
+        r.self_declared_flags += [
+            f"cases.{n}.evidence.{f}" for f in SELF_DECLARED.get(n, ()) if f in ev
+        ]
+        if n == "6":
+            _check_case6(ev, res, cls, n, r)
+        if n == "7":
+            _check_case7(ev, res, n, r)
         if n == "5" and "variant_content_sha256" in ev:
             values = _leaves(ev["variant_content_sha256"])
             if not values or not all(_re(_SHA256, x) for x in values):
@@ -755,8 +963,6 @@ def _check_cases(
                     r.errors.append(f"pass_contradicted_by_evidence:cases.{n}.evidence.{key}")
             if n == "5":
                 _case5_pass(ev, r)
-            if n == "7" and set(ev.get("observed_mt5_names", ())) & set(FORBIDDEN_MT5_NAMES):
-                r.errors.append("pass_contradicted_by_evidence:cases.7.forbidden_name_observed")
         unresolved += case_unresolved
     return results, evidence
 
@@ -806,6 +1012,7 @@ def _check_verifier_argv(v: Mapping[str, dict[str, Any]], r: Report) -> cg.Verif
         ("--store", cu.get("store_ref")),
         ("--registry", (cu.get("registry_ref") or {}).get("path")),
         ("--store-head", cu.get("store_head")),
+        ("--pin", (cu.get("pin_ref") or {}).get("path")),
     )
     for flag, recorded in bindings:
         if flag in inv.flags and recorded is not None and inv.flags[flag] != recorded:
@@ -860,6 +1067,26 @@ def _custody_bundle(
         approval_entry_sha256=cu["approval_entry_sha256"],
         candidate_approval_seqs=tuple(cu["candidate_approval_seqs"]),
         pin_channel=cu["store_head_channel_kind"],
+        pin_path=cu["pin_ref"]["path"],
+        pin_id=cu["pin_id"],
+        pin_pinned_by=cu["pin_pinned_by"],
+        pin_key_id=cu["pin_key_id"],
+        pin_signature=cu["pin_signature"],
+        pin_seq=cu["pin_seq"],
+        pin_entry_sha256=cu["pin_entry_sha256"],
+        pin_store_genesis_sha256=cu["pin_store_genesis_sha256"],
+        pin_captured_at=_when(cu["pin_captured_at_utc"]),
+        max_pin_age_seconds=cu["max_pin_age_seconds"],
+        verified_at=_when(cu["verified_at_utc"]),
+        approved_at=_when(cu["approved_at_utc"]),
+        operator_key_id=cu["operator_key_id"],
+        operator_signature=cu["operator_signature"],
+        approver_key_id=cu["approver_key_id"],
+        approval_signature=cu["approval_signature"],
+        approval_id=cu["approval_id"],
+        candidate_sha256=cu["candidate_sha256"],
+        revocation_ids=tuple(cu["revocation_ids"]),
+        acknowledged_revocations=tuple(cu["acknowledged_revocations"]),
     )
 
 
@@ -920,6 +1147,20 @@ def _check_claims(record: Mapping[str, Any], deps: Mapping[str, str], r: Report)
     return frozenset(c for c in ce if CLAIM_OWNER.get(c) == "DEP-02")
 
 
+def has_mock_marker(text: object) -> bool:
+    """True when `text` carries a mock/synthetic/fixture marker (see _MARKER_PREFIXES)."""
+    if not isinstance(text, str):
+        return False
+    visible = ascii_lookalikes(strip_hidden(unicodedata.normalize("NFKC", text)))
+    tokens = [t.casefold() for t in _MARKER_TOKEN.findall(visible)]
+    if any(t.startswith(_MARKER_PREFIXES) for t in tokens):
+        return True
+    if any(a == "test" and b == "only" for a, b in zip(tokens, tokens[1:], strict=False)):
+        return True
+    joined = "".join(tokens)
+    return "synthetic" in joined or "fixture" in joined or "testonly" in joined
+
+
 def _check_real_markers(v: Mapping[str, dict[str, Any]], r: Report) -> None:
     for section, key in REAL_MARKER_FIELDS:
         value = v[section].get(key)
@@ -927,10 +1168,17 @@ def _check_real_markers(v: Mapping[str, dict[str, Any]], r: Report) -> None:
             continue
         texts = value if isinstance(value, list) else [value]
         for text in texts:
-            folded = unicodedata.normalize("NFKC", str(text)).casefold()
-            if _MOCK_MARKER.search(folded) or str(text) == ec.MOCK_SOURCE:
+            if has_mock_marker(text) or str(text) == ec.MOCK_SOURCE:
                 r.errors.append(f"real_record_carries_mock_marker:{section}.{key}")
                 break
+    rid = v["identity"].get("record_id")
+    if rid is not None and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{7,127}", str(rid)):
+        r.errors.append("real_record_id_malformed")  # positive check: ASCII id, >= 8 characters
+    sha = v["identity"].get("extractor_sha")
+    if sha is not None and not dp.head_matches_candidate(sha):
+        r.errors.append(
+            f"real_record_extractor_sha_not_pinned_pr96_candidate:{dp.classify_head(sha)}"
+        )
 
 
 def validate_record(
@@ -963,7 +1211,7 @@ def validate_record(
 
     unresolved: list[str] = []
     v = {s: _check_fields(record.get(s), f, s, r, unresolved) for s, f in SECTIONS.items()}
-    results, case_ev = _check_cases(record.get("cases"), r, unresolved)
+    results, case_ev = _check_cases(record.get("cases"), r, unresolved, cls)
     _check_execution(v, r)
 
     # checkout cleanliness is derived from the recorded evidence, never trusted as a flag

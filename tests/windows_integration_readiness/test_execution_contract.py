@@ -1,7 +1,8 @@
 """Finding B-M3 regression: the real-half execution path needs no operator-written code.
 
 Adversarial cases C1-C10 from the PR #95 remediation prompt, against the command contract read
-from PR #96 at d6a7cda, executed with a mock provider only. Every unsupported operation fails
+from the pinned PR #96 candidate (dependency-manifest.json), executed with a mock provider only.
+Every unsupported operation fails
 closed; every step without a reviewed interface is BLOCKED and the checklist says so.
 """
 
@@ -14,6 +15,7 @@ from typing import Any
 
 import pytest
 
+from tests.windows_integration_readiness import dependency_pin as dp
 from tests.windows_integration_readiness import execution_contract as ec
 from tests.windows_integration_readiness.execution_contract import ContractError, plan_invocation
 from tests.windows_integration_readiness.vectors import T0, TICKS_SYNTH, H
@@ -21,7 +23,7 @@ from tests.windows_integration_readiness.vectors import T0, TICKS_SYNTH, H
 REPO = Path(__file__).resolve().parents[2]
 DOCS = REPO / "docs" / "research"
 CHECKLIST = DOCS / "market-history-windows-readiness" / "WINDOWS-EXECUTION-CHECKLIST.md"
-SHA = "0123456789abcdef0123456789abcdef01234567"
+SHA = dp.CANDIDATE_SHA  # a real run must name exactly the pinned candidate head
 SYMBOL = "SYN-PREREGISTERED"
 
 
@@ -44,6 +46,15 @@ def argv(out: Path, **override: str | None) -> list[str]:
             continue
         out_argv += [k] if k in ec.EXTRACT_VALUELESS else [k, v]
     return out_argv
+
+
+def custody_args(base: Path) -> dict[str, str | None]:
+    """Operator attestation arguments a real (provider mt5) run must carry (V4 custody)."""
+    return {
+        "--operator": "synthetic-operator",
+        "--operator-key": str(base / "keys" / "operator.key"),
+        "--candidate-out": str(base / "candidates" / "candidate.json"),
+    }
 
 
 def plan(out: Path, args: list[str] | None = None, **kw: Any) -> ec.Plan:
@@ -195,7 +206,8 @@ def test_c7_missing_provenance_metadata(tmp_path: Path, missing: str) -> None:
 
 def test_c8_real_terminal_refused_offline(tmp_path: Path) -> None:
     assert _code(lambda: plan(tmp_path / "o", provider="mt5")) == "real_terminal_forbidden_offline"
-    p = plan(tmp_path / "o", provider="mt5", offline=False)  # a plan only; nothing is run
+    args = argv(tmp_path / "o", **custody_args(tmp_path))
+    p = plan(tmp_path / "o", args, provider="mt5", offline=False)  # a plan only; nothing is run
     assert _code(lambda: ec.run_mock(p, TICKS_SYNTH, extractor_sha=SHA, operator="op")) == (
         "run_mock_requires_mock_provider"
     )

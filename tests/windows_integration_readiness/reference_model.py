@@ -10,8 +10,9 @@ Independence is NOT uniform (finding B-M4); ORACLE-SPEC.md section 5 classifies 
   * SPECIFIED here (behaviour the extractor does not define, or defines differently, so the
     package states its own rule): `check_window`, `split_around_folds`, `check_time_fields`,
     the offset bound in `validate_segments`.
-Refusal codes use the extractor's names as read at PR #96 d6a7cda (minor F5) so a real-half
-result can be compared code for code; `basis` (`unsupported_offset_basis`) is not modelled.
+Refusal codes use the extractor's names as read at the pinned PR #96 candidate (minor F5) so
+a real-half result can be compared code for code; `basis` (`unsupported_offset_basis`) is not
+modelled.
 
 Pure Python, no I/O, no MT5, no `nexora` imports.
 """
@@ -238,9 +239,10 @@ def content_sha256(bodies: Iterable[bytes]) -> str:
 
 
 def order_report(ticks: Sequence[Tick]) -> dict[str, int]:
-    """RESTATED from the extractor's adjacency-only quality counting (quality.py at e74ad03 and
-    d6a7cda): compares each tick with its predecessor only, and ignores flags. Kept to document
-    the extractor's behaviour; it MISSES non-adjacent duplicates. The oracle for duplicates is
+    """RESTATED from the extractor's adjacency-only quality counting (quality.py at earlier #96
+    heads, see dependency-manifest.json stale references): compares each tick with its predecessor
+    only, and ignores flags. Kept to document the extractor's behaviour at those heads; it MISSES
+    non-adjacent duplicates. The oracle for duplicates is
     `duplicate_oracle.classify` (ORACLE-SPEC.md)."""
     nm = dup = same_ts = 0
     for p, c in zip(ticks, ticks[1:], strict=False):

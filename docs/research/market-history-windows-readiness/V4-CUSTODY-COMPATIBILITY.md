@@ -2,14 +2,16 @@
 
 | Field | Value |
 |---|---|
-| Reference | PR #96 `claude/market-history-fix-v4` at `d6a7cda72a88600e2ccf6554605f1c50478893ea`, read with `git show` only. PR #96 was not checked out, changed, commented on or reviewed here. |
-| Stack | #89 -> #91 -> #92 -> #93 (`e74ad035e7f21aa07528965da6ebe190c0512793`) -> #96 (`d6a7cda7...`) |
-| Status of the reference | **Not an approved baseline.** PR #96 Reviewer A round 2: REQUEST CHANGES, G1 NO-GO, 4 MAJOR (F1 forgeable approvals, F2 revocation replay, F3 verify/trust TOCTOU, N1 operator self-approval by a declared name). |
-| Consequence | Every TRUSTED step in this package is **BLOCKED** (DEP-01). The procedure below describes the V4 contract so the package is ready when the dependency resolves; it does not make TRUSTED reachable. |
+| Reference | PR #96 `claude/market-history-fix-v4` at the **candidate** head `1c536d5acdef2c9fe47ef5a6ecfb127595ef42b8` (single source: [dependency-manifest.json](dependency-manifest.json)), exported read-only. PR #96 was not checked out, changed, commented on or reviewed here. |
+| Status of the reference | **Candidate head, not a gate-approved baseline.** The candidate head is not the gate-approved baseline: `gate_approved_baseline_sha` is `null`, `custody_gate.V4_BASELINE_APPROVED` is `False`. A pin match proves only that a reviewed contract was read at that commit. |
+| Consequence | Every TRUSTED step in this package is **BLOCKED** (DEP-01, DEP-03). The procedure below describes the candidate contract so the package is ready when the dependency resolves; it does not make TRUSTED reachable. |
+| Re-pin | The pin is one parameter (`pr96_candidate.head_sha`). A new #96 head is adopted only by changing the manifest, re-running the live-export contract test and updating the compatibility tests; an abbreviated, mismatched, stale or unapproved head is refused (`extractor_sha_not_pinned_pr96_candidate:<class>`). |
 
-Everything quoted here (flags, codes, constants) was read at `d6a7cda7...` and must be re-verified at
-the SHA that actually runs (checklist A3). Nothing here invents a CLI option, an API or a Windows
-filesystem guarantee. Where an interface is missing, the dependency is recorded as BLOCKED.
+Everything quoted here (flags, codes, constants) was read at the candidate head and must be
+re-verified at the SHA that actually runs (checklist A3). Nothing here invents a CLI option, an API
+or a Windows filesystem guarantee. Where an interface is missing, the dependency is recorded as
+BLOCKED. Earlier #96 heads named in the manifest are listed under "Historical (stale) references"
+below and are not a contract for anything.
 
 ## What changed from V3 (the assumption Reviewer B found invalid)
 
@@ -20,16 +22,16 @@ and `extract._dataset_status` adds `legacy_anchor_is_not_custody_evidence` whene
 given without `--store`/`--registry`. The anchor-only step is removed from the matrix and the
 checklist.
 
-## The seven stages
+## The stages at the candidate head
 
 | # | Stage | Existing V4 interface (as read) | Who | Output / failure semantics |
 |---|---|---|---|---|
-| 1 | Candidate extraction | `scripts/extract_market_history.py ... --operator <id> --candidate-out <file outside --out>` | Operator | Dataset is born `UNTRUSTED`. The candidate (`nexora.market-history-anchor-candidate/1`) "grants nothing". `--candidate-out` without `--operator` is an argparse error. A candidate or anchor path inside the dataset gives `candidate_inside_dataset` / `anchor_inside_dataset`. An existing file gives `*_file_exists`. Exit 1 when verification problems or usability blockers exist. |
+| 1 | Candidate extraction | `scripts/extract_market_history.py ... --operator <id> --operator-key <private key outside checkout and dataset> --candidate-out <file outside --out>` (extractor `nexora.market-history-extractor/6`, manifest `nexora.market-history/4`) | Operator | Dataset is born `UNTRUSTED`. The candidate carries an operator Ed25519 signature and grants nothing. Operator id must match the strict grammar `[a-z0-9][a-z0-9._@-]{0,127}`; the planner refuses anything else. |
 | 2 | Content and manifest verification | `verify_market_history.py --dataset <dir>` (also re-run inside stages 3 and 5) | Anyone | `integrity:*` and `hard_defect:*` reasons. Without `--require-trusted` a cleanly verified but UNTRUSTED dataset exits 0 (Reviewer A I5), so automation must always pass `--require-trusted`. |
-| 3 | Independent custody approval | `scripts/custody_market_history.py approve --dataset --store --registry --custodian --evidence-ref --candidate` | Authorized custodian, distinct from operator and candidate creator | Appends a hash-chained approval entry. Refusals: `dataset_not_approvable`, `approval_refused:<why>` (for example `approver_not_authorized`, `self_approval_by_operator`), `store_inside_dataset`. Identity is a **declared** string compared after NFKC normalization and case folding. There is no signature (Reviewer A F1). |
-| 4 | EvidenceStore chain verification | `custody_market_history.py head --store <dir>` prints `{"chain": "ok"|<problem>, "head": "SEQ:SHA256"}` | Verifier | Exit 1 on a chain problem. The head must be pinned through an **independent channel** at verification time. |
-| 5 | TRUSTED eligibility | `verify_market_history.py --dataset --store --registry --store-head SEQ:SHA256 --require-trusted` | Second person, clean checkout, different session | Exit 0 only when `TRUSTED`. `TRUSTED` needs clean verification, no hard defects, schema `nexora.market-history/4`, a capability record that proves a supported platform and filesystem, a verifier on a proven platform, a recorded operator, and a valid, un-revoked approval bound to `dataset_id`, `content_sha256`, `manifest_sha256`, `symbol` and `window_raw_msc`. |
-| 6 | Revocation and pinned head | `custody_market_history.py revoke ...`; `--store-head` on verify | Custodian; verifier | Any later revoke entry wins, whoever wrote it. `--store-head` is optional in the V4 CLI. Without it, or with a stale pin, a truncated store can hide a revocation (Reviewer A F5). This package therefore requires a pin taken at verification time (stricter than V4). Reviewer A F2 (re-appending a revoked approval restores TRUSTED) is open on #96. |
+| 3 | Independent custody approval | `scripts/custody_market_history.py approve --dataset --store --registry --signing-key --evidence-ref --candidate` | Authorized custodian holding its own signing key, distinct from operator and candidate creator | Appends a hash-chained, signed approval entry (`approval_id`, `key_id`, signature, `acknowledged_revocations`). A candidate is reusable across approvals only with the revocation lineage acknowledged; replay is refused. |
+| 4 | Signed pin | `custody_market_history.py pin --store <dir> ...` (pin authority key; `keygen` creates throwaway keys) | Pin authority, independent of operator and custodian | Emits a signed pin (`pin_id`, `pinned_by`, `key_id`, `signature`, `seq`, `entry_sha256`, `store_genesis_sha256`, `captured_at`). `head` / `--store-head` remains an unsigned truncation check only. `recover-store` is a custodian recovery tool and not an evidence step. |
+| 5 | TRUSTED eligibility | `verify_market_history.py --dataset --store --registry --pin <pin.json> --max-pin-age-seconds <N> --require-trusted` | Second person, clean checkout, different session | Exit 0 only when `TRUSTED`. The pin must be signed by a registry principal, fresh within `--max-pin-age-seconds` (skew limit 300 s) and consistent with the store. |
+| 6 | Revocation lineage | `custody_market_history.py revoke ...`; approvals list `acknowledged_revocations` | Custodian; verifier | A later revoke wins whoever wrote it. A re-approval must acknowledge every revocation id; replay of a revoked approval is refused. |
 | 7 | Writer-lock ownership | Inside `extract`; lock file `.writer.lock`, format `nexora.writer-lock/2` | Extractor | OS advisory lock on a held descriptor (`flock` on POSIX, one-byte `msvcrt.locking` on Windows). **Nothing is ever reaped.** A second writer, or an unverifiable or foreign record, gives `writer_lock_held` (fail closed). The Windows path is "implemented, UNVERIFIED". An external `rm .writer.lock` admits a second writer (Reviewer A F6), so this package never instructs removing a lock while any run could be active. |
 
 ## Why TRUSTED is unreachable today (DEP-01)
@@ -40,8 +42,10 @@ checklist.
    TRUSTED at V4**, whoever approves it (Reviewer A I1). This is the correct fail-closed direction.
    It is also a programme blocker that needs an owner decision. It is not something this package
    can work around.
-2. **Custody design not approved.** Even on Linux, Reviewer A's F1, F2 and F3 mean a TRUSTED
-   verdict at `d6a7cda7...` is not evidence-grade.
+2. **Candidate not approved; principals unauthenticated.** The candidate is not a gate-approved
+   baseline (`V4_BASELINE_APPROVED = False`) and principal authentication is not independently
+   approved (`V4_PRINCIPAL_AUTHENTICATION_AVAILABLE = False`, DEP-03). A TRUSTED verdict at the
+   candidate is not evidence-grade.
 
 The checklist therefore ends at "dataset stays UNTRUSTED (development use only); TRUSTED BLOCKED
 (DEP-01)". `custody_gate.V4_BASELINE_APPROVED` is `False` and may be flipped only by an independent
@@ -57,11 +61,14 @@ review that approves the V4 custody baseline.
 | `custody.store_ref`, `registry_ref` | the store directory and registry file the **verifier** supplied (outside the dataset) |
 | `custody.approval_seq`, `approval_entry_sha256` | stdout of `custody_market_history.py approve` (`seq`, `entry_sha256`) |
 | `custody.store_head`, `store_head_channel_ref` | `custody_market_history.py head` at verification time, and where the pin was published |
+| `custody.pin_*`, `max_pin_age_seconds`, `verified_at_utc` | the signed pin file and the verifier invocation (`--pin`, `--max-pin-age-seconds`) |
+| `custody.operator_key_id`, `operator_signature`, `approver_key_id`, `approval_signature`, `approval_id`, `approved_at_utc`, `candidate_sha256` | the candidate file and the `approve` output |
+| `custody.revocation_ids`, `acknowledged_revocations` | revoke entries and the approval's acknowledged list |
 | `custody.revocations_after_approval`, `custody.revocation_seqs` | revoke entries for this dataset (`seq` list) and the count with `seq` > `approval_seq` |
 | `custody.candidate_approval_seqs` | `seq` of every approval entry for this candidate (round 4, X2) |
 | `custody.store_head_at_verification`, `custody.store_head_channel_kind` | `head` output at verification time; whether the pin came from an independent channel before verification (round 4, X3) |
 | `custody.verifier_argv`, `verifier_exit_code`, `verifier_status`, `verifier_status_reasons` | stage-5 invocation as an argv list (not free text), exit code and printed JSON |
-| `people.custodian`, `custody.approver_identities`, `custody.registry_identities` | the `--custodian` value used in stage 3, its registry id and every alias, and every id and alias in the verifier's registry |
+| `people.custodian`, `custody.approver_identities`, `custody.registry_identities` | the approver's registry id and every alias (stage 3), and every id and alias in the verifier's registry |
 | `custody.candidate_creator`, `custody.extraction_platform`, `custody.writer_lock`, `custody.store_chain` | candidate `created_by`, manifest `filesystem_capabilities.platform`, lock outcome, `head` `chain` |
 | `node.filesystem_type` and case 6 | the manifest's `filesystem_capabilities` record plus the package probes |
 
@@ -89,7 +96,7 @@ Round 4 (findings N3 and R3-2; cross-track X2, X3, X5, X6):
 | Rule | Refusal |
 |---|---|
 | The verifier invocation is an argv list: optional launcher (`python`, `uv run [--no-sync] python`), then `scripts/verify_market_history.py`, then only reviewed flags in `--flag value` form. `--dataset`, `--store`, `--registry`, `--store-head` and `--require-trusted` are all required. | `verifier_argv_not_v4_verifier` (for example `echo TRUSTED`), `verifier_argv_missing:<flag>`, `verifier_argv_malformed:<tok>`, `verifier_argv_duplicate:<flag>`, `verifier_argv_store_head_malformed`; unknown flag is STOP |
-| The recorded pin is the `--store-head` value of that invocation, and it equals the store head at verification in sequence **and** digest | `recorded_pin_absent_from_verifier_invocation`, `recorded_pin_differs_from_verifier_invocation`, `stale_pinned_head`, `pinned_head_digest_mismatch` |
+| The recorded pin is the `--pin` file of that invocation (its `seq` and `entry_sha256`), and it equals the store head at verification in sequence **and** digest | `recorded_pin_absent_from_verifier_invocation`, `recorded_pin_differs_from_verifier_invocation`, `stale_pinned_head`, `pinned_head_digest_mismatch` |
 | The approval lies inside the pinned chain; at the head sequence it is the head entry; no revocation beyond the pin | `approval_outside_pinned_chain`, `approval_entry_differs_from_pinned_head`, `approval_entry_sha256_not_recorded`, `revocation_outside_pinned_chain` |
 | Self-approval is compared over the approver's id **and every alias** (as V4 `_independence_problem` does); the alias set is mandatory and must be in the registry | `self_approval_by_operator`, `self_approval_by_candidate_creator`, `approver_alias_set_not_recorded`, `approver_alias_not_in_verifier_registry` |
 | Identities mirror PR #96 `normalize_identity` (no control or format characters, not empty) and are stricter: after NFKC and case-folding only `[a-z0-9._@+-]` is accepted, so confusable letters from other scripts are refused, not compared | `identity_ambiguous:<role>`, `identity_control_or_format_character:<role>`, `identity_empty:<role>` |
@@ -110,3 +117,24 @@ authenticate anything: the values are still declared by the people being checked
 
 See [DEPENDENCY-REGISTER.md](DEPENDENCY-REGISTER.md): DEP-01 (custody interface) and DEP-02 (writer
 lock) are owned by PR #96. PR #96 remains untouched by this package.
+
+## Historical (stale) references
+
+These earlier #96 heads appear only here and in the manifest's `stale_references`. They are
+**stale, obsolete and superseded** and must never be used as a contract or a pin; the gate and the
+planner classify them `STALE`.
+
+| Head | Status | Why it is not compatible |
+|---|---|---|
+| `d6a7cda72a88600e2ccf6554605f1c50478893ea` | stale, obsolete, superseded by the candidate | extractor `/5`; approvals took `--custodian` (declared name, no signature); verifier had only an unsigned `--store-head`; looser identity grammar |
+| `e74ad035e7f21aa07528965da6ebe190c0512793` | stale, obsolete, superseded (stack tip #93) | V3 anchor era; no custody store, signing or pin |
+
+## Candidate contract compatibility evidence
+
+- Gate/planner/validator constants are checked against the manifest by `test_v9_dependency_pin.py`.
+- `test_v9_pr96_live_export.py` exports the pinned head with `git archive` and compares CLI flags,
+  versions, schemas, the strict identity grammar (this package never accepts what #96 refuses) and
+  the MT5 allow-list against the real code; it skips explicitly (not a pass) when the object is absent.
+- `test_v9_custody_signed_pin.py` maps fixtures generated by running the real #96 `custody` module
+  (throwaway keys, public material only: single approval, revoke then re-approve, replay after
+  revocation) onto the bundle and asserts the gate decisions.

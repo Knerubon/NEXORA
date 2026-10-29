@@ -13,7 +13,16 @@ normalisation below catches spelling disguises and refuses ambiguous characters,
 about who a person is, and while PR #96 offers no principal authentication every bundle is also
 BLOCKED on that.
 
-Pure Python, no I/O, no `nexora` imports.
+V9: interfaces are read from the PR #96 CANDIDATE named by `dependency-manifest.json` (via
+`dependency_pin`), not from a hard-coded head. The candidate is not a gate-approved baseline. At the
+candidate a TRUSTED verdict also needs a head pin SIGNED by a pin authority (`--pin`,
+`--max-pin-age-seconds`), a signed operator attestation and a signed custodian approval whose
+revocation lineage is complete. This gate cannot verify signatures (no keys, no registry, no
+crypto offline); it checks that the recorded signature/key/pin/attestation evidence is present,
+well formed, consistent with the verifier invocation and with each other, and it records that the
+VERIFIER (not this gate) is the only component that checked the signatures.
+
+Pure Python, no `nexora` imports. The only I/O is `dependency_pin` reading its manifest.
 """
 
 from __future__ import annotations
@@ -22,14 +31,15 @@ import re
 import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 
-V4_REF_SHA = "d6a7cda72a88600e2ccf6554605f1c50478893ea"
-# scripts/verify_market_history.py argparse flags, as read at V4_REF_SHA.
-V4_VERIFY_FLAGS = frozenset(
-    {"--dataset", "--anchor", "--store", "--registry", "--store-head", "--require-trusted"}
-)
-V4_VERIFY_VALUELESS = frozenset({"--require-trusted"})
-V4_VERIFY_SCRIPT = "scripts/verify_market_history.py"
+from tests.windows_integration_readiness import dependency_pin as dp
+
+V4_REF_SHA = dp.CANDIDATE_SHA  # the PR #96 CANDIDATE head (not a gate-approved baseline)
+# scripts/verify_market_history.py argparse flags, as read at V4_REF_SHA (manifest contract).
+V4_VERIFY_FLAGS = frozenset(dp.CONTRACT["verify_flags"])
+V4_VERIFY_VALUELESS = frozenset(dp.CONTRACT["verify_valueless_flags"])
+V4_VERIFY_SCRIPT = dp.CONTRACT["verify_script"]
 # Launchers accepted in front of the script; anything else is not the reviewed verifier.
 V4_VERIFY_LAUNCHERS: tuple[tuple[str, ...], ...] = (
     (),
@@ -39,18 +49,18 @@ V4_VERIFY_LAUNCHERS: tuple[tuple[str, ...], ...] = (
 )
 # What this package requires of a verifier run that may be recorded as TRUSTED (stricter than the
 # V4 CLI, where `--store-head` is optional: Reviewer A F5).
-REQUIRED_VERIFY_FLAGS = frozenset(
-    {"--dataset", "--store", "--registry", "--store-head", "--require-trusted"}
-)
+REQUIRED_VERIFY_FLAGS = frozenset(dp.CONTRACT["verify_required_by_this_package"])
 # scripts/custody_market_history.py subcommands, as read at V4_REF_SHA.
-V4_CUSTODY_SUBCOMMANDS = ("approve", "revoke", "head")
-V4_EXTRACTOR_VERSION = "nexora.market-history-extractor/5"  # extract.EXTRACTOR_VERSION
-V4_MANIFEST_SCHEMA = "nexora.market-history/4"  # extract.SCHEMA_VERSION
-V4_PROVEN_PLATFORMS = frozenset({"linux"})  # fsutil.PROVEN_PLATFORMS
+V4_CUSTODY_SUBCOMMANDS = tuple(dp.CONTRACT["custody_subcommands"])
+V4_EXTRACTOR_VERSION = dp.CONTRACT["extractor_version"]  # extract.EXTRACTOR_VERSION
+V4_MANIFEST_SCHEMA = dp.CONTRACT["manifest_schema"]  # SCHEMA_VERSION
+V4_PROVEN_PLATFORMS = frozenset(dp.CONTRACT["proven_platforms"])  # fsutil.PROVEN_PLATFORMS
+PIN_MAX_SKEW = timedelta(seconds=int(dp.CONTRACT["pin_max_skew_seconds"]))
 # Set to True only by an independent review that approves PR #96's custody design (DEP-01).
 V4_BASELINE_APPROVED = False
-# Set to True only when PR #96 authenticates operators and custodians (key identities, not
-# declared strings; PR #96 Reviewer A F1 and N1) and an independent review approves it.
+# Set to True only when an independent review approves PR #96's principal authentication. The
+# candidate offers Ed25519 key identities (signed attestation/approval/pin) but they are unreviewed
+# and this offline gate cannot verify a signature, so declared identities stay unauthenticated.
 V4_PRINCIPAL_AUTHENTICATION_AVAILABLE = False
 # Set to True only when real Windows evidence resolves DEP-02. Until then nothing may be claimed.
 DEP02_WINDOWS_GUARANTEES_RESOLVED = False
@@ -81,9 +91,13 @@ STOP = "STOP"
 
 _HEAD_PIN = re.compile(r"^([1-9][0-9]*):([0-9a-f]{64})$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
-# Conservative identity alphabet after NFKC + case-fold. Anything outside it (homoglyphs from other
-# scripts, format or control characters, symbols) is AMBIGUOUS and refused, not compared.
-_IDENTITY = re.compile(r"^[a-z0-9][a-z0-9._@+-]{0,199}$")
+_HEX32 = re.compile(r"^[0-9a-f]{32}$")
+_HEX64 = re.compile(r"^[0-9a-f]{64}$")
+_SIG = re.compile(r"^[0-9a-f]{128}$")
+_POSITIVE_INT = re.compile(r"^[1-9][0-9]*$")
+# PR #96 `custody.normalize_identity`: the ONLY accepted principal id, ASCII, matched on the raw
+# string with no normalisation. This package accepts exactly that grammar, never a superset.
+_IDENTITY = re.compile(dp.CONTRACT["principal_id_grammar"])
 
 
 @dataclass(frozen=True)
@@ -118,9 +132,32 @@ class CustodyBundle:
     pinned_head_sha256: str | None = None  # the SHA256 recorded for the pin
     store_head_sha256_at_verification: str | None = None
     approval_entry_sha256: str | None = None
-    candidate_approval_seqs: tuple[int, ...] = ()  # every approval entry for this candidate
+    # every approval entry for this candidate. None / empty is NOT "no approvals": it is "not
+    # recorded" and blocks (a revocation replay cannot be seen without it).
+    candidate_approval_seqs: tuple[int, ...] | None = None
     pin_channel: str = ""
     same_store_pin_claimed_independent: bool = False
+    # V9 signed pin, attestation, approval and revocation lineage (all default to NOT recorded)
+    pin_path: str | None = None
+    pin_id: str | None = None
+    pin_pinned_by: str | None = None
+    pin_key_id: str | None = None
+    pin_signature: str | None = None
+    pin_seq: int | None = None
+    pin_entry_sha256: str | None = None
+    pin_store_genesis_sha256: str | None = None
+    pin_captured_at: datetime | None = None
+    max_pin_age_seconds: int | None = None
+    verified_at: datetime | None = None
+    approved_at: datetime | None = None
+    operator_key_id: str | None = None
+    operator_signature: str | None = None
+    approver_key_id: str | None = None
+    approval_signature: str | None = None
+    approval_id: str | None = None
+    candidate_sha256: str | None = None
+    revocation_ids: tuple[str, ...] | None = None
+    acknowledged_revocations: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -140,23 +177,26 @@ class VerifyInvocation:
         m = _HEAD_PIN.match(self.flags.get("--store-head", ""))
         return (int(m.group(1)), m.group(2)) if m else None
 
+    @property
+    def max_pin_age_seconds(self) -> int | None:
+        text = self.flags.get("--max-pin-age-seconds", "")
+        return int(text) if _POSITIVE_INT.match(text) else None
+
 
 def identity_problem(identity: object) -> str:
-    """'' when `identity` is an acceptable declared identity, else a reason code.
+    """'' when `identity` is a principal id PR #96 accepts, else a reason code.
 
-    Mirrors PR #96 `custody.normalize_identity` (string, NFKC, no control or format characters,
-    1-200 characters) and is stricter: after NFKC and case-folding only `[a-z0-9._@+-]` is accepted,
-    so confusable letters from other scripts and zero-width characters are refused as ambiguous
-    rather than compared. This is string hygiene, not authentication."""
+    PR #96 `custody.normalize_identity` accepts only `[a-z0-9][a-z0-9._@-]{0,127}` on the raw
+    string. This function accepts exactly that and nothing else: no NFKC, case-folding, trimming
+    or `+`, so it can never accept an identity #96 refuses. (Collisions between spellings are still
+    detected over-blockingly by `norm_identity`.) This is string hygiene, not authentication."""
     if type(identity) is not str:
         return "identity_not_a_string"
-    text = unicodedata.normalize("NFKC", identity)
-    if any(unicodedata.category(c).startswith("C") for c in text):
+    if any(unicodedata.category(c).startswith("C") for c in identity):
         return "identity_control_or_format_character"
-    text = " ".join(text.split()).casefold()
-    if not text:
+    if not " ".join(unicodedata.normalize("NFKC", identity).split()):
         return "identity_empty"
-    if not _IDENTITY.match(text):
+    if not _IDENTITY.fullmatch(identity):
         return "identity_ambiguous"
     return ""
 
@@ -206,7 +246,146 @@ def parse_verify_argv(argv: Sequence[str]) -> VerifyInvocation:
         problems.append(f"verifier_argv_missing:{f}")
     if "--store-head" in flags and not _HEAD_PIN.match(flags["--store-head"]):
         problems.append("verifier_argv_store_head_malformed")
+    if "--max-pin-age-seconds" in flags and not _POSITIVE_INT.match(flags["--max-pin-age-seconds"]):
+        problems.append("verifier_argv_max_pin_age_malformed")
     return VerifyInvocation(flags, tuple(problems), tuple(unknown))
+
+
+def _present(value: object, pattern: re.Pattern[str], name: str, blocked: list[str]) -> bool:
+    if value is None:
+        blocked.append(f"{name}_not_recorded")
+        return False
+    if type(value) is not str or not pattern.match(value):
+        blocked.append(f"{name}_malformed")
+        return False
+    return True
+
+
+def _lineage(b: CustodyBundle, blocked: list[str]) -> None:
+    """Revocation lineage as PR #96 `evaluate_custody` decides it: an approval must acknowledge the
+    id of every EARLIER revocation of the dataset, and may acknowledge nothing that is not in the
+    chain. Evidence shape only; the verifier decides over the real chain."""
+    ids, ack = b.revocation_ids, b.acknowledged_revocations
+    if ids is None:
+        blocked.append("revocation_ids_not_recorded")
+    elif len(ids) != len(b.revocation_seqs):
+        blocked.append("revocation_ids_do_not_match_revocation_seqs")
+    elif not all(type(i) is str and _HEX32.match(i) for i in ids) or len(set(ids)) != len(ids):
+        blocked.append("revocation_ids_malformed")
+    if ack is None:
+        blocked.append("acknowledged_revocations_not_recorded")
+    elif not all(type(i) is str and _HEX32.match(i) for i in ack) or list(ack) != sorted(set(ack)):
+        blocked.append("acknowledged_revocations_malformed")
+    if ids is None or ack is None or len(ids) != len(b.revocation_seqs):
+        return
+    assert b.approval_seq is not None
+    earlier = {i for i, seq in zip(ids, b.revocation_seqs, strict=True) if seq < b.approval_seq}
+    if not earlier <= set(ack):
+        blocked.append("approval_omits_earlier_revocation")
+    if set(ack) - set(ids):
+        blocked.append("revocation_lineage_broken")
+
+
+def _signed_pin_and_attestation(
+    b: CustodyBundle, inv: VerifyInvocation, blocked: list[str]
+) -> None:
+    # the invocation: `--pin` and `--max-pin-age-seconds` are required flags (see
+    # REQUIRED_VERIFY_FLAGS); here they must agree with what was recorded
+    age_arg = inv.max_pin_age_seconds
+    if b.max_pin_age_seconds is None:
+        blocked.append("max_pin_age_not_recorded")
+    elif type(b.max_pin_age_seconds) is not int or b.max_pin_age_seconds <= 0:
+        blocked.append("max_pin_age_malformed")
+    elif age_arg is not None and age_arg != b.max_pin_age_seconds:
+        blocked.append("recorded_max_pin_age_differs_from_verifier_invocation")
+    pin_arg = inv.flags.get("--pin")
+    if b.pin_path is None:
+        blocked.append("pin_file_not_recorded")
+    elif pin_arg is not None and pin_arg != b.pin_path:
+        blocked.append("recorded_pin_path_differs_from_verifier_invocation")
+
+    have = {
+        "pin_id": _present(b.pin_id, _HEX32, "pin_id", blocked),
+        "pin_key_id": _present(b.pin_key_id, _HEX64, "pin_key_id", blocked),
+        "pin_signature": _present(b.pin_signature, _SIG, "pin_signature", blocked),
+        "pin_entry_sha256": _present(b.pin_entry_sha256, _SHA256, "pin_entry_sha256", blocked),
+        "pin_store_genesis_sha256": _present(
+            b.pin_store_genesis_sha256, _SHA256, "pin_store_genesis_sha256", blocked
+        ),
+        "operator_key_id": _present(b.operator_key_id, _HEX64, "operator_key_id", blocked),
+        "operator_signature": _present(b.operator_signature, _SIG, "operator_signature", blocked),
+        "approver_key_id": _present(b.approver_key_id, _HEX64, "approver_key_id", blocked),
+        "approval_signature": _present(b.approval_signature, _SIG, "approval_signature", blocked),
+        "approval_id": _present(b.approval_id, _HEX32, "approval_id", blocked),
+        "candidate_sha256": _present(b.candidate_sha256, _SHA256, "candidate_sha256", blocked),
+    }
+    if b.pin_seq is None or type(b.pin_seq) is not int or b.pin_seq < 1:
+        blocked.append("pin_seq_not_recorded")
+    if b.pin_pinned_by is None:
+        blocked.append("pin_pinned_by_not_recorded")
+    elif problem := identity_problem(b.pin_pinned_by):
+        blocked.append(f"{problem}:pin_authority")
+    if b.pin_captured_at is None:
+        blocked.append("pin_captured_at_not_recorded")
+    if b.verified_at is None:
+        blocked.append("verification_time_not_recorded")
+    if b.approved_at is None:
+        blocked.append("approved_at_not_recorded")
+
+    # freshness (#96 pin_reasons): not in the future beyond the skew, not older than max age
+    if b.pin_captured_at is not None and b.verified_at is not None:
+        if b.pin_captured_at > b.verified_at + PIN_MAX_SKEW:
+            blocked.append("pin_in_the_future")
+        elif (
+            type(b.max_pin_age_seconds) is int
+            and b.max_pin_age_seconds > 0
+            and b.verified_at - b.pin_captured_at > timedelta(seconds=b.max_pin_age_seconds)
+        ):
+            blocked.append("pin_stale")
+    if b.approved_at is not None and b.pin_captured_at is not None:
+        if b.approved_at > b.pin_captured_at + PIN_MAX_SKEW:
+            blocked.append("approved_after_pin_capture")
+
+    # independence of the pin authority and separation of keys (over-blocking: #96's registry
+    # already forbids shared keys, and a pin authority that is also approver/operator)
+    if b.pin_pinned_by is not None and not identity_problem(b.pin_pinned_by):
+        others = {norm_identity(x) for x in b.approver_identities}
+        for who in (b.approver, b.operator, b.candidate_creator):
+            if who is not None:
+                others.add(norm_identity(who))
+        if norm_identity(b.pin_pinned_by) in others:
+            blocked.append("pin_not_independent")
+    keys = [("pin", b.pin_key_id), ("operator", b.operator_key_id), ("approver", b.approver_key_id)]
+    seen = [(role, k) for role, k in keys if k is not None]
+    for i, (role_a, key_a) in enumerate(seen):
+        for role_b, key_b in seen[i + 1 :]:
+            if key_a == key_b:
+                blocked.append(f"key_shared_between:{role_a}:{role_b}")
+    if (
+        b.operator_signature is not None
+        and b.operator_signature == b.approval_signature
+        and have["operator_signature"]
+    ):
+        blocked.append("signature_reused_across_purposes")
+
+    # coverage (#96 _pin_coverage_problem and pin_ahead_of_store_truncated)
+    if b.pin_seq is not None and type(b.pin_seq) is int and b.pin_seq >= 1:
+        if b.approval_seq is not None:
+            if b.approval_seq > b.pin_seq:
+                blocked.append("approval_not_covered_by_pin")
+            elif b.approval_seq == b.pin_seq and have["pin_entry_sha256"]:
+                if b.approval_entry_sha256 != b.pin_entry_sha256:
+                    blocked.append("approval_entry_differs_from_signed_pin")
+        head = b.store_head_seq_at_verification
+        if head is not None and b.pin_seq > head:
+            blocked.append("pin_ahead_of_store_truncated")
+        if (
+            head is not None
+            and b.pin_seq == head
+            and have["pin_entry_sha256"]
+            and b.pin_entry_sha256 != b.store_head_sha256_at_verification
+        ):
+            blocked.append("signed_pin_head_mismatch")
 
 
 def trust_gate(b: CustodyBundle) -> GateDecision:
@@ -222,6 +401,10 @@ def trust_gate(b: CustodyBundle) -> GateDecision:
         stop.append("extractor_sha_changed_since_checklist")
     if b.extractor_version != b.checklist_extractor_version:
         stop.append(f"extractor_version_changed:{b.extractor_version}")
+    # V9: the extractor/verifier head must be EXACTLY the pinned PR #96 candidate (full SHA)
+    head_class = dp.classify_head(b.run_extractor_sha)
+    if head_class != dp.PINNED:
+        blocked.append(f"extractor_sha_not_pinned_pr96_candidate:{head_class}")
 
     # B1/B7 trust needs the structured V4 verifier invocation, never a V3 anchor alone (R3-1/R3-2)
     inv = parse_verify_argv(b.verify_argv)
@@ -269,11 +452,19 @@ def trust_gate(b: CustodyBundle) -> GateDecision:
         # candidate also wins, so re-appending a revoked approval cannot restore it.
         if any(seq > b.approval_seq for seq in b.revocation_seqs):
             blocked.append("approval_revoked")
-        first = min((*b.candidate_approval_seqs, b.approval_seq))
-        if b.approval_seq not in b.candidate_approval_seqs and b.candidate_approval_seqs:
+        seqs = b.candidate_approval_seqs
+        if not seqs:
+            # V9: omission must fail closed (it used to default to "no replay to look for")
+            blocked.append("candidate_approval_seqs_not_recorded")
+            seqs = ()
+        elif b.approval_seq not in seqs:
             blocked.append("approval_not_among_candidate_approvals")
+        if len(set(seqs)) > 1:
+            blocked.append("candidate_reused_across_approvals")  # #96: candidate_reused
+        first = min((*seqs, b.approval_seq))
         if any(seq > first for seq in b.revocation_seqs) and "approval_revoked" not in blocked:
             blocked.append("approval_replayed_after_revocation")
+        _lineage(b, blocked)
 
     # B5 chain integrity
     if b.store_chain != "ok":
@@ -312,6 +503,9 @@ def trust_gate(b: CustodyBundle) -> GateDecision:
         blocked.append("store_head_pin_not_from_independent_channel")
     if b.same_store_pin_claimed_independent:
         blocked.append("same_store_pin_presented_as_independent")
+
+    # V9 signed pin, attestation, approval evidence (recorded evidence only; see module docstring)
+    _signed_pin_and_attestation(b, inv, blocked)
 
     # B9 guarantees: fail-closed allow-list (R3-2); V4 cannot trust a non-proven platform
     for g in sorted(b.claimed_verified_guarantees):

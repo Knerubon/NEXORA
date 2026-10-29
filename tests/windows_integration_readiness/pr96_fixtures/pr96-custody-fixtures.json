@@ -1,0 +1,435 @@
+{
+  "generated_for_head": "see dependency-manifest.json pr96_candidate.head_sha",
+  "generator": "tests/windows_integration_readiness/pr96_fixtures/generate_pr96_fixtures.py",
+  "manifest": {
+    "content_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "dataset_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "manifest_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "provenance": {
+      "operator": "synthetic-operator",
+      "retrieved_at": "2026-01-01T00:00:00+00:00"
+    },
+    "symbol": "SYN",
+    "window_raw_msc": [
+      1700000000000,
+      1700000005000
+    ]
+  },
+  "note": "Public material produced by the real #96 custody code with throwaway keys. Synthetic dataset binding; no ticks, terminal, broker or real identity. Grants nothing.",
+  "registry": {
+    "principals": [
+      {
+        "id": "synthetic-operator",
+        "keys": [
+          {
+            "ed25519": "2b92811bff1d000a1b4e00ef35e42c7ef91f1b222946098c51e2dfe4d377ac1b"
+          }
+        ],
+        "roles": [
+          "operator"
+        ]
+      },
+      {
+        "id": "synthetic-custodian",
+        "keys": [
+          {
+            "ed25519": "7543f4e8c85b4b7a850538d802c1b3c868de2287208701ace80689aad8aa9f5c"
+          }
+        ],
+        "roles": [
+          "custodian"
+        ]
+      },
+      {
+        "id": "synthetic-pin-authority",
+        "keys": [
+          {
+            "ed25519": "38bfd898968ee50e14cf29347325ee3d232bb637ea6d2bc2c0cffa7da92626c1"
+          }
+        ],
+        "roles": [
+          "pin_authority"
+        ]
+      }
+    ],
+    "schema": "nexora.market-history-principals/2"
+  },
+  "scenarios": {
+    "A_single_approval": {
+      "candidate": {
+        "candidate_sha256": "1fbff33b814c0893c289a08abecd2989b9527e69740d6ce8d122018a6e19d0fc",
+        "content_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "created_at": "2026-01-01T00:01:00+00:00",
+        "dataset_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "manifest_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "nonce": "382b62fc67271ba91b244f42b67bf69f",
+        "operator": "synthetic-operator",
+        "operator_key_id": "f9983cef63d390eb235d752f1cd6c91cb4be8236424d98d4948bd3d45e4c9e8a",
+        "operator_signature": "9ccf37aa986473f9683bd9433a454b0feb5dc0315fd1f5b6251e167b4a13830a39919ea2e11dbacc379bbab5dec05b80393c2b9d72a9b9852af246158cafb30b",
+        "schema": "nexora.market-history-anchor-candidate/2",
+        "symbol": "SYN",
+        "window_raw_msc": [
+          1700000000000,
+          1700000005000
+        ]
+      },
+      "entries": [
+        {
+          "acknowledged_revocations": [],
+          "approval_id": "7dbc2faa3cf686b9e001e564d9f6e891",
+          "approved_at": "2026-01-01T00:02:00+00:00",
+          "approver": "synthetic-custodian",
+          "approver_key_id": "66bc351a5592540eb6cf0e20b2b2775aca1f55dba9f251c9dd46d23a52c3348c",
+          "candidate": {
+            "candidate_sha256": "1fbff33b814c0893c289a08abecd2989b9527e69740d6ce8d122018a6e19d0fc",
+            "content_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "created_at": "2026-01-01T00:01:00+00:00",
+            "dataset_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "manifest_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "nonce": "382b62fc67271ba91b244f42b67bf69f",
+            "operator": "synthetic-operator",
+            "operator_key_id": "f9983cef63d390eb235d752f1cd6c91cb4be8236424d98d4948bd3d45e4c9e8a",
+            "operator_signature": "9ccf37aa986473f9683bd9433a454b0feb5dc0315fd1f5b6251e167b4a13830a39919ea2e11dbacc379bbab5dec05b80393c2b9d72a9b9852af246158cafb30b",
+            "schema": "nexora.market-history-anchor-candidate/2",
+            "symbol": "SYN",
+            "window_raw_msc": [
+              1700000000000,
+              1700000005000
+            ]
+          },
+          "candidate_sha256": "1fbff33b814c0893c289a08abecd2989b9527e69740d6ce8d122018a6e19d0fc",
+          "content_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "dataset_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "decision": "approve",
+          "entry_sha256": "6ad4a4a53dc5348582e8804fd47aca1acaa48c05f06279f50097e75966f6cdd8",
+          "evidence_ref": "synthetic-ticket-1",
+          "manifest_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "prev_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "schema": "nexora.market-history-approval/2",
+          "seq": 1,
+          "signature": "aa0a0020bb90228e13be3659b0c7e5e1390142157d10985b45a8bc62445152fde5e77a72489c71185e9978d65ebc8d14155e04a38fe9e67a421a3208f7a91008",
+          "symbol": "SYN",
+          "window_raw_msc": [
+            1700000000000,
+            1700000005000
+          ]
+        }
+      ],
+      "evaluated_at": "2026-01-01T00:10:00+00:00",
+      "max_pin_age_seconds": 3600,
+      "pins": [
+        {
+          "captured_at": "2026-01-01T00:03:00+00:00",
+          "entry_sha256": "6ad4a4a53dc5348582e8804fd47aca1acaa48c05f06279f50097e75966f6cdd8",
+          "pin_id": "cf0ebd45c2ff34ae1dc88ce4ad4dd2cd",
+          "pinned_by": "synthetic-pin-authority",
+          "pinned_by_key_id": "3a2606dbe98dde52368686989810da5389c160a1312ca6aadb26fa2996a92025",
+          "previous_pin_id": null,
+          "reanchor_ref": null,
+          "schema": "nexora.market-history-head-pin/1",
+          "seq": 1,
+          "signature": "10abaf16f00eec89cecc68955769f3c4f42c46eb23027089382c2b43beb5d99540d1a951423aa8c5ac0c7ff64a577710da38e6de24d9e0e6de2135efdfd46b04",
+          "store_genesis_sha256": "6ad4a4a53dc5348582e8804fd47aca1acaa48c05f06279f50097e75966f6cdd8"
+        }
+      ],
+      "verdict": {
+        "approval_seq": 1,
+        "approved": true,
+        "reasons": []
+      }
+    },
+    "B_revoke_then_reapprove": {
+      "candidate": {
+        "candidate_sha256": "760c289dde5cef67ea8208899cc577740df31882b30c18a3014867c0d415fb76",
+        "content_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "created_at": "2026-01-01T00:05:00+00:00",
+        "dataset_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "manifest_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "nonce": "0ff2bac64e1847607d771676796c18f9",
+        "operator": "synthetic-operator",
+        "operator_key_id": "f9983cef63d390eb235d752f1cd6c91cb4be8236424d98d4948bd3d45e4c9e8a",
+        "operator_signature": "84bb422f8b57d6ac0d823964cadbe4ccf43669d3f2dc8a4c6d412e6c7c9ae155022322b6ede8b98ab52c88950f8c72fdc07a1067aabb212500fc60e02661b90d",
+        "schema": "nexora.market-history-anchor-candidate/2",
+        "symbol": "SYN",
+        "window_raw_msc": [
+          1700000000000,
+          1700000005000
+        ]
+      },
+      "entries": [
+        {
+          "acknowledged_revocations": [],
+          "approval_id": "eacba5cd5e04d1f4a569a0fd6f050a3a",
+          "approved_at": "2026-01-01T00:02:00+00:00",
+          "approver": "synthetic-custodian",
+          "approver_key_id": "66bc351a5592540eb6cf0e20b2b2775aca1f55dba9f251c9dd46d23a52c3348c",
+          "candidate": {
+            "candidate_sha256": "6502488e61672b94e2e1a775d513ac7879726e87f63cfb536102ea7472eed16c",
+            "content_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "created_at": "2026-01-01T00:01:00+00:00",
+            "dataset_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "manifest_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "nonce": "da2769cca24ef8719f49d44069840ecd",
+            "operator": "synthetic-operator",
+            "operator_key_id": "f9983cef63d390eb235d752f1cd6c91cb4be8236424d98d4948bd3d45e4c9e8a",
+            "operator_signature": "74e119f3375805c941f1f4670e217c070547c2cabb06023d322457b28e4e28b598505f85d2e800f1744f00f947c49dcadadef175f7852cfb7553a8dc20567f0d",
+            "schema": "nexora.market-history-anchor-candidate/2",
+            "symbol": "SYN",
+            "window_raw_msc": [
+              1700000000000,
+              1700000005000
+            ]
+          },
+          "candidate_sha256": "6502488e61672b94e2e1a775d513ac7879726e87f63cfb536102ea7472eed16c",
+          "content_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "dataset_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "decision": "approve",
+          "entry_sha256": "0881471789f7d94e99485c9d1579c8a9140a64fcca194fe656254a444de42858",
+          "evidence_ref": "t-1",
+          "manifest_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "prev_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "schema": "nexora.market-history-approval/2",
+          "seq": 1,
+          "signature": "1edfa8ab13d88cc3cb7afe933c8afffef7dc0e20d00bfded2045e3485beb1f05cda5dcd5e08c405337b4da1dbab4ae1254b84c0ec8011d8f31203e4f2784950d",
+          "symbol": "SYN",
+          "window_raw_msc": [
+            1700000000000,
+            1700000005000
+          ]
+        },
+        {
+          "content_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "dataset_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "decision": "revoke",
+          "entry_sha256": "a7127bf4511a17766e2aac8dfb818fe1a404dd5da407b267b4f1fe2bf7b56782",
+          "evidence_ref": "t-2",
+          "manifest_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "prev_sha256": "0881471789f7d94e99485c9d1579c8a9140a64fcca194fe656254a444de42858",
+          "revocation_id": "c334dd4d21da4683de45d841961ad2f4",
+          "revoked_at": "2026-01-01T00:04:00+00:00",
+          "revoker": "synthetic-custodian",
+          "revoker_key_id": "66bc351a5592540eb6cf0e20b2b2775aca1f55dba9f251c9dd46d23a52c3348c",
+          "schema": "nexora.market-history-approval/2",
+          "seq": 2,
+          "signature": "038f2049ceb6ba3bf73f0e1e4961ff29991b612ca91b7c01afd6bb6ce1aa1d04218244878e3213d822dc2faa9c5608cff2dde78c7a807397511b39f917f47f0d",
+          "symbol": "SYN",
+          "window_raw_msc": [
+            1700000000000,
+            1700000005000
+          ]
+        },
+        {
+          "acknowledged_revocations": [
+            "c334dd4d21da4683de45d841961ad2f4"
+          ],
+          "approval_id": "4edb0fa32d208ea2c974c9cca2469705",
+          "approved_at": "2026-01-01T00:06:00+00:00",
+          "approver": "synthetic-custodian",
+          "approver_key_id": "66bc351a5592540eb6cf0e20b2b2775aca1f55dba9f251c9dd46d23a52c3348c",
+          "candidate": {
+            "candidate_sha256": "760c289dde5cef67ea8208899cc577740df31882b30c18a3014867c0d415fb76",
+            "content_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "created_at": "2026-01-01T00:05:00+00:00",
+            "dataset_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "manifest_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "nonce": "0ff2bac64e1847607d771676796c18f9",
+            "operator": "synthetic-operator",
+            "operator_key_id": "f9983cef63d390eb235d752f1cd6c91cb4be8236424d98d4948bd3d45e4c9e8a",
+            "operator_signature": "84bb422f8b57d6ac0d823964cadbe4ccf43669d3f2dc8a4c6d412e6c7c9ae155022322b6ede8b98ab52c88950f8c72fdc07a1067aabb212500fc60e02661b90d",
+            "schema": "nexora.market-history-anchor-candidate/2",
+            "symbol": "SYN",
+            "window_raw_msc": [
+              1700000000000,
+              1700000005000
+            ]
+          },
+          "candidate_sha256": "760c289dde5cef67ea8208899cc577740df31882b30c18a3014867c0d415fb76",
+          "content_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "dataset_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "decision": "approve",
+          "entry_sha256": "d964bd892e606d9fd23f73dedc70931f827517ba807a86d569a62b1acdc52864",
+          "evidence_ref": "t-3",
+          "manifest_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "prev_sha256": "a7127bf4511a17766e2aac8dfb818fe1a404dd5da407b267b4f1fe2bf7b56782",
+          "schema": "nexora.market-history-approval/2",
+          "seq": 3,
+          "signature": "48bc08a76653fc3d8c46abcb51e42f46e0bdb103b5fe055ccfbdb3138218207cd5253fd47aced2d7a1eb30fa7f8e861f666219cc93aa95f0c5212dd076640605",
+          "symbol": "SYN",
+          "window_raw_msc": [
+            1700000000000,
+            1700000005000
+          ]
+        }
+      ],
+      "evaluated_at": "2026-01-01T00:20:00+00:00",
+      "max_pin_age_seconds": 3600,
+      "pins": [
+        {
+          "captured_at": "2026-01-01T00:07:00+00:00",
+          "entry_sha256": "d964bd892e606d9fd23f73dedc70931f827517ba807a86d569a62b1acdc52864",
+          "pin_id": "a63e43287c88bd16d2b74dc1187a615e",
+          "pinned_by": "synthetic-pin-authority",
+          "pinned_by_key_id": "3a2606dbe98dde52368686989810da5389c160a1312ca6aadb26fa2996a92025",
+          "previous_pin_id": null,
+          "reanchor_ref": null,
+          "schema": "nexora.market-history-head-pin/1",
+          "seq": 3,
+          "signature": "b710be18e3dae4b07796516e842f5aa2fca6d70be68d88877c5cafb0c1bd60b498a6d38caca3d16eacbb1193360f64458e6f91e8c53f753afd356aea4d9f830c",
+          "store_genesis_sha256": "0881471789f7d94e99485c9d1579c8a9140a64fcca194fe656254a444de42858"
+        }
+      ],
+      "verdict": {
+        "approval_seq": 3,
+        "approved": true,
+        "reasons": []
+      }
+    },
+    "C_replay_after_revocation": {
+      "candidate": {
+        "candidate_sha256": "6502488e61672b94e2e1a775d513ac7879726e87f63cfb536102ea7472eed16c",
+        "content_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "created_at": "2026-01-01T00:01:00+00:00",
+        "dataset_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "manifest_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "nonce": "da2769cca24ef8719f49d44069840ecd",
+        "operator": "synthetic-operator",
+        "operator_key_id": "f9983cef63d390eb235d752f1cd6c91cb4be8236424d98d4948bd3d45e4c9e8a",
+        "operator_signature": "74e119f3375805c941f1f4670e217c070547c2cabb06023d322457b28e4e28b598505f85d2e800f1744f00f947c49dcadadef175f7852cfb7553a8dc20567f0d",
+        "schema": "nexora.market-history-anchor-candidate/2",
+        "symbol": "SYN",
+        "window_raw_msc": [
+          1700000000000,
+          1700000005000
+        ]
+      },
+      "entries": [
+        {
+          "acknowledged_revocations": [],
+          "approval_id": "af257439bd9570aa419fca190e64651c",
+          "approved_at": "2026-01-01T00:02:00+00:00",
+          "approver": "synthetic-custodian",
+          "approver_key_id": "66bc351a5592540eb6cf0e20b2b2775aca1f55dba9f251c9dd46d23a52c3348c",
+          "candidate": {
+            "candidate_sha256": "6502488e61672b94e2e1a775d513ac7879726e87f63cfb536102ea7472eed16c",
+            "content_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "created_at": "2026-01-01T00:01:00+00:00",
+            "dataset_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "manifest_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "nonce": "da2769cca24ef8719f49d44069840ecd",
+            "operator": "synthetic-operator",
+            "operator_key_id": "f9983cef63d390eb235d752f1cd6c91cb4be8236424d98d4948bd3d45e4c9e8a",
+            "operator_signature": "74e119f3375805c941f1f4670e217c070547c2cabb06023d322457b28e4e28b598505f85d2e800f1744f00f947c49dcadadef175f7852cfb7553a8dc20567f0d",
+            "schema": "nexora.market-history-anchor-candidate/2",
+            "symbol": "SYN",
+            "window_raw_msc": [
+              1700000000000,
+              1700000005000
+            ]
+          },
+          "candidate_sha256": "6502488e61672b94e2e1a775d513ac7879726e87f63cfb536102ea7472eed16c",
+          "content_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "dataset_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "decision": "approve",
+          "entry_sha256": "8b9a4593fb725722475f958a967eeca58e4640c8517c9307417e5fb1a4b3abe0",
+          "evidence_ref": "t-1",
+          "manifest_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "prev_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "schema": "nexora.market-history-approval/2",
+          "seq": 1,
+          "signature": "62591e9e6e3a9f68409c1ef85ad61a2ed4cc8167f11a0a67b5b666674bcad02a0514dd108f4a406dc2802b4c7f167212960217cb68037a3a2a7b7253a9f1e106",
+          "symbol": "SYN",
+          "window_raw_msc": [
+            1700000000000,
+            1700000005000
+          ]
+        },
+        {
+          "content_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "dataset_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "decision": "revoke",
+          "entry_sha256": "d1c050ce6414887061ddbe08578d59b8dd53268851a556f938aed4941d7e1db2",
+          "evidence_ref": "t-2",
+          "manifest_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "prev_sha256": "8b9a4593fb725722475f958a967eeca58e4640c8517c9307417e5fb1a4b3abe0",
+          "revocation_id": "c334dd4d21da4683de45d841961ad2f4",
+          "revoked_at": "2026-01-01T00:04:00+00:00",
+          "revoker": "synthetic-custodian",
+          "revoker_key_id": "66bc351a5592540eb6cf0e20b2b2775aca1f55dba9f251c9dd46d23a52c3348c",
+          "schema": "nexora.market-history-approval/2",
+          "seq": 2,
+          "signature": "038f2049ceb6ba3bf73f0e1e4961ff29991b612ca91b7c01afd6bb6ce1aa1d04218244878e3213d822dc2faa9c5608cff2dde78c7a807397511b39f917f47f0d",
+          "symbol": "SYN",
+          "window_raw_msc": [
+            1700000000000,
+            1700000005000
+          ]
+        },
+        {
+          "acknowledged_revocations": [],
+          "approval_id": "af257439bd9570aa419fca190e64651c",
+          "approved_at": "2026-01-01T00:02:00+00:00",
+          "approver": "synthetic-custodian",
+          "approver_key_id": "66bc351a5592540eb6cf0e20b2b2775aca1f55dba9f251c9dd46d23a52c3348c",
+          "candidate": {
+            "candidate_sha256": "6502488e61672b94e2e1a775d513ac7879726e87f63cfb536102ea7472eed16c",
+            "content_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "created_at": "2026-01-01T00:01:00+00:00",
+            "dataset_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "manifest_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "nonce": "da2769cca24ef8719f49d44069840ecd",
+            "operator": "synthetic-operator",
+            "operator_key_id": "f9983cef63d390eb235d752f1cd6c91cb4be8236424d98d4948bd3d45e4c9e8a",
+            "operator_signature": "74e119f3375805c941f1f4670e217c070547c2cabb06023d322457b28e4e28b598505f85d2e800f1744f00f947c49dcadadef175f7852cfb7553a8dc20567f0d",
+            "schema": "nexora.market-history-anchor-candidate/2",
+            "symbol": "SYN",
+            "window_raw_msc": [
+              1700000000000,
+              1700000005000
+            ]
+          },
+          "candidate_sha256": "6502488e61672b94e2e1a775d513ac7879726e87f63cfb536102ea7472eed16c",
+          "content_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "dataset_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "decision": "approve",
+          "entry_sha256": "7890ec8aa2f3d3bf77bc211f8078e85eb8dcfdbd4fb5a693bc1740ff056a5473",
+          "evidence_ref": "t-1",
+          "manifest_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "prev_sha256": "d1c050ce6414887061ddbe08578d59b8dd53268851a556f938aed4941d7e1db2",
+          "schema": "nexora.market-history-approval/2",
+          "seq": 3,
+          "signature": "62591e9e6e3a9f68409c1ef85ad61a2ed4cc8167f11a0a67b5b666674bcad02a0514dd108f4a406dc2802b4c7f167212960217cb68037a3a2a7b7253a9f1e106",
+          "symbol": "SYN",
+          "window_raw_msc": [
+            1700000000000,
+            1700000005000
+          ]
+        }
+      ],
+      "evaluated_at": "2026-01-01T00:20:00+00:00",
+      "max_pin_age_seconds": 3600,
+      "pins": [
+        {
+          "captured_at": "2026-01-01T00:07:00+00:00",
+          "entry_sha256": "7890ec8aa2f3d3bf77bc211f8078e85eb8dcfdbd4fb5a693bc1740ff056a5473",
+          "pin_id": "b9edc5e1e85e05c964d2524fca335002",
+          "pinned_by": "synthetic-pin-authority",
+          "pinned_by_key_id": "3a2606dbe98dde52368686989810da5389c160a1312ca6aadb26fa2996a92025",
+          "previous_pin_id": null,
+          "reanchor_ref": null,
+          "schema": "nexora.market-history-head-pin/1",
+          "seq": 3,
+          "signature": "b3178f2792d98f5679ddfb4ad6b98854fa6a1364ad9e6304c0b4500a49be7f2c65675e9c1df74c73476696a098a63ea710c7f07ae6fbfca7e431909930d1f00e",
+          "store_genesis_sha256": "8b9a4593fb725722475f958a967eeca58e4640c8517c9307417e5fb1a4b3abe0"
+        }
+      ],
+      "verdict": {
+        "approval_seq": null,
+        "approved": false,
+        "reasons": [
+          "custody:revoked_at_seq_2",
+          "custody:approval_3_rejected:replayed_approval_id"
+        ]
+      }
+    }
+  }
+}

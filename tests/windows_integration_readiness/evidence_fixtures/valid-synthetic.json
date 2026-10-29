@@ -1,16 +1,16 @@
 {
-  "schema_version": "nexora.windows-readiness-evidence/3",
+  "schema_version": "nexora.windows-readiness-evidence/4",
   "evidence_class": "SYNTHETIC_FIXTURE",
   "identity_basis": "declared_not_authenticated",
   "identity": {
     "record_id": "SYNTHETIC-0001",
     "package_version": "0123456789abcdef0123456789abcdef01234567",
-    "extractor_sha": "0123456789abcdef0123456789abcdef01234567",
-    "extractor_version": "nexora.market-history-extractor/5",
+    "extractor_sha": "1c536d5acdef2c9fe47ef5a6ecfb127595ef42b8",
+    "extractor_version": "nexora.market-history-extractor/6",
     "manifest_schema": "nexora.market-history/4"
   },
   "checkout": {
-    "head": "0123456789abcdef0123456789abcdef01234567",
+    "head": "1c536d5acdef2c9fe47ef5a6ecfb127595ef42b8",
     "status_short": "",
     "status_ref": {
       "path": "synthetic/git-status.txt",
@@ -118,6 +118,10 @@
       "synthetic/registry.json",
       "--store-head",
       "1:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "--pin",
+      "synthetic/pin.json",
+      "--max-pin-age-seconds",
+      "3600",
       "--require-trusted"
     ],
     "verifier_exit_code": 1,
@@ -125,6 +129,29 @@
     "verifier_status_reasons": [
       "capability:platform_unproven:win32"
     ],
+    "pin_ref": {
+      "path": "synthetic/pin.json",
+      "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    },
+    "pin_id": "11111111111111111111111111111111",
+    "pin_pinned_by": "synthetic-pin-authority",
+    "pin_key_id": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+    "pin_signature": "55555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555",
+    "pin_seq": 1,
+    "pin_entry_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "pin_store_genesis_sha256": "9999999999999999999999999999999999999999999999999999999999999999",
+    "pin_captured_at_utc": "2026-01-01T00:00:00Z",
+    "max_pin_age_seconds": 3600,
+    "verified_at_utc": "2026-01-01T00:10:00Z",
+    "approved_at_utc": "2026-01-01T00:00:00Z",
+    "operator_key_id": "c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1",
+    "operator_signature": "66666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666",
+    "approver_key_id": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+    "approval_signature": "77777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777",
+    "approval_id": "22222222222222222222222222222222",
+    "candidate_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "revocation_ids": [],
+    "acknowledged_revocations": [],
     "gate_outcome": "BLOCKED",
     "gate_reasons": [
       "dep01_platform_unproven_at_v4:win32",
@@ -312,7 +339,13 @@
       "result": "PASS",
       "evidence": {
         "observed_mt5_names": [
-          "SYNTHETIC"
+          "initialize",
+          "version",
+          "terminal_info",
+          "symbol_info",
+          "copy_ticks_range",
+          "COPY_TICKS_ALL",
+          "shutdown"
         ],
         "initialize_args": {
           "synthetic": true

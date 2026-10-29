@@ -117,12 +117,12 @@ different names used by one person.
 | `window` | `symbol`, `window_raw_msc`, `window_utc_msc`, `preregistration_ref`, `preregistered_at_utc`, `protected_ranges_ref`, `protected_margin_ms` |
 | `source_provenance` | `source_descriptor`, `broker_clock_evidence_ref`, `broker_clock_evidence_kind`, `time_conversion_sha256`, `clock_attestation_sha256`, `dst_rule_evidence_ref` |
 | `dataset` | `dataset_id`, `content_sha256`, `manifest_sha256`, `candidate_sha256`, `development_status` |
-| `custody` | `store_ref`, `registry_ref`, `registry_identities`, `approver_identities`, `candidate_creator`, `approval_seq`, `approval_entry_sha256`, `candidate_approval_seqs`, `store_head`, `store_head_channel_ref`, `store_head_channel_kind`, `store_head_at_verification`, `store_chain`, `revocation_seqs`, `revocations_after_approval`, `extraction_platform`, `writer_lock`, `verifier_argv`, `verifier_exit_code`, `verifier_status`, `verifier_status_reasons`, `gate_outcome`, `gate_reasons` |
+| `custody` | `store_ref`, `registry_ref`, `registry_identities`, `approver_identities`, `candidate_creator`, `approval_seq`, `approval_entry_sha256`, `candidate_approval_seqs`, `store_head`, `store_head_channel_ref`, `store_head_channel_kind`, `store_head_at_verification`, `store_chain`, `revocation_seqs`, `revocations_after_approval`, `extraction_platform`, `writer_lock`, `verifier_argv`, `verifier_exit_code`, `verifier_status`, `verifier_status_reasons`, `pin_ref`, `pin_id`, `pin_pinned_by`, `pin_key_id`, `pin_signature`, `pin_seq`, `pin_entry_sha256`, `pin_store_genesis_sha256`, `pin_captured_at_utc`, `max_pin_age_seconds`, `verified_at_utc`, `approved_at_utc`, `operator_key_id`, `operator_signature`, `approver_key_id`, `approval_signature`, `approval_id`, `candidate_sha256`, `revocation_ids`, `acknowledged_revocations`, `gate_outcome`, `gate_reasons` |
 | `execution` | `commands_run`, `raw_output_refs`, `exit_codes` |
 | `timestamps` | `started_at_utc`, `finished_at_utc`, `clock_source` |
 
 Notes: `terminal.account_kind` is `investor` or `demo` (no account number). `custody.*` maps to the
-V4 custody interface of PR #96 at `d6a7cda72a88600e2ccf6554605f1c50478893ea`; see
+V4 custody interface of PR #96 at the pinned candidate head (`dependency-manifest.json`); see
 [V4-CUSTODY-COMPATIBILITY.md](V4-CUSTODY-COMPATIBILITY.md). `store_head` is `SEQ:SHA256` as accepted
 by `verify_market_history.py --store-head`. `store_head_channel_kind` is
 `independent_prior_channel` or `same_store_at_verification`; `gate_outcome` is

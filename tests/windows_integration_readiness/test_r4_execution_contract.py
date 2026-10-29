@@ -26,6 +26,7 @@ from tests.windows_integration_readiness.test_execution_contract import (
     SYMBOL,
     _code,
     argv,
+    custody_args,
     plan,
 )
 from tests.windows_integration_readiness.vectors import TICKS_SYNTH
@@ -222,7 +223,12 @@ def _cli_args(tmp_path: Path, extra: list[str] | None = None) -> list[str]:
     assert tokens[-1] == "<extractor-arguments>"
     args = [subs.get(t, t) for t in tokens[3:-1]]
     sep = args.index("--")
-    return [*args[:sep], *(extra or []), *args[sep:], *argv(tmp_path / "out")]
+    return [
+        *args[:sep],
+        *(extra or []),
+        *args[sep:],
+        *argv(tmp_path / "out", **custody_args(tmp_path)),
+    ]
 
 
 def test_c11_cli_invocation_matches_documented_checklist(
@@ -240,7 +246,8 @@ def test_c11_cli_invocation_matches_documented_checklist(
 
 def test_c11_cli_refusals_and_usage(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     args = _cli_args(tmp_path)
-    inside = [*args[: args.index("--out") + 1], str(tmp_path / "repo" / "data" / "x")]
+    k = args.index("--out") + 1
+    inside = [*args[:k], str(tmp_path / "repo" / "data" / "x"), *args[k + 1 :]]
     assert ec.main(inside) == 1
     assert json.loads(capsys.readouterr().out)["error"] == "output_dir_inside_checkout"
     i = args.index("--repo-root")

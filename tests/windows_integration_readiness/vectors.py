@@ -19,8 +19,8 @@ DOCUMENTED_TICK_DESCR: tuple[tuple[str, str], ...] = (
 )
 REQUIRED_TICK_FIELDS = ("time_msc", "bid", "ask")
 
-# CASE 7 - the read-only allowlist (copied from the stacked extractor at e74ad03; re-verify at the
-# named SHA). Anything else is refused.
+# CASE 7 - the read-only allowlist (copied from the stacked extractor (pinned candidate);
+# re-verify at the named SHA). Anything else is refused.
 ALLOWED_MT5_CALLS = frozenset(
     {
         "initialize",
@@ -50,6 +50,22 @@ FORBIDDEN_MT5_NAMES = (
     "symbol_select",
     "copy_rates_from",
     "TRADE_ACTION_DEAL",
+    # the rest of the MetaTrader5 Python API that is not on the allow-list (V9: complete the set)
+    "symbols_total",
+    "symbols_get",
+    "symbol_info_tick",
+    "market_book_get",
+    "market_book_release",
+    "copy_rates_from_pos",
+    "copy_rates_range",
+    "copy_ticks_from",
+    "history_orders_total",
+    "history_deals_total",
+    "TRADE_ACTION_PENDING",
+    "TRADE_ACTION_SLTP",
+    "TRADE_ACTION_MODIFY",
+    "TRADE_ACTION_REMOVE",
+    "TRADE_ACTION_CLOSE_BY",
 )
 
 # CASE 2 - float64 -> exact decimal text via repr(). (input float, expected text)

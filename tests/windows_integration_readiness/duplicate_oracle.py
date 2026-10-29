@@ -1,8 +1,8 @@
 """Specification-based duplicate and ordering oracle (finding B-M4).
 
 Written from ORACLE-SPEC.md, not from the extractor. It deliberately uses a different method from
-the extractor's `quality_report` (as read at PR #96 d6a7cda, unchanged since e74ad03): the
-extractor compares each tick with the previous one only; this oracle canonicalizes every
+the extractor's `quality_report` (as read at the pinned PR #96 candidate, unchanged across the
+stack): the extractor compares each tick with the previous one only; this oracle canonicalizes every
 observation and counts over the WHOLE sequence by sorting and grouping, so repeats are found
 wherever they occur. Golden vectors in `test_duplicate_oracle.py` are derived by hand from the
 specification, not by running this code.

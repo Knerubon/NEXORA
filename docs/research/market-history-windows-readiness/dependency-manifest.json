@@ -1,0 +1,119 @@
+{
+  "schema": "nexora.windows-readiness-dependency-manifest/1",
+  "description": "Single machine-readable record of the PR #96 (market_history) revision this readiness package is checked against. Re-pinning changes ONLY pr96_candidate.head_sha (and, after re-reading the new head, contract_at_candidate). Nothing here approves anything.",
+  "pr96_candidate": {
+    "pr": 96,
+    "branch": "claude/market-history-fix-v4",
+    "head_sha": "1c536d5acdef2c9fe47ef5a6ecfb127595ef42b8",
+    "status": "CANDIDATE_NOT_APPROVED",
+    "candidate_is_not_gate_approved_baseline": true,
+    "gate_approved_baseline_sha": null,
+    "provenance": {
+      "recorded_for_branch": "claude/market-history-windows-readiness-v2",
+      "method": "read-only `git archive <head_sha>` export; interfaces read from scripts/*market_history.py and packages/nexora/market_history/*.py",
+      "recorded_in_wave": "EDGE-VALIDATION-1 #77 V9 remediation, phase 1",
+      "pending_update": "a newer #96 candidate head from the #96 owner is expected; re-pin = change head_sha only, then re-read contract_at_candidate",
+      "independent_review_of_this_pin": false
+    }
+  },
+  "contract_at_candidate": {
+    "extractor_version": "nexora.market-history-extractor/6",
+    "manifest_schema": "nexora.market-history/4",
+    "principal_id_grammar": "[a-z0-9][a-z0-9._@-]{0,127}",
+    "proven_platforms": ["linux"],
+    "verify_script": "scripts/verify_market_history.py",
+    "verify_flags": [
+      "--dataset",
+      "--anchor",
+      "--store",
+      "--registry",
+      "--store-head",
+      "--pin",
+      "--max-pin-age-seconds",
+      "--require-trusted"
+    ],
+    "verify_valueless_flags": ["--require-trusted"],
+    "verify_required_by_this_package": [
+      "--dataset",
+      "--store",
+      "--registry",
+      "--store-head",
+      "--pin",
+      "--max-pin-age-seconds",
+      "--require-trusted"
+    ],
+    "extract_script": "scripts/extract_market_history.py",
+    "extract_required": [
+      "--symbol",
+      "--from-raw-msc",
+      "--to-raw-msc",
+      "--chunk-ms",
+      "--max-gap-ms",
+      "--time-conversion",
+      "--clock-attestation",
+      "--out"
+    ],
+    "extract_one_of": ["--protected-utc-ranges", "--no-protected-ranges"],
+    "extract_optional": [
+      "--max-chunk-ticks",
+      "--protected-margin-ms",
+      "--operator",
+      "--operator-key",
+      "--candidate-out",
+      "--anchor-out",
+      "--anchor-recorded-by",
+      "--anchor-storage-ref"
+    ],
+    "extract_valueless_flags": ["--no-protected-ranges"],
+    "custody_script": "scripts/custody_market_history.py",
+    "custody_subcommands": ["approve", "revoke", "head", "recover-store", "pin", "keygen"],
+    "custody_approve_flags": [
+      "--dataset",
+      "--store",
+      "--registry",
+      "--signing-key",
+      "--evidence-ref",
+      "--candidate"
+    ],
+    "signature_schemes": ["ed25519"],
+    "signature_hex_length": 128,
+    "key_id_hex_length": 64,
+    "nonce_hex_length": 32,
+    "pin_schema": "nexora.market-history-head-pin/1",
+    "approval_schema": "nexora.market-history-approval/2",
+    "candidate_schema": "nexora.market-history-anchor-candidate/2",
+    "registry_schema": "nexora.market-history-principals/2",
+    "pin_max_skew_seconds": 300,
+    "allowed_mt5_calls": [
+      "COPY_TICKS_ALL",
+      "copy_ticks_range",
+      "initialize",
+      "last_error",
+      "shutdown",
+      "symbol_info",
+      "terminal_info",
+      "version"
+    ]
+  },
+  "stale_references": [
+    {
+      "sha": "d6a7cda72a88600e2ccf6554605f1c50478893ea",
+      "was": "#96 head pinned by #95 up to 60de0644591b9611df34dbf2b1960cd921f866d7",
+      "status": "STALE_OBSOLETE",
+      "incompatible_with_candidate": [
+        "extractor now takes --operator-key (signed operator attestation)",
+        "EXTRACTOR_VERSION nexora.market-history-extractor/6 (was /5)",
+        "verifier needs a signed --pin and --max-pin-age-seconds (a store head alone is not independent)",
+        "custody approve takes --signing-key (was --custodian)",
+        "principal id grammar is strict ASCII, no normalisation",
+        "evidence needs attestation, key, signature, approval and pin fields"
+      ]
+    },
+    {
+      "sha": "e74ad035e7f21aa07528965da6ebe190c0512793",
+      "was": "earlier #96 head cited by the oracle, vectors and matrix text",
+      "status": "STALE_OBSOLETE",
+      "incompatible_with_candidate": ["superseded before the V4 custody redesign"]
+    }
+  ]
+}
