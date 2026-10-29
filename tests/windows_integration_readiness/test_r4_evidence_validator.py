@@ -388,7 +388,7 @@ def test_a13_valid_structured_verifier_command(launcher: tuple[str, ...]) -> Non
 def test_a14_schema_has_no_drift() -> None:
     committed = json.loads((DOCS / "evidence-record.schema.json").read_text(encoding="utf-8"))
     assert committed == ev.build_schema()
-    assert committed["$id"] == ev.SCHEMA_VERSION == "nexora.windows-readiness-evidence/3"
+    assert committed["$id"] == ev.SCHEMA_VERSION == "nexora.windows-readiness-evidence/4"
     assert committed["properties"]["overall_result"]["enum"] == list(ev.OVERALL_RESULTS)
     assert template()["schema_version"] == ev.SCHEMA_VERSION
 

@@ -78,6 +78,12 @@ def real_shaped_pass(overall: str = "PASS") -> Rec:
     r["dataset"]["development_status"] = "TRUSTED"
     head = r["custody"]["store_head"]
     r["custody"]["registry_ref"]["path"] = "registry.json"
+    r["custody"]["pin_ref"]["path"] = "pin.json"
+    # a real run carries the probe outcomes the case 6 counters are derived from
+    c6 = r["cases"]["6"]["evidence"]
+    c6["reparse_results"] = {"junction": {"outcome": "observed", "detail": "refused"}}
+    c6["crash_results"] = {"kill_between_chunks": {"outcome": "observed", "detail": "no manifest"}}
+    c6["lock_results"] = {"second_writer": {"outcome": "observed", "detail": "lock held"}}
     r["custody"].update(
         store_ref="store-dir",
         verifier_argv=[
@@ -90,6 +96,10 @@ def real_shaped_pass(overall: str = "PASS") -> Rec:
             r["custody"]["registry_ref"]["path"],
             "--store-head",
             head,
+            "--pin",
+            r["custody"]["pin_ref"]["path"],
+            "--max-pin-age-seconds",
+            str(r["custody"]["max_pin_age_seconds"]),
             "--require-trusted",
         ],
         extraction_platform="linux",

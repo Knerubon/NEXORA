@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 
 from tests.windows_integration_readiness import custody_gate as cg
+from tests.windows_integration_readiness import dependency_pin as dp
 from tests.windows_integration_readiness.custody_gate import parse_verify_argv, trust_gate
 from tests.windows_integration_readiness.test_v4_custody_compat import (
     ENTRY_SHA,
@@ -172,7 +173,15 @@ def test_b9_revocation_before_the_first_approval_does_not_block(
 ) -> None:
     """X2 must not over-block: an older revocation followed by the only approval is fine."""
     _approved_baseline(monkeypatch)
-    d = trust_gate(good(revocation_seqs=(3,), candidate_approval_seqs=(5,)))
+    rid = "33" * 16
+    d = trust_gate(
+        good(
+            revocation_seqs=(3,),
+            revocation_ids=(rid,),
+            acknowledged_revocations=(rid,),  # the approval answers the earlier revocation
+            candidate_approval_seqs=(5,),
+        )
+    )
     assert d.outcome == cg.RECORDABLE, d.reasons
 
 
@@ -202,5 +211,5 @@ def test_b12_pr96_dependency_still_blocked() -> None:
         "dep01_principal_authentication_unavailable",
         "dep01_v4_custody_baseline_not_independently_approved",
     )
-    assert cg.V4_REF_SHA == "d6a7cda72a88600e2ccf6554605f1c50478893ea"
+    assert cg.V4_REF_SHA == dp.CANDIDATE_SHA
     assert ENTRY_SHA != HEAD_SHA

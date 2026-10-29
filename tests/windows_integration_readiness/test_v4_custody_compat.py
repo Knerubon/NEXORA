@@ -8,14 +8,18 @@ baseline is unapproved (DEP-01), and the gate never returns TRUSTED.
 from __future__ import annotations
 
 import dataclasses
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
 
 from tests.windows_integration_readiness import custody_gate as cg
+from tests.windows_integration_readiness import dependency_pin as dp
 from tests.windows_integration_readiness.custody_gate import CustodyBundle, trust_gate
 
-SHA = "0123456789abcdef0123456789abcdef01234567"
+SHA = dp.CANDIDATE_SHA  # the pinned PR #96 candidate head (not a gate-approved baseline)
+T0 = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)
+PIN_PATH = "pin.json"
 HEAD_SHA = "a" * 64
 ENTRY_SHA = "b" * 64
 
@@ -31,6 +35,10 @@ def argv(pin: str = "7:" + HEAD_SHA) -> tuple[str, ...]:
         "R",
         "--store-head",
         pin,
+        "--pin",
+        PIN_PATH,
+        "--max-pin-age-seconds",
+        "3600",
         "--require-trusted",
     )
 
@@ -68,6 +76,27 @@ def good(**changes: Any) -> CustodyBundle:
         approval_entry_sha256=ENTRY_SHA,
         candidate_approval_seqs=(5,),
         pin_channel=cg.PIN_INDEPENDENT,
+        # V9 signed pin, attestation, approval, lineage (synthetic, internally consistent)
+        pin_path=PIN_PATH,
+        pin_id="11" * 16,
+        pin_pinned_by="synthetic-pin-authority",
+        pin_key_id="a1" * 32,
+        pin_signature="5" * 128,
+        pin_seq=7,
+        pin_entry_sha256=HEAD_SHA,
+        pin_store_genesis_sha256="9" * 64,
+        pin_captured_at=T0,
+        max_pin_age_seconds=3600,
+        verified_at=T0 + timedelta(minutes=10),
+        approved_at=T0,
+        operator_key_id="c1" * 32,
+        operator_signature="6" * 128,
+        approver_key_id="d1" * 32,
+        approval_signature="7" * 128,
+        approval_id="22" * 16,
+        candidate_sha256="e" * 64,
+        revocation_ids=(),
+        acknowledged_revocations=(),
     )
     return dataclasses.replace(base, **changes)
 
@@ -168,9 +197,9 @@ CASES: list[tuple[str, dict[str, Any], str, str]] = [
     ),
     (
         "B10_extractor_version_changed",
-        {"extractor_version": "nexora.market-history-extractor/6"},
+        {"extractor_version": "nexora.market-history-extractor/7"},
         cg.STOP,
-        "extractor_version_changed:nexora.market-history-extractor/6",
+        "extractor_version_changed:nexora.market-history-extractor/7",
     ),
 ]
 
@@ -218,10 +247,19 @@ def test_untrusted_verifier_output_is_never_recordable(monkeypatch: pytest.Monke
 def test_quoted_v4_interface_constants() -> None:
     """Guard against silent edits: these are quotes from PR #96 at V4_REF_SHA, re-verified by
     the operator at the running SHA (checklist A3), not values this package may choose."""
-    assert cg.V4_REF_SHA == "d6a7cda72a88600e2ccf6554605f1c50478893ea"
+    assert cg.V4_REF_SHA == dp.CANDIDATE_SHA == "d2e8ee9ef4f6eb438dc79c5e04ad43ed46de764d"
     assert cg.V4_PROVEN_PLATFORMS == frozenset({"linux"})
-    assert "--anchor" in cg.V4_VERIFY_FLAGS and "--store-head" in cg.V4_VERIFY_FLAGS
-    assert cg.V4_CUSTODY_SUBCOMMANDS == ("approve", "revoke", "head")
+    assert {"--anchor", "--store-head", "--pin", "--max-pin-age-seconds"} <= cg.V4_VERIFY_FLAGS
+    assert cg.V4_CUSTODY_SUBCOMMANDS == (
+        "approve",
+        "revoke",
+        "head",
+        "recover-store",
+        "pin",
+        "keygen",
+    )
+    assert cg.V4_EXTRACTOR_VERSION == "nexora.market-history-extractor/6"
+    assert not dp.head_is_gate_approved(dp.CANDIDATE_SHA)  # a candidate is not an approved baseline
     assert cg.V4_BASELINE_APPROVED is False
     assert cg.V4_PRINCIPAL_AUTHENTICATION_AVAILABLE is False
     assert cg.DEP02_WINDOWS_GUARANTEES_RESOLVED is False

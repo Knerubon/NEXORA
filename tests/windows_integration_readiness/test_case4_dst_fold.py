@@ -76,7 +76,7 @@ def test_case4_empty_or_reversed_window_refused(lo: int, hi: int) -> None:
 def test_case4_window_outside_declared_segments_refused(
     segments: tuple[tuple[int, int | None, int, str], ...], lo: int, hi: int
 ) -> None:
-    """F9 + F5: refused with the extractor's code as read at d6a7cda."""
+    """F9 + F5: refused with the extractor's code as read at the pinned candidate."""
     with pytest.raises(ReadinessError) as e:
         check_window(segments, lo, hi)
     assert e.value.code == "time_conversion_does_not_cover_window"

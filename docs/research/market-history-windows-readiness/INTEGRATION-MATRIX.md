@@ -3,8 +3,8 @@
 Conventions. "Mock half" = test(s) in `tests/windows_integration_readiness/` (cloud). "Real half" =
 the same steps run by the operator on the Windows node against the real extractor/terminal at a
 **named SHA** (placeholder `<SHA>`), recorded with [EVIDENCE-TEMPLATE.md](EVIDENCE-TEMPLATE.md).
-API names, flags and refusal codes are as read at PR #96 `d6a7cda72a88600e2ccf6554605f1c50478893ea`
-(stacked on `e74ad035e7f21aa07528965da6ebe190c0512793`) and must be re-verified at `<SHA>`.
+API names, flags and refusal codes are as read at the pinned PR #96 candidate (`dependency-manifest.json`)
+(a candidate head, not a gate-approved baseline) and must be re-verified at `<SHA>`.
 Everything marked NOT VERIFIED stays NOT VERIFIED until a real-half record says otherwise.
 
 A case PASSES only if every pass criterion holds **and** the evidence fields are filled. Any ambiguous
@@ -99,12 +99,12 @@ Real-half steps:
 2. Write `time_conversion.json` with explicit raw-keyed segments covering the whole window.
 3. Run `scripts/extract_market_history.py` with (a) the file, (b) the `evidence_ref` blanked, (c) a
    window starting before the first segment. (b) and (c) must refuse **before** any call into the
-   terminal. At `d6a7cda7...` the script builds the conversion and runs `preflight` before it
+   terminal. At the pinned candidate the script builds the conversion and runs `preflight` before it
    constructs `Mt5ReadOnlyHistorySource()`; that code order, re-verified at `<SHA>`, is the evidence.
    Observing `initialize` with a recording proxy around the real module is BLOCKED (DEP-03).
 
 Expected: refusal codes `offset_evidence_required` for (b) and `time_conversion_does_not_cover_window`
-for (c) (as read at `d6a7cda7...`; minor F5: the earlier `no_declared_offset_for_time` is the code
+for (c) (as read at the pinned candidate; minor F5: the earlier `no_declared_offset_for_time` is the code
 for a single raw time outside every segment, not for a window); conversion
 `utc = raw - offset*1000` only inside a declared segment.
 
@@ -174,8 +174,11 @@ existing extraction command on the real tiny window.
    confirmed at `<SHA>`; do not assume it.**
 3. Confirm exact duplicates and same-timestamp-different-quote ticks are counted, not dropped, and
    disorder is counted, not reordered. Compare the counts with `duplicate_oracle.classify`
-   ([ORACLE-SPEC.md](ORACLE-SPEC.md)). The extractor at `d6a7cda7...` counts against the previous tick
-   only, so non-adjacent duplicates will differ (EXT-DEF-1): record the difference as a finding.
+   ([ORACLE-SPEC.md](ORACLE-SPEC.md)). At the pinned candidate the duplicate, same-timestamp and flags counts equal
+   the oracle on D1-D9 (EXT-DEF-1 resolved there; evidence in DEPENDENCY-REGISTER.md). The ordering
+   metric is a different definition (#96 `non_monotonic_count` counts adjacent descents; the oracle
+   counts ticks below the running maximum; D6 gives 1 versus 2): record both numbers and do not
+   compare them as equal. The choice of definition is an open contract decision (DEPENDENCY-REGISTER.md).
 4. Re-run into the same folder: expect idempotent success; tamper one chunk byte on a copy and expect
    `chunk_exists_with_different_content`.
 
@@ -217,7 +220,7 @@ repeat on any share/synced folder the operator proposes, which is **not** recomm
 4. Crash probe: **BLOCKED (DEP-03)**, the extractor has no reviewed fault hook. Specification: a
    hook that raises after the temp file is written but before the link; confirm no final file,
    leftover `*.tmp-*`, clean re-run succeeds.
-5. Lock probe (V4 semantics, `lock.py` at `d6a7cda7...`): start two runs on one scratch folder; the
+5. Lock probe (V4 semantics, `lock.py` at the pinned candidate): start two runs on one scratch folder; the
    second must fail `writer_lock_held`. Nothing is ever reaped: after the first run exits or is
    killed, the OS releases its `msvcrt.locking`/`flock` lock and a new run may proceed. Never delete
    `.writer.lock` while any run could be active (PR #96 Reviewer A F6).
@@ -250,7 +253,10 @@ immutable gate with no raw-module attribute, argument-recording proxy without cr
 BaseException tripwires on every forbidden name, harness imports neither the extractor nor
 `MetaTrader5`; network and `MetaTrader5` import blocked by the harness conftest).
 
-Allowlist (as read at `e74ad035...`, unchanged at `d6a7cda7...`): `initialize` (no arguments), `shutdown`, `last_error`, `version`,
+Allowlist (as read at the pinned candidate, `dependency-manifest.json`, and enforced here as an allow-list:
+unlisted or unrecognised names count like forbidden ones; the detector normalises case, qualification,
+call syntax, whitespace, separators, NFKC and zero-width characters and does **not** claim to analyse
+arbitrary code): `initialize` (no arguments), `shutdown`, `last_error`, `version`,
 `terminal_info`, `symbol_info`, `copy_ticks_range`, `COPY_TICKS_ALL`. Everything else, notably
 `login`, `order_send`, `order_check`, `order_calc_*`, `positions_*`, `orders_*`, `history_orders_get`,
 `history_deals_get`, `account_info`, `market_book_*`, `symbol_select`, is refused.
@@ -262,16 +268,17 @@ Real-half steps:
    arguments. Wrapping the real module outside the extractor gate would be operator-written code.
 2. **BLOCKED (DEP-03), no reviewed fault injection.** Expected behaviour, reconciled (minor F6):
    `shutdown` is required after a successful `initialize` on both the success and the exception
-   path. On a failed `initialize`, the extractor at `d6a7cda7...` raises inside
+   path. On a failed `initialize`, the extractor at the pinned candidate raises inside
    `Mt5ReadOnlyHistorySource.__init__` before any close, and the harness model (`run_with_cleanup`)
    likewise does not call `shutdown`: that path is recorded, not required.
 3. Provenance and custody (V4, [V4-CUSTODY-COMPATIBILITY.md](V4-CUSTODY-COMPATIBILITY.md)): the
-   operator extracts with `--operator` and `--candidate-out`; an authorized custodian (not the
-   operator) approves with `scripts/custody_market_history.py approve`; the store head is pinned
-   through an independent channel at verification time.
+   operator extracts with `--operator`, `--operator-key` and `--candidate-out`; an authorized
+   custodian (not the operator) approves with `scripts/custody_market_history.py approve
+   --signing-key`; a pin authority signs a pin (`custody_market_history.py pin`) through an
+   independent channel at verification time.
 4. Independent verification: a **second person**, on a **clean checkout of the same SHA** on a
    different session, runs `scripts/verify_market_history.py --dataset --store --registry
-   --store-head SEQ:SHA256 --require-trusted`. A V3 `--anchor` alone never grants trust at V4.
+   --pin <pin.json> --max-pin-age-seconds <N> --require-trusted`. A V3 `--anchor` alone never grants trust at V4.
    **TRUSTED is BLOCKED (DEP-01):** a dataset extracted or verified on Windows reports
    `platform_unproven:win32`, and the V4 custody baseline has open MAJOR findings. Record the actual
    output; the dataset stays `UNTRUSTED`.

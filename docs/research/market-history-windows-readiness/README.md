@@ -5,7 +5,7 @@
 | Status | DRAFT readiness package. Remediation V1 addressed Independent Reviewer B round 1 (4 MAJOR, 7 MINOR); round 4 addresses the eight MINORs of rounds 2 and 3 (N1-N4, R3-1..R3-4). Documentation plus an offline fixture/mock harness. Round 4 is not yet independently re-reviewed. |
 | Class | Docs and CLOUD-SAFE tests. The steps it describes are WINDOWS-INTEGRATION and are **not** authorized by this PR. |
 | Base | `origin/main` `36c90c59e2aa4f0d221c9c468a8379c5f57cbb87` |
-| Extractor read (read-only) | PR #96 `claude/market-history-fix-v4` at `d6a7cda72a88600e2ccf6554605f1c50478893ea`, stacked on `claude/market-history-fix-v3` at `e74ad035e7f21aa07528965da6ebe190c0512793` (PRs #89, #91, #92, #93). Read with `git show` only. |
+| Extractor read (read-only) | PR #96 `claude/market-history-fix-v4` at the pinned candidate head (`dependency-manifest.json`), stacked on `claude/market-history-fix-v3` (PRs #89, #91, #92, #93). The candidate head is a pin, not an approval. Read with `git show` only. |
 | Real-half readiness | **Not declared.** TRUSTED is BLOCKED (DEP-01) and eight real-half steps are BLOCKED (DEP-03); the evidence validator derives `BLOCKED` for any real record while either holds. See [DEPENDENCY-REGISTER.md](DEPENDENCY-REGISTER.md). Windows/MT5: UNVERIFIED. |
 | Parent issue | EDGE-VALIDATION-1 (#77) |
 
@@ -35,6 +35,8 @@ assertions, and so that every Windows guarantee that is **not** proven is writte
 | [EVIDENCE-TEMPLATE.md](EVIDENCE-TEMPLATE.md) | Evidence record fields and fail-closed rules, with [evidence-record.template.json](evidence-record.template.json) and the generated [evidence-record.schema.json](evidence-record.schema.json); `evidence_validator.py` is authoritative |
 | [V4-CUSTODY-COMPATIBILITY.md](V4-CUSTODY-COMPATIBILITY.md) | The seven V4 custody and writer-lock stages as read in PR #96, and why TRUSTED is unreachable today |
 | [ORACLE-SPEC.md](ORACLE-SPEC.md) | The specification-based duplicate oracle, its golden vectors, and which reference functions are restatements of the extractor |
+| [dependency-manifest.json](dependency-manifest.json) | The single source of the pinned PR #96 candidate head (one parameter), its provenance, the contract read at that head and the stale references. The candidate is **not** a gate-approved baseline. |
+| [WINDOWS-OPERATIONAL-BOUNDARY.md](WINDOWS-OPERATIONAL-BOUNDARY.md) | What was tested offline, what stays blocked, what needs a separately authorized named-SHA run, and what evidence a later Windows wave needs |
 | [DEPENDENCY-REGISTER.md](DEPENDENCY-REGISTER.md) | DEP-01..05 and extractor defects that need separate ownership |
 | [UNSUPPORTED-GUARANTEES.md](UNSUPPORTED-GUARANTEES.md) | What cannot be promised on Windows/NTFS/shares/reparse points/antivirus/locking/custody, and what is Linux-cloud-tested only |
 | `tests/windows_integration_readiness/` | Offline pytest harness: mocks, fixtures, filesystem probes, evidence validator, custody gate, execution contract, duplicate oracle. The directory conftest blocks network access and `MetaTrader5` imports. |
@@ -43,7 +45,7 @@ assertions, and so that every Windows guarantee that is **not** proven is writte
 
 The extractor under test (`nexora.market_history`, `scripts/extract_market_history.py`,
 `scripts/verify_market_history.py`, `scripts/custody_market_history.py`) is **not on `main`**. It
-lives in the unmerged stack #89 -> #91 -> #92 -> #93 (`e74ad035...`) -> #96 (`d6a7cda7...` when
+lives in the unmerged stack #89 -> #91 -> #92 -> #93 -> #96 (the pinned candidate when
 read), and PR #96 itself has an open REQUEST CHANGES review.
 Consequences:
 
@@ -54,7 +56,7 @@ Consequences:
    and a specification-based duplicate oracle). Passing it proves the harness expectations are
    self-consistent and the probes work; it proves **nothing** about the extractor's code.
 2. The API names, allowlist and behaviours quoted in these documents were read from the stacked code
-   at `d6a7cda72a88600e2ccf6554605f1c50478893ea` (PR #96; unchanged from `e74ad035...` where noted). They **must be re-verified against the named SHA**
+   at the pinned candidate head (`dependency-manifest.json`) (PR #96). They **must be re-verified against the named SHA**
    that will actually run (checklist step A3). Where the stack changes, this package must be
    re-pointed before use.
 3. Before real-data execution the stack must be reviewed and merged (or this harness re-pointed to

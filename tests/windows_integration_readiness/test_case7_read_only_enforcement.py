@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+import ast
+import importlib
+import socket
+import sys
+import types
+from pathlib import Path
+
 import pytest
 
 from tests.windows_integration_readiness.fakes import (
@@ -166,8 +173,106 @@ def test_case7_fake_models_chunk_failures_and_they_are_not_detected_by_hashes() 
     assert [c[1][2] for c in mod.calls[-5:]] == [10, 20, 30, 10, 20]  # bounds recorded
 
 
-def test_case7_harness_never_imports_the_extractor_or_real_mt5() -> None:
-    import sys
+HERE = Path(__file__).resolve().parent
+# manual, offline helper (never collected, never imported by a test): runs the pinned #96 custody
+# module with throwaway keys to produce public fixtures
+_FIXTURE_GENERATOR = "generate_pr96_fixtures.py"
+_UNSAFE_PREFIXES = (
+    "MetaTrader5",
+    "nexora.execution",
+    "nexora.autonomous",
+    "nexora.position",
+    "nexora.broker",
+    "nexora.adapters",
+)
 
+
+def _imports(tree: ast.AST) -> set[str]:
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names.update(a.name for a in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            base = node.module or ""
+            names.add(base)
+            names.update(f"{base}.{a.name}" for a in node.names)
+    return names
+
+
+def test_case7_harness_files_import_no_terminal_execution_or_trading_adapter() -> None:
+    """Static, order-independent: no harness file imports MetaTrader5, an execution/trading
+    adapter, or (the extractor package is read only through `git archive` in a subprocess) the
+    extractor itself."""
+    offenders: list[str] = []
+    files = [f for f in HERE.rglob("*.py") if "__pycache__" not in f.parts]
+    assert len(files) > 20  # positive control: the scan really sees the package
+    for path in files:
+        for name in _imports(ast.parse(path.read_text(encoding="utf-8"))):
+            if name.startswith(_UNSAFE_PREFIXES):
+                offenders.append(f"{path.name}:{name}")
+            elif name.startswith("nexora.market_history") and path.name != _FIXTURE_GENERATOR:
+                offenders.append(f"{path.name}:{name}")
+    assert offenders == []
+
+
+def test_case7_the_scan_detects_an_unsafe_import() -> None:
+    """Negative control for the static scan above."""
+    tree = ast.parse("import MetaTrader5 as mt5\nfrom nexora.execution import guard")
+    found = _imports(tree)
+    assert any(n.startswith(_UNSAFE_PREFIXES) for n in found)
+
+
+def test_case7_no_harness_code_calls_a_prohibited_broker_operation() -> None:
+    """No call expression anywhere in the harness invokes a forbidden MT5 operation by name
+    (names appearing as data, tripwire method definitions and attribute reads are not calls)."""
+    forbidden = set(FORBIDDEN_MT5_NAMES)
+    calls: list[str] = []
+    for path in HERE.rglob("*.py"):
+        if "__pycache__" in path.parts or path.name == Path(__file__).name:
+            continue
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Call):
+                fn = node.func
+                name = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", "")
+                if name in forbidden:
+                    calls.append(f"{path.name}:{name}")
+    assert calls == [], calls
+
+
+def test_case7_real_terminal_and_network_stay_unreachable() -> None:
+    with pytest.raises(BaseException) as e:
+        importlib.import_module("MetaTrader5")
+    assert type(e.value).__name__ == "RealTerminalImportForbidden"
+    with pytest.raises(BaseException) as net:
+        socket.create_connection(("127.0.0.1", 9))
+    assert type(net.value).__name__ == "NetworkAccessForbidden"
     assert "MetaTrader5" not in sys.modules
-    assert "nexora.market_history" not in sys.modules
+
+
+def test_case7_trading_adapter_is_never_operational_through_the_gate() -> None:
+    mod = FakeMt5Module()
+    gate = _gate(mod)
+    for name in ("order_send", "order_check", "positions_get", "account_info", "login"):
+        with pytest.raises(ReadinessError):
+            getattr(gate, name)
+    assert not TRIPWIRE_LOG
+    assert set(mod.accessed) <= set(ALLOWED_MT5_CALLS)
+
+
+def test_case7_package_fails_closed_without_the_extractor_loaded() -> None:
+    """Behaviour, not module presence: an empty record and a default custody bundle are refused
+    whether or not another test imported the extractor first (a stub is planted to prove it)."""
+    from tests.windows_integration_readiness import custody_gate as cg
+    from tests.windows_integration_readiness import evidence_validator as ev
+
+    planted = types.ModuleType("nexora.market_history")
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setitem(sys.modules, "nexora.market_history", planted)
+        report = ev.validate_record({})
+        assert report.errors
+        assert report.derived_overall != "PASS"
+        from tests.windows_integration_readiness.test_v4_custody_compat import good
+
+        decision = cg.trust_gate(good())
+        assert decision.outcome != "RECORDABLE_PENDING_REVIEW"
+        assert decision.reasons

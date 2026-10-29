@@ -76,10 +76,16 @@ and the derivation is written next to the vector:
 
 **Known shared defect, detected.** The adjacency model `reference_model.order_report`, restated from
 the extractor's `quality_report`, reports **fewer** exact duplicates than the specification on D2,
-D3 and D9, and counts a flags-only difference as an exact duplicate. The extractor at PR #96
-`d6a7cda7...` has the same adjacency logic (`quality.py`, unchanged since `e74ad03`). This is
-cross-track defect **EXT-DEF-1**, owned by PR #96 and reported in
-[DEPENDENCY-REGISTER.md](DEPENDENCY-REGISTER.md). PR #96 is not modified by this package.
+D3 and D9, and counts a flags-only difference as an exact duplicate. The extractor at an earlier #96 head had the same adjacency logic: cross-track defect **EXT-DEF-1**.
+At the pinned candidate (`dependency-manifest.json`) a differential run of the real `QualityAccumulator`
+against this oracle on D1-D9 gives equal exact-duplicate, same-timestamp and flags counts, so EXT-DEF-1
+is recorded as resolved there ([DEPENDENCY-REGISTER.md](DEPENDENCY-REGISTER.md)). PR #96 is not modified by this package.
+
+**Out-of-order metric: two definitions, no choice made here.** The oracle counts ticks whose
+timestamp is below the running maximum (`out_of_order`). #96's `non_monotonic_count` counts adjacent
+descents. They agree on D3 (2/2) and D9 (2/2) and differ on D6 `(T3,A) (T1,B) (T2,C)`: the oracle gives 2, #96 gives 1.
+Both numbers are pinned by `test_v9_out_of_order_metric.py`. Which definition is the contract is a
+decision for Rin / the #96 owner; this package neither picks one nor treats the two as equal.
 
 ## 5. Independence ledger of `reference_model.py`
 
@@ -106,7 +112,7 @@ cross-check is what stands between that error and a false PASS.
 
 ## 6. Refusal-code alignment (minor F5)
 
-The reference model now uses the extractor's refusal codes as read at `d6a7cda7...`:
+The reference model now uses the extractor's refusal codes as read at the pinned candidate:
 `segments_not_sorted`, `segments_overlap`, `time_conversion_does_not_cover_window`,
 `window_touches_derived_fold_range`, `window_touches_ambiguous_raw_range`,
 `invalid_extraction_request`. Not modelled: the segment `basis` field and

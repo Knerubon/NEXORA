@@ -7,7 +7,7 @@ package, (2) every dependency marked BLOCKED in [DEPENDENCY-REGISTER.md](DEPENDE
 that a step needs is resolved, and (3) Rin/the Owner has given a separate written go-ahead naming
 the SHA and the window. It complements, and does not replace,
 `docs/research/market-history/WINDOWS-MT5-RUNBOOK.md` (stacked; as read at PR #96
-`d6a7cda72a88600e2ccf6554605f1c50478893ea`).
+the pinned candidate head (`dependency-manifest.json`)).
 
 Class: WINDOWS-INTEGRATION. Not PRODUCTION-ONLY. Never touches NEXORA PROD, PROD journals/checkpoints/
 DSNs, orders, or account data. Notation: **STOP** = abort, record, do not continue; **GO** = all
@@ -48,7 +48,7 @@ declared by this package.**
 
 Every `scripts/extract_market_history.py` invocation is first checked offline with the reviewed
 planning CLI below (finding N4). It wraps `execution_contract.plan_invocation` and checks the flags
-as read at `d6a7cda7...`: required flags, exactly one of `--protected-utc-ranges`/
+as read at the pinned candidate: required flags, exactly one of `--protected-utc-ranges`/
 `--no-protected-ranges`, the symbol verbatim from the pre-registration, the reviewed extractor SHA and
 version, and an absolute, empty `--out` whose canonical path (symlinks and `..` resolved) is outside
 the canonical checkout. `--repo-root` is mandatory. The command prints one JSON object, runs nothing,
@@ -58,7 +58,7 @@ Planning command (one run per extractor command line; `test_r4_execution_contrac
 line):
 
 ```
-python -m tests.windows_integration_readiness.execution_contract plan --repo-root <checkout> --provider mt5 --preregistered-symbol <symbol> --extractor-sha <head> --expected-extractor-sha <SHA> --extractor-version nexora.market-history-extractor/5 --manifest-schema nexora.market-history/4 -- <extractor-arguments>
+python -m tests.windows_integration_readiness.execution_contract plan --repo-root <checkout> --provider mt5 --preregistered-symbol <symbol> --extractor-sha <head> --expected-extractor-sha <SHA> --extractor-version nexora.market-history-extractor/6 --manifest-schema nexora.market-history/4 -- <extractor-arguments>
 ```
 
 `<checkout>` is the disposable checkout of A3, `<head>` its `git rev-parse HEAD`, `<SHA>` the SHA named
@@ -93,7 +93,7 @@ plans is still phase C, and every real-half step marked BLOCKED above stays BLOC
 |---|---|---|
 | C1 | Confirm the terminal is already running, logged in by the operator with an investor (read-only) or demo account. The tool takes no credentials. | STOP on any credential prompt, any request to type a password into a command, file or ticket. |
 | C2 | Record terminal facts (build, company/name, server name; no account number/balance). | STOP if the terminal is a live-funds account with a trading password. |
-| C3 | Preflight refusal checks (cases 3 and 4) through `scripts/extract_market_history.py` with deliberately invalid inputs. Preflight runs before the source is constructed at `d6a7cda7...`; record the refusal code and exit code. | STOP if a run that should refuse does not refuse (it would attach to the terminal). |
+| C3 | Preflight refusal checks (cases 3 and 4) through `scripts/extract_market_history.py` with deliberately invalid inputs. Preflight runs before the source is constructed at the pinned candidate; record the refusal code and exit code. | STOP if a run that should refuse does not refuse (it would attach to the terminal). |
 | C4 | Run the extraction for the approved window(s) only (split around folds), with `--operator <id>` and `--candidate-out <file outside --out>`. Exact command per runbook section 4. | STOP on any non-zero exit, `writer_lock_held`, `chunk_exists_with_different_content`, or any hard defect. |
 | C5 | Second-writer and reparse probes (case 6 steps 3 and 5) with the same command, on a scratch `--out`. | STOP if a junction/symlink is followed silently or two writers both proceed. |
 | C6 | On failure or interruption: do not delete anything, including `.writer.lock`; follow runbook section 5; report. Nothing is ever reaped at V4. | STOP. Never remove a lock file while any run on that folder could be active. |
@@ -103,9 +103,9 @@ plans is still phase C, and every real-half step marked BLOCKED above stays BLOC
 | # | Step | Go / stop condition |
 |---|---|---|
 | D1 | Hand the candidate and the dataset location to an **authorized custodian** (not the operator, not the candidate creator). | STOP if the custodian is the operator or candidate creator under any spelling. |
-| D2 | Custodian: `scripts/custody_market_history.py approve --dataset --store --registry --custodian --evidence-ref --candidate`; record `seq` and `entry_sha256`. | STOP on any `refused` output. |
-| D3 | At verification time, `scripts/custody_market_history.py head --store <dir>`; publish the `SEQ:SHA256` head through an independent channel. | STOP if `chain` is not `ok`. |
-| D4 | **Second person**, clean checkout of `<SHA>`, different session: `scripts/verify_market_history.py --dataset <dir> --store <dir> --registry <file> --store-head <SEQ:SHA256> --require-trusted`. Record command, exit code and printed JSON in `custody.*`. A V3 `--anchor` alone never grants trust. | **BLOCKED (DEP-01):** at V4 a dataset extracted or verified on Windows cannot be TRUSTED (`platform_unproven:win32`), and the V4 custody baseline has open MAJOR findings. Record the verifier's actual output; the dataset stays `UNTRUSTED` (development use only). |
+| D2 | Custodian (key held by the custodian, never the operator): `scripts/custody_market_history.py approve --dataset --store --registry --signing-key --evidence-ref --candidate`; record `seq`, `entry_sha256`, `approval_id`, `key_id`, the signature and `acknowledged_revocations`. | STOP on any `refused` output, on a replayed `approval_id`, or on a candidate reused across approvals. |
+| D3 | At verification time the pin authority runs `scripts/custody_market_history.py pin --store <dir> ...` with its own signing key and publishes the signed pin (`pin_id`, `pinned_by`, `key_id`, `signature`, `seq`, `entry_sha256`, `captured_at`) through an independent channel. An unsigned `head` / `--store-head` value is only a truncation check. | STOP if `chain` is not `ok` or the pin is not signed by an authority other than operator and custodian. |
+| D4 | **Second person**, clean checkout of `<SHA>`, different session: `scripts/verify_market_history.py --dataset <dir> --store <dir> --registry <file> --pin <pin.json> --max-pin-age-seconds <N> --require-trusted`. Record command, exit code (0 = TRUSTED only; 1 untrusted, 2 invalid input, 3 operational error; any non-zero is "do not use as evidence") and printed JSON in `custody.*`. A V3 `--anchor` alone never grants trust. | **BLOCKED (DEP-01):** at V4 a dataset extracted or verified on Windows cannot be TRUSTED (`platform_unproven:win32`), and the V4 custody baseline has open MAJOR findings. Record the verifier's actual output; the dataset stays `UNTRUSTED` (development use only). |
 | D5 | Fill the evidence record from [evidence-record.template.json](evidence-record.template.json); run `python -m tests.windows_integration_readiness.evidence_validator <record.json>`. | STOP on any validator error. A blank field instead of `NOT VERIFIED` is an error. |
 | D6 | Attach the record to the PR; request independent review of the record. | The record is not accepted until a reviewer who did not operate or implement it approves. |
 | D7 | Shut down nothing that you did not start. Remove the disposable checkout. Do not commit raw chunks. | - |

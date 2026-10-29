@@ -1,11 +1,12 @@
 """Reviewed execution path for the real half (finding B-M3): command contract plus a mock-only
 harness, and an explicit BLOCKED register for every step no reviewed interface supports.
 
-Facts this module is built on (read at PR #96 `d6a7cda72a88600e2ccf6554605f1c50478893ea`; re-verify
-at the running SHA, checklist A3):
+Facts this module is built on (read at the PR #96 CANDIDATE head pinned in
+`dependency-manifest.json`; re-verify at the running SHA, checklist A3):
   * `scripts/extract_market_history.py` constructs `Mt5ReadOnlyHistorySource()` itself. It has no
     source/module injection, no mock-source flag and no crash hook, and it does not expose the
-    terminal's `dtype.descr`.
+    terminal's `dtype.descr`. Since the V4 custody redesign it can also sign an operator
+    attestation: `--operator <principal id> --operator-key <private key file> --candidate-out`.
   * Therefore an operator can run the extractor ONLY against the real terminal. Any matrix step that
     needs a mock source, a fault hook, raw dtype access, vector replay through the extractor's
     internals, or a recording proxy around the real module would need operator-written code.
@@ -48,36 +49,25 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from tests.windows_integration_readiness import custody_gate as cg
+from tests.windows_integration_readiness import dependency_pin as dp
 from tests.windows_integration_readiness.reference_model import chunk_windows, encode_tick
 
-CONTRACT_REF_SHA = "d6a7cda72a88600e2ccf6554605f1c50478893ea"
-EXTRACTOR_VERSION = "nexora.market-history-extractor/5"
-MANIFEST_SCHEMA = "nexora.market-history/4"
-EXTRACT_SCRIPT = "scripts/extract_market_history.py"
+CONTRACT_REF_SHA = dp.CANDIDATE_SHA  # PR #96 CANDIDATE head (not a gate-approved baseline)
+EXTRACTOR_VERSION = dp.CONTRACT["extractor_version"]
+MANIFEST_SCHEMA = dp.CONTRACT["manifest_schema"]
+EXTRACT_SCRIPT = dp.CONTRACT["extract_script"]
 
-# argparse of scripts/extract_market_history.py as read at CONTRACT_REF_SHA.
-EXTRACT_REQUIRED = (
-    "--symbol",
-    "--from-raw-msc",
-    "--to-raw-msc",
-    "--chunk-ms",
-    "--max-gap-ms",
-    "--time-conversion",
-    "--clock-attestation",
-    "--out",
-)
-EXTRACT_ONE_OF = ("--protected-utc-ranges", "--no-protected-ranges")
-EXTRACT_OPTIONAL = (
-    "--max-chunk-ticks",
-    "--protected-margin-ms",
-    "--operator",
-    "--candidate-out",
-    "--anchor-out",
-    "--anchor-recorded-by",
-    "--anchor-storage-ref",
-)
-EXTRACT_VALUELESS = frozenset({"--no-protected-ranges"})
+# argparse of scripts/extract_market_history.py as read at CONTRACT_REF_SHA (manifest contract).
+EXTRACT_REQUIRED = tuple(dp.CONTRACT["extract_required"])
+EXTRACT_ONE_OF = tuple(dp.CONTRACT["extract_one_of"])
+EXTRACT_OPTIONAL = tuple(dp.CONTRACT["extract_optional"])
+EXTRACT_VALUELESS = frozenset(dp.CONTRACT["extract_valueless_flags"])
 EXTRACT_FLAGS = frozenset(EXTRACT_REQUIRED + EXTRACT_ONE_OF + EXTRACT_OPTIONAL)
+EXTRACT_ANCHOR_TRIO = ("--anchor-out", "--anchor-recorded-by", "--anchor-storage-ref")
+# A real (provider mt5) run must produce the signed operator attestation: without these the
+# dataset can never be TRUSTED (#96: "a dataset without an operator can never be TRUSTED").
+REAL_RUN_CUSTODY_INPUTS = ("--operator", "--operator-key", "--candidate-out")
 
 # What the current extractor CLI offers to a harness. Empty: see module docstring.
 EXTRACTOR_CAPABILITIES: frozenset[str] = frozenset()
@@ -200,6 +190,10 @@ def plan_invocation(
         raise ContractError("real_terminal_forbidden_offline")  # C8
     if extractor_sha != expected_extractor_sha:
         raise ContractError("extractor_sha_mismatch")  # C3
+    if provider == "mt5" and not dp.head_matches_candidate(extractor_sha):
+        # exact full 40-character match with the pinned candidate: no abbreviation, no stale head
+        head_class = dp.classify_head(extractor_sha)
+        raise ContractError(f"extractor_sha_not_pinned_pr96_candidate:{head_class}")
     if extractor_version != EXTRACTOR_VERSION:
         raise ContractError(f"extractor_version_mismatch:{extractor_version}")  # C3
     if manifest_schema != MANIFEST_SCHEMA:
@@ -223,6 +217,7 @@ def plan_invocation(
         raise ContractError("non_integer_argument") from None
     if hi <= lo or chunk <= 0:
         raise ContractError("invalid_window_or_chunk")
+    _check_custody_arguments(args, provider)
     root, root_id = _canonical_root(repo_root)
     raw_out = Path(args["--out"])
     if not raw_out.is_absolute():
@@ -236,6 +231,7 @@ def plan_invocation(
         raise ContractError("output_dir_inside_checkout")  # C4: raw ticks never in Git
     if out.exists() and any(out.iterdir()):
         raise ContractError("output_dir_not_empty")  # C5
+    _check_custody_paths(args, root, out)
     st = os.stat(out.parent)
     return Plan(
         tuple(argv),
@@ -248,6 +244,42 @@ def plan_invocation(
         (st.st_dev, st.st_ino),
         root_id,
     )
+
+
+def _check_custody_arguments(args: Mapping[str, str], provider: str) -> None:
+    """Operator attestation arguments (V4 custody at the pinned candidate)."""
+    if "--operator" in args and (problem := cg.identity_problem(args["--operator"])):
+        raise ContractError(f"operator_identity_invalid:{problem}")  # strict #96 grammar
+    if "--candidate-out" in args and not ("--operator" in args and "--operator-key" in args):
+        raise ContractError("candidate_out_needs_operator_and_operator_key")
+    if "--operator-key" in args and "--operator" not in args:
+        raise ContractError("operator_key_without_operator")
+    present = [f for f in EXTRACT_ANCHOR_TRIO if f in args]
+    if present and len(present) != len(EXTRACT_ANCHOR_TRIO):
+        raise ContractError("anchor_arguments_incomplete")
+    if provider == "mt5":
+        for flag in REAL_RUN_CUSTODY_INPUTS:
+            if flag not in args:
+                raise ContractError(f"missing_argument:{flag}")  # no TRUSTED without these
+
+
+def _check_custody_paths(args: Mapping[str, str], root: Path, out: Path) -> None:
+    """The operator key, the candidate and the anchor never live in the checkout or in the dataset
+    folder (#96: keys stay with their holder; a candidate or anchor beside the data proves
+    nothing)."""
+    for flag in ("--operator-key", "--candidate-out", "--anchor-out"):
+        if flag not in args:
+            continue
+        raw = Path(args[flag])
+        if not raw.is_absolute():
+            raise ContractError(f"{flag}_must_be_absolute")
+        real = Path(os.path.realpath(raw))
+        if _inside(real, out):
+            raise ContractError(f"{flag}_inside_dataset")
+        if _inside(real, root):
+            raise ContractError(f"{flag}_inside_checkout")
+        if flag != "--operator-key" and (raw.exists() or raw.is_symlink()):
+            raise ContractError(f"{flag}_file_exists")  # #96 refuses to overwrite either
 
 
 def _canonical_root(repo_root: Path | None) -> tuple[Path, tuple[int, int]]:
