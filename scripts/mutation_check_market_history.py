@@ -1,5 +1,5 @@
 # ruff: noqa: E501
-"""Manual mutation check for the V4 + round-3 market-history safeguards (developer tool; not run by CI).
+"""Manual mutation check for the V4 + round-3 + V9 market-history safeguards (developer tool; not run by CI).
 
 Applies each deliberate regression to the source, runs the V4 tests, and requires them to FAIL
 (mutant killed). The original file is always restored. Usage (repo root):
@@ -16,7 +16,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 PKG = "packages/nexora/market_history/"
 TESTS = ["tests/test_market_history_v4_lock.py", "tests/test_market_history_v4_fs.py",
-         "tests/test_market_history_v4_custody.py", "tests/test_market_history_r3_adversarial.py"]  # fmt: skip
+         "tests/test_market_history_v4_custody.py", "tests/test_market_history_r3_adversarial.py",
+         "tests/test_market_history_v9_mutation_regressions.py",
+         "tests/test_market_history_v9_revocation_latency.py",
+         "tests/test_market_history_v9_hostile_input.py"]  # fmt: skip
 
 # (label, file, exact old text, replacement)
 MUTANTS: list[tuple[str, str, str, str]] = [
@@ -90,6 +93,39 @@ MUTANTS: list[tuple[str, str, str, str]] = [
      "        if self.released or not _same_file_ids(self.directory, self.dev, self.ino):", "        if self.released:"),
     ("R3 N6: duplicate identity ignores flags", "quality.py",
      "        ident = (t.raw_msc, bid, ask, flags)", "        ident = (t.raw_msc, bid, ask)"),
+    # ---- Wave V9 (N-04): the seven valid mutants the V8 review found surviving, plus boundaries ----
+    ("V9 D3: gap bound >= instead of >", "quality.py",
+     "            elif t.utc_msc - prev.utc_msc > self.config.max_gap_ms:", "            elif t.utc_msc - prev.utc_msc >= self.config.max_gap_ms:"),
+    ("V9 C25: key valid_from ignored", "custody.py",
+     "            if (key.valid_from and t < key.valid_from) or (key.valid_until and t > key.valid_until):", "            if key.valid_until and t > key.valid_until:"),
+    ("V9 C25b: key valid_until exclusive", "custody.py",
+     "(key.valid_until and t > key.valid_until)", "(key.valid_until and t >= key.valid_until)"),
+    ("V9 T8: chunk contiguity not checked", "extract.py",
+     "        if c[\"from_raw_msc\"] != cursor:\n            problems.append(Problem(\"chunk_not_contiguous\", name))", "        if False:\n            problems.append(Problem(\"chunk_not_contiguous\", name))"),
+    ("V9 C21: approval before dataset retrieval allowed", "custody.py",
+     "    if approved_at < retrieved:", "    if False:"),
+    ("V9 T9: orders_submitted may be non-zero", "extract.py",
+     "        or orders != 0\n", ""),
+    ("V9 C12: reapproval need not acknowledge a revocation", "custody.py",
+     "    if prior - ack:\n        return \"revocation_not_acknowledged\"", "    if False:\n        return \"revocation_not_acknowledged\""),
+    ("V9 OPM: candidate operator may differ from the recorded operator", "custody.py",
+     "    if c.get(\"operator\") != recorded:\n        return \"candidate_operator_mismatch\"", "    if False:\n        return \"candidate_operator_mismatch\""),
+    ("V9 X1: approval before candidate creation allowed", "custody.py",
+     "    if approved_at < created_at:", "    if False:"),
+    ("V9 X2: pin age bound exclusive", "custody.py",
+     "    elif now - captured > max_pin_age:", "    elif now - captured >= max_pin_age:"),
+    ("V9 X3: approval future-skew doubled", "custody.py",
+     "    if approved_at > now + MAX_SKEW:", "    if approved_at > now + MAX_SKEW + MAX_SKEW:"),
+    ("V9 X4: pin future-skew doubled", "custody.py",
+     "    if captured > now + MAX_SKEW:\n", "    if captured > now + MAX_SKEW + MAX_SKEW:\n"),
+    ("V9 X5: approval dated after pin capture counted", "custody.py",
+     "    if _aware(e[\"approved_at\"], \"approved_at\") > pinned.captured_at + MAX_SKEW:", "    if False:"),
+    ("V9 N01: timestamp OverflowError not caught", "jsonio.py",
+     "    except (ValueError, OverflowError):\n        raise HistoryError(\"invalid_timestamp\", what) from None", "    except ValueError:\n        raise HistoryError(\"invalid_timestamp\", what) from None"),
+    ("V9 N01: JSON depth bound not enforced", "jsonio.py",
+     "    if check_depth and json_depth(raw) > MAX_JSON_DEPTH:", "    if False:"),
+    ("V9 N01: platform type not checked", "fsutil.py",
+     "    if type(platform) is not str or platform not in PROVEN_PLATFORMS:", "    if platform not in PROVEN_PLATFORMS:"),
 ]  # fmt: skip
 
 
