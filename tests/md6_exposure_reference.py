@@ -14,10 +14,21 @@ Specifies the rule set in
 * one exposure unit, one qualification (N1): exposure is checked at the registration's AND at the
   evaluation's ledger position, and two ACTIVE registrations whose footprints overlap contend, so
   neither is INDEPENDENT on its own, whatever order they are evaluated in;
-* outcomes frozen at the evaluation's ledger position (N2): later appends never change them;
-* a Quant-authorised ``MultiplicityDeclaration`` as the only way several pre-declared variants on
-  one exposure unit can yield gate evidence, and then only one qualification for the whole set.
-  The correction itself is OPEN (QE-7); the model only checks that a reference to it exists.
+* outcomes are computed from the ledger prefix ending at the evaluation (N2), PLUS two ledger-wide,
+  fail-closed inputs: whole-ledger validity and the lineage registry. The DEFAULT semantics are
+  therefore "monotone non-improving" (V9 F-1): a later append that keeps the ledger valid never
+  changes an earlier outcome, except that a later multiplicity declaration naming the evaluation's
+  registration downgrades it (M5); a later append that makes the ledger invalid voids every
+  outcome (UNVERIFIED); no append ever makes an earlier non-INDEPENDENT outcome INDEPENDENT.
+  Whether an already issued outcome may instead be FROZEN against such later events is a Quant /
+  governance decision (QE-9); the frozen alternative is isolated in
+  ``tests/md6_exposure_frozen_prefix_proposal.py`` and is NOT the default;
+* a ``MultiplicityDeclaration`` as the only way several pre-declared variants can yield gate
+  evidence, and then only one qualification for the whole set (M5: no member is INDEPENDENT on its
+  own, in any order). The correction itself is OPEN (QE-7). The model checks the STRUCTURE of the
+  two references only (``reference_problem``); it never treats free text as verified authority: a
+  well-formed declaration yields PENDING_QUANT_AUTHORITY (not gate eligible) unless an injected
+  ``QuantAuthorityVerifier`` approves it. No real verifier or registry is defined (QE-7, OPEN).
 
 ``ContentIdentity`` and ``DatasetLineage`` are stand-ins for the definitions owned by
 QUARANTINE-IDENTITY.md (content hash plus canonicalization version, and lineage parents). This
@@ -34,7 +45,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping, Sequence
+import re
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from enum import Enum
 from typing import Literal
@@ -44,20 +56,30 @@ _MAX_LINEAGE_DEPTH = 64
 
 
 class Outcome(Enum):
-    """Gate-eligibility outcome of one evaluation (or one result family)."""
+    """Gate-eligibility outcome of one evaluation (or one result family).
+
+    Only INDEPENDENT is gate eligible. PENDING_QUANT_AUTHORITY is a distinct NON-GATING outcome: a
+    declared multiplicity set that is structurally sound but whose Quant authority is NOT VERIFIED.
+    """
 
     INDEPENDENT = "INDEPENDENT"
+    PENDING_QUANT_AUTHORITY = "PENDING_QUANT_AUTHORITY"
     EXPLORATORY = "EXPLORATORY"
     UNVERIFIED = "UNVERIFIED"
     REJECTED_RETROSPECTIVE = "REJECTED_RETROSPECTIVE"
+
+    @property
+    def gate_eligible(self) -> bool:
+        return self is Outcome.INDEPENDENT
 
 
 # Higher rank = worse. Used only to combine outcomes of a result family.
 _RANK: dict[Outcome, int] = {
     Outcome.INDEPENDENT: 0,
-    Outcome.EXPLORATORY: 1,
-    Outcome.REJECTED_RETROSPECTIVE: 2,
-    Outcome.UNVERIFIED: 3,
+    Outcome.PENDING_QUANT_AUTHORITY: 1,
+    Outcome.EXPLORATORY: 2,
+    Outcome.REJECTED_RETROSPECTIVE: 3,
+    Outcome.UNVERIFIED: 4,
 }
 
 ExposureStatus = Literal["UNEXPOSED", "EXPOSED"]
@@ -139,10 +161,12 @@ class Abandonment:
 
 @dataclass(frozen=True)
 class MultiplicityDeclaration:
-    """Quant-authorised statement that several registrations form one confirmatory set.
+    """Statement that several registrations form one confirmatory set.
 
-    Only ``quant_authority_ref`` and ``correction_ref`` are checked for presence; the correction
-    method and any number in it are OPEN (QE-7). The set yields at most one gate qualification.
+    ``quant_authority_ref`` and ``correction_ref`` are checked for STRUCTURE only
+    (``reference_problem``); nothing here verifies that they point to a real Quant approval. The
+    correction method and any number in it are OPEN (QE-7). The set yields at most one gate
+    qualification, and none until a verifier confirms the authority.
     """
 
     declaration_id: str
@@ -215,6 +239,7 @@ class Assessment:
     reasons: tuple[str, ...]
     exposed_parts: tuple[Piece, ...] = ()
     contending_preregistrations: tuple[str, ...] = ()
+    declaration_id: str | None = None
 
 
 # --------------------------------------------------------------------------------------------
@@ -502,6 +527,54 @@ def exposed_parts(
 
 
 # --------------------------------------------------------------------------------------------
+# Structural validation of authority references (V9 F-2)
+# --------------------------------------------------------------------------------------------
+
+QuantAuthorityVerifier = Callable[[str, str], bool]
+"""(quant_authority_ref, correction_ref) -> approved. Its real definition is OPEN (QE-7): no
+registry of Quant authority exists. The default is NO verifier, which means NOT VERIFIED."""
+
+_REF_ALPHABET = re.compile(r"[\x21-\x7e]+")  # printable ASCII, no whitespace or control chars
+# Literals that assert the absence of a reference cannot be a reference. Structural only.
+_NO_REFERENCE_LITERALS = frozenset(
+    {
+        "none",
+        "null",
+        "nil",
+        "n/a",
+        "na",
+        "tbd",
+        "todo",
+        "pending",
+        "unknown",
+        "undefined",
+        "missing",
+    }
+)
+
+
+def reference_problem(ref: object) -> str | None:
+    """Structural problem of a Quant authority / correction reference, or None if well formed.
+
+    STRUCTURE ONLY (OPEN: the real reference format and registry, QE-1 / QE-7). A well-formed
+    string is still unverified free text; this function never says a reference is genuine.
+    """
+    if not isinstance(ref, str):
+        return "reference is not text"
+    if not ref.strip():
+        return "reference is blank"
+    if ref != ref.strip():
+        return "reference has leading or trailing whitespace"
+    if not _REF_ALPHABET.fullmatch(ref):
+        return "reference contains whitespace, control or non-ASCII characters"
+    if not any(c.isalnum() for c in ref):
+        return "reference has no alphanumeric character"
+    if ref.lower() in _NO_REFERENCE_LITERALS:
+        return "reference is a no-reference literal"
+    return None
+
+
+# --------------------------------------------------------------------------------------------
 # Classification
 # --------------------------------------------------------------------------------------------
 
@@ -544,6 +617,18 @@ def registration_status(ledger: Ledger, preregistration_id: str) -> Registration
         if isinstance(record, Registration) and preregistration_id in record.supersedes:
             return "SUPERSEDED"
     return "ACTIVE"
+
+
+def declaration_of(ledger: Ledger, preregistration_id: str) -> str | None:
+    """Id of the multiplicity declaration naming ``preregistration_id``, anywhere in ``ledger``."""
+    for entry in ledger:
+        record = entry.record
+        if (
+            isinstance(record, MultiplicityDeclaration)
+            and preregistration_id in record.member_preregistration_ids
+        ):
+            return record.declaration_id
+    return None
 
 
 def contending_registrations(
@@ -659,6 +744,16 @@ def _assess(
     status = registration_status(prefix, registration.preregistration_id)
     if status != "ACTIVE":
         reasons.append(f"registration is {status}")
+    declaration_id: str | None = None
+    if not declared_set:
+        # M5 (V9 F-3): a declared member is never INDEPENDENT on its own, even when its footprint is
+        # disjoint from every other member. Only classify_multiplicity_set may qualify the set.
+        declaration_id = declaration_of(ledger, registration.preregistration_id)
+        if declaration_id is not None:
+            reasons.append(
+                f"registration is a member of declared multiplicity set {declaration_id}: "
+                "not INDEPENDENT on its own (M5); cite the set outcome instead"
+            )
     earlier = [
         e
         for e in prefix[:-1]
@@ -668,7 +763,9 @@ def _assess(
     if earlier:
         reasons.append("registration already consumed by an earlier evaluation")
     if reasons:
-        return Assessment(Outcome.EXPLORATORY, tuple(reasons), before_evaluation, contenders)
+        return Assessment(
+            Outcome.EXPLORATORY, tuple(reasons), before_evaluation, contenders, declaration_id
+        )
     return Assessment(Outcome.INDEPENDENT, ("preregistered before any exposure, uncontended",))
 
 
@@ -681,8 +778,10 @@ def classify_evaluation(
     """Gate-eligibility outcome of one evaluation, computed from the ledger alone.
 
     Precedence: UNVERIFIED, then REJECTED_RETROSPECTIVE, then EXPLORATORY, else INDEPENDENT.
-    The outcome depends only on the ledger prefix ending at the evaluation, so it is frozen
-    once recorded. A member of a multiplicity set is never INDEPENDENT on its own.
+    DEFAULT semantics (V9 F-1): the outcome is computed from the ledger prefix ending at the
+    evaluation plus whole-ledger validity and the supplied lineage registry. It is monotone
+    non-improving under appends; it is NOT frozen against a later invalid append or a later
+    declaration. A member of a multiplicity set is never INDEPENDENT on its own (M5).
     """
     ledger, problems = reconcile(replicas)
     if ledger is None:
@@ -701,14 +800,19 @@ def classify_multiplicity_set(
     anchors: Sequence[LedgerAnchor],
     lineage: LineageRegistry,
     declaration_id: str,
+    authority_verifier: QuantAuthorityVerifier | None = None,
 ) -> Assessment:
-    """The single gate qualification a Quant-declared multiplicity set may yield.
+    """The single gate qualification a declared multiplicity set may yield.
 
-    INDEPENDENT only if: the declaration cites Quant authority and a correction reference; it is
-    recorded after every member registration and before every member evaluation; every member has
-    exactly one evaluation; and every member evaluation would be INDEPENDENT once contention and
-    exposure among the declared members themselves are set aside. Any other registration, view or
-    unregistered run on the footprint still disqualifies. The correction is not applied here.
+    INDEPENDENT only if: the declaration's two references are structurally well formed AND the
+    injected ``authority_verifier`` approves them (default: none, so never); it is recorded after
+    every member registration and before every member evaluation; every member has exactly one
+    evaluation; and every member evaluation would be INDEPENDENT once contention and exposure among
+    the declared members themselves are set aside. Any other registration, view or unregistered run
+    on the footprint still disqualifies. The correction is not applied here.
+
+    A structurally sound set whose authority is not verified is PENDING_QUANT_AUTHORITY (not gate
+    eligible). Free text is never treated as an approval.
     """
     ledger, problems = reconcile(replicas)
     if ledger is None:
@@ -719,10 +823,13 @@ def classify_multiplicity_set(
     d_entry = hits[0]
     assert isinstance(d_entry.record, MultiplicityDeclaration)
     declaration = d_entry.record
-    if not declaration.quant_authority_ref or not declaration.correction_ref:
-        return _unverified(
-            "multiplicity declaration lacks Quant authority or correction reference (QE-7)"
-        )
+    for label, ref in (
+        ("quant_authority_ref", declaration.quant_authority_ref),
+        ("correction_ref", declaration.correction_ref),
+    ):
+        problem = reference_problem(ref)
+        if problem is not None:
+            return _unverified(f"multiplicity declaration {label} is malformed: {problem} (QE-7)")
     members = frozenset(declaration.member_preregistration_ids)
     evaluations: list[LedgerEntry] = []
     for member in declaration.member_preregistration_ids:
@@ -753,6 +860,23 @@ def classify_multiplicity_set(
         reasons.extend(f"{e_entry.record.evaluation_id}: {r}" for r in assessment.reasons)
     if worst is not Outcome.INDEPENDENT:
         return Assessment(worst, tuple(reasons))
+    verified = False
+    if authority_verifier is not None:
+        try:
+            verified = bool(
+                authority_verifier(declaration.quant_authority_ref, declaration.correction_ref)
+            )
+        except Exception as exc:  # a verifier that cannot decide fails closed
+            return _unverified(f"authority verifier failed: {type(exc).__name__}")
+    if not verified:
+        return Assessment(
+            Outcome.PENDING_QUANT_AUTHORITY,
+            (
+                f"declared set {declaration_id}: structure and exposure checks passed, but the "
+                "Quant authority and correction references are free text and NOT VERIFIED "
+                "(QE-7 OPEN); not gate eligible",
+            ),
+        )
     return Assessment(
         Outcome.INDEPENDENT,
         (

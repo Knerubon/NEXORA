@@ -19,7 +19,10 @@ has no standing under this policy.
 4. [OPEN-QUESTIONS.md](OPEN-QUESTIONS.md).
 5. [PREREGISTRATION-TEMPLATE.md](PREREGISTRATION-TEMPLATE.md).
 6. [GAP-INTERVAL-PARTITION.md](GAP-INTERVAL-PARTITION.md), [EVALUATION-EXPOSURE-LINEAGE.md](EVALUATION-EXPOSURE-LINEAGE.md),
-   [QUARANTINE-IDENTITY.md](QUARANTINE-IDENTITY.md) and their `tests/test_md6_*` executable specifications.
+   [QUARANTINE-IDENTITY.md](QUARANTINE-IDENTITY.md), [ADR-030-RECONCILIATION.md](ADR-030-RECONCILIATION.md) and their
+   `tests/test_md6_*` executable specifications. Note the split: `tests/test_md6_v9_structural.py` follows from
+   rules already written; `tests/test_md6_v9_policy_dependent.py` and `tests/md6_exposure_frozen_prefix_proposal.py` encode
+   choices only the Quant may make (QE-7 to QE-10) and are not evidence that those choices are right.
 7. Repository authority: `docs/requirements.md`, `docs/architecture.md`, `AGENTS.md` sections 0, 3, 9, 11;
    ADR-012, ADR-014, ADR-019.
 8. References only (not authority): PR #93 head `e74ad035e7f21aa07528965da6ebe190c0512793`
@@ -44,10 +47,13 @@ has no standing under this policy.
 | 12 | Tooling requirements (D18) correctly separated from this proposal | PENDING |
 | 13 | Reviewer attests no holdout or backtest output was used to evaluate this proposal | PENDING |
 | 14 | Independence: reviewer is not the author's lineage | PENDING |
+| 15 | Quant authority is never inferred from free text (a declared set stays PENDING_QUANT_AUTHORITY until a verifier exists), and the frozen-versus-revisable choice (QE-9) and instrument equivalence (QE-10) are decided or deferred explicitly | PENDING |
+| 16 | The ADR-030 reconciliation (one pre-registration regime or two, relation to the VALID-1 manifest) is decided by the owners named there; this proposal does not change ADR-030 | PENDING |
 
 ## Questions the reviewer must answer
 
-At minimum Q1 to Q15, QE-3, QE-4, QE-7, QE-8, QI-1, QI-4 and QI-5 of [OPEN-QUESTIONS.md](OPEN-QUESTIONS.md), plus: for each decision D01 to D18, accept,
+At minimum Q1 to Q15, QE-1, QE-3, QE-4, QE-7 to QE-10, QI-1, QI-4, QI-5, QI-7, QI-8 and the ADR-030 reconciliation
+decisions of [OPEN-QUESTIONS.md](OPEN-QUESTIONS.md), plus: for each decision D01 to D18, accept,
 accept with change, reject or defer.
 
 ## Record-of-decision template (to be completed by the Quant approver only)

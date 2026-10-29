@@ -1,0 +1,17 @@
+# Executed 2026-10-29 against PR #96 head 1c536d5acdef2c9fe47ef5a6ecfb127595ef42b8 (git archive export, read-only) and the #94 reference model of the branch under review.
+# Command: python -I verify_pr96_mapping.py <pr96 export> <repo root>
+PASS V1 finite-output-in-grammar 1.1->1.1; 1.10->1.1; 1.100000->1.1; 0.0->0; -0.0->0; -0->0; 1E+3->1000; 1E-7->0.0000001; 123.4500->123.45; 0.000->0; 5->5
+PASS V2 pr96-normalizes-trailing-zeros decimal_str(1.10)==decimal_str(1.1)=='1.1'
+PASS V3 qi-r4-keeps-1.10-and-1.1-distinct record_hash differs
+PASS V4a closed-set-spellings-accepted NaN, Infinity, -Infinity
+PASS V4b other-nonfinite-spellings-outside-closed-set NaN->NaN accepted=True; sNaN->sNaN accepted=False; -NaN->-NaN accepted=False; -sNaN->-sNaN accepted=False; Infinity->Infinity accepted=True; -Infinity->-Infinity accepted=True; NaN123->NaN123 accepted=False
+PASS V5a row-layout {"a":"1.2","b":"1.1","f":6,"t":1700000000123}
+PASS V5b absent-flags-omit-key {"a": "2", "b": "1", "t": 5}
+PASS V5c row-maps-to-tickrecord TickRecord(raw_msc=1700000000123, bid='1.1', ask='1.2', flags='6')
+PASS V5d negative-flags-outside-grammar flags '-1' refused by QI-R4
+PASS V6a content_sha256-independent-of-chunk-layout three chunkings equal
+PASS V6b content_sha256-sensitive-to-order reordered ticks give another hash
+PASS V6c qi-multiset-equal-for-reordered multiset_fingerprint equal
+PASS V6d hashes-are-different-functions content_sha256 != ordered_content_hash (no derivable relation)
+PASS V7 pr96-has-no-md6-quarantine-reference {"multiset_fingerprint": [], "ordered_content_hash": [], "quarantine": [], "shadow_record": []}
+# exit status: 0
