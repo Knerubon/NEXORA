@@ -60,12 +60,25 @@ def json_depth(data: bytes, stop_above: int | None = None) -> int:
 def loads(data: bytes | str, what: str = "json", *, check_depth: bool = True) -> Any:
     """`json.loads` that can only fail with `HistoryError` (code `json_invalid` or
     `json_too_deep`). `check_depth=False` is for streams of small flat rows, where the parser's
-    own recursion limit is still caught."""
-    raw = data.encode("utf-8", "surrogatepass") if isinstance(data, str) else data
+    own recursion limit is still caught.
+
+    Bytes are decoded strictly as UTF-8 here, and the depth scan and the parser both see that one
+    text. `json.loads(bytes)` would auto-detect UTF-16/UTF-32, whose code units can contain byte
+    0x22 (U+2200 is `00 22`) and desynchronise the byte-level string stripper, letting nesting far
+    past the bound through (PR #99 review M-1). A UTF-8 BOM is refused by the parser."""
+    if isinstance(data, str):
+        text = data
+        raw = data.encode("utf-8", "surrogatepass")
+    else:
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            raise HistoryError("json_invalid", what) from None
+        raw = data  # valid UTF-8: bytes 0x22/0x5C/brackets only ever encode those ASCII characters
     if check_depth and json_depth(raw, MAX_JSON_DEPTH) > MAX_JSON_DEPTH:
         raise HistoryError("json_too_deep", what)
     try:
-        return json.loads(data)
+        return json.loads(text)
     except RecursionError:
         raise HistoryError("json_too_deep", what) from None
     except (ValueError, UnicodeError):  # JSONDecodeError is a ValueError

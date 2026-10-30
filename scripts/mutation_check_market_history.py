@@ -19,7 +19,8 @@ TESTS = ["tests/test_market_history_v4_lock.py", "tests/test_market_history_v4_f
          "tests/test_market_history_v4_custody.py", "tests/test_market_history_r3_adversarial.py",
          "tests/test_market_history_v9_mutation_regressions.py",
          "tests/test_market_history_v9_revocation_latency.py",
-         "tests/test_market_history_v9_hostile_input.py"]  # fmt: skip
+         "tests/test_market_history_v9_hostile_input.py",
+         "tests/test_market_history_v9_review_minors.py"]  # fmt: skip
 
 # (label, file, exact old text, replacement)
 MUTANTS: list[tuple[str, str, str, str]] = [
@@ -126,6 +127,14 @@ MUTANTS: list[tuple[str, str, str, str]] = [
      "    if check_depth and json_depth(raw, MAX_JSON_DEPTH) > MAX_JSON_DEPTH:", "    if False:"),
     ("V9 N01: platform type not checked", "fsutil.py",
      "    if type(platform) is not str or platform not in PROVEN_PLATFORMS:", "    if platform not in PROVEN_PLATFORMS:"),
+    ("PR99 M-1: bytes parsed with encoding auto-detection", "jsonio.py",
+     "        return json.loads(text)", "        return json.loads(data)"),
+    ("PR99 M-2: lock record parsed without the typed reader", "lock.py",
+     '        data = jsonio.loads(raw, "writer_lock")', "        data = json.loads(raw)"),
+    ("PR99 M-3: depth bound loosened to 64", "jsonio.py",
+     "MAX_JSON_DEPTH = 32", "MAX_JSON_DEPTH = 64"),
+    ("PR99 M-3: depth bound off by one", "jsonio.py",
+     "json_depth(raw, MAX_JSON_DEPTH) > MAX_JSON_DEPTH:", "json_depth(raw, MAX_JSON_DEPTH) > MAX_JSON_DEPTH + 1:"),
 ]  # fmt: skip
 
 
