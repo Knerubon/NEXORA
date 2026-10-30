@@ -1,0 +1,201 @@
+{
+  "note": "GitHub API initial metadata snapshot; exact wall-clock query time was not recorded. Full SHAs identify Git objects. Metadata-only inventory is not a source audit or approval of every PR.",
+  "workstreams": [
+    {
+      "pr": 104,
+      "head": "1d6b47ea213b5e681647b60d9e78fa5fdf45fa99",
+      "branch": "codex/edge-proof-offline-20261030-v1",
+      "title": "test: offline PNF edge proof \u2014 BLOCKED, source pin and adversarial probes",
+      "inspection": "metadata and selected relevant committed source/documentation (see B/E), not full PR review"
+    },
+    {
+      "pr": 103,
+      "head": "e60dbd53b8c4d7d214727f46947ded1be1604bf8",
+      "branch": "claude/market-history-windows-readiness-v4",
+      "title": "fix(windows-readiness): close Reviewer B round 2 minors (V11, RB2-1..RB2-4)",
+      "inspection": "metadata only; branch/path filename inventory"
+    },
+    {
+      "pr": 102,
+      "head": "7d382a21b9e9dff54052d84bee241ac029e38371",
+      "branch": "security/pr99-reviewer-a-minors",
+      "title": "fix(market_history): PR #99 Reviewer A minors M-1..M-3 (strict UTF-8 JSON, lock + depth regressions)",
+      "inspection": "metadata only; branch/path filename inventory"
+    },
+    {
+      "pr": 101,
+      "head": "2feb915c9d7e96da6c3d8069e8db2ff31041ea96",
+      "branch": "claude/market-history-windows-readiness-v3",
+      "title": "fix: close Reviewer B round 1 minors on Windows readiness package (V10, stacked on #98)",
+      "inspection": "metadata only; branch/path filename inventory"
+    },
+    {
+      "pr": 100,
+      "head": "fc4aba439d9ee9e7ff2ad337b1211451d29b002f",
+      "branch": "claude/edge-md6-quant-policy-v3",
+      "title": "tests+docs: MD-6 fix PR #97 Reviewer C minors (m-1, R3-m2, R3-m4) [DRAFT, stacked on #97]",
+      "inspection": "metadata and selected relevant committed source/documentation (see B/E), not full PR review"
+    },
+    {
+      "pr": 99,
+      "head": "d2e8ee9ef4f6eb438dc79c5e04ad43ed46de764d",
+      "branch": "claude/market-history-fix-v5",
+      "title": "fix(market_history): V9 remediation of #96 review (N-01 hostile input, N-03 exit codes, N-04 mutants, R-1 latency)",
+      "inspection": "metadata and selected relevant committed source/documentation (see B/E), not full PR review"
+    },
+    {
+      "pr": 98,
+      "head": "cb9a84552a51c5095c8607b574d92c96d3473c88",
+      "branch": "claude/market-history-windows-readiness-v2",
+      "title": "EDGE-VALIDATION-1 V9: Windows readiness validator hardening and pinned #96 candidate contract (phase 1)",
+      "inspection": "metadata only; branch/path filename inventory"
+    },
+    {
+      "pr": 97,
+      "head": "a892ac753935d8196adc65597b675f68b7eb6684",
+      "branch": "claude/edge-md6-quant-policy-v2",
+      "title": "docs+tests: MD-6 Wave V9 remediation (F-1..F-7, ADR-030 reconciliation) [DRAFT, stacked on #94]",
+      "inspection": "metadata only; branch/path filename inventory"
+    },
+    {
+      "pr": 96,
+      "head": "1c536d5acdef2c9fe47ef5a6ecfb127595ef42b8",
+      "branch": "claude/market-history-fix-v4",
+      "title": "fix: market_history V4 - OS-lock ownership, pinned-dir I/O, independent anchor custody (EDGE-VALIDATION-1 #77 Track A)",
+      "inspection": "metadata only; branch/path filename inventory"
+    },
+    {
+      "pr": 95,
+      "head": "60de0644591b9611df34dbf2b1960cd921f866d7",
+      "branch": "claude/market-history-windows-readiness-v1",
+      "title": "docs: market-history Windows readiness matrix and offline harness (EDGE-VALIDATION-1 V4 Track B)",
+      "inspection": "metadata only; branch/path filename inventory"
+    },
+    {
+      "pr": 94,
+      "head": "930af2aef829fa14064d0ad0be0cfa4bda12fbec",
+      "branch": "claude/edge-md6-quant-policy-v1",
+      "title": "docs: MD-6 data-gap policy decision proposal (Quant sign-off PENDING)",
+      "inspection": "metadata only; branch/path filename inventory"
+    },
+    {
+      "pr": 93,
+      "head": "e74ad035e7f21aa07528965da6ebe190c0512793",
+      "branch": "claude/market-history-fix-v3",
+      "title": "fix: PR #92 review F1-F7 \u2014 regular-file verify, derived clock fold, research dataset id, trust anchor, writer lock (V3)",
+      "inspection": "metadata only; branch/path filename inventory"
+    },
+    {
+      "pr": 92,
+      "head": "404ff9bf124804351dc8e6eff6cf0ccc5f4595a3",
+      "branch": "claude/market-history-fix-v2",
+      "title": "EDGE-VALIDATION-1: corrective wave for #91 review (clock attestation, strict ranges, memory bound, identity)",
+      "inspection": "metadata only; branch/path filename inventory"
+    },
+    {
+      "pr": 91,
+      "head": "8c973eaf5841191bf8b3b174224b8178e5ce3d14",
+      "branch": "claude/market-history-fix-v1",
+      "title": "EDGE-VALIDATION-1 P0: market_history data-integrity fixes (decimals, streaming, atomic writes)",
+      "inspection": "metadata only; branch/path filename inventory"
+    },
+    {
+      "pr": 90,
+      "head": "858777a6b461713ce098a066b0adad5cb10df80d",
+      "branch": "claude/dukascopy-pilot-v1",
+      "title": "EDGE-VALIDATION-1 D1: offline Dukascopy .bi5 pilot ingestion (acquisition BLOCKED)",
+      "inspection": "metadata and selected relevant committed source/documentation (see B/E), not full PR review"
+    },
+    {
+      "pr": 89,
+      "head": "069894ef43df6baa5f614de678785a7043ed16cd",
+      "branch": "claude/market-history-extract-v1",
+      "title": "EDGE-VALIDATION-1 Agent B: read-only historical tick extraction & verification",
+      "inspection": "metadata only; branch/path filename inventory"
+    },
+    {
+      "pr": 88,
+      "head": "47f9ea834985748522fdef6c59e013ccef2e10cf",
+      "branch": "claude/edge-fix-d1-d2-v1",
+      "title": "fix: PR #79 findings D-1 (ambiguity validation) and D-2 (Decimal determinism) \u2014 stacked on #79",
+      "inspection": "metadata only; branch/path filename inventory"
+    },
+    {
+      "pr": 87,
+      "head": "6c23616e9a06cce234e1bcbc20eca1563e7d1f77",
+      "branch": "claude/edge-readiness-master-20261020-v1",
+      "title": "docs: EDGE-VALIDATION-1 / SYSTEM-READINESS-1 master readiness report (2026-10-20)",
+      "inspection": "metadata and selected relevant committed source/documentation (see B/E), not full PR review"
+    },
+    {
+      "pr": 85,
+      "head": "fd70ce21b5368afe12b091830d1f6d5ab7bb4616",
+      "branch": "codex/edge-readiness-d-20261015-v1",
+      "title": "docs: EDGE-VALIDATION-1 readiness Track D independent review",
+      "inspection": "metadata only; branch/path filename inventory"
+    },
+    {
+      "pr": 84,
+      "head": "5fe2d9aad0e2bbf749b4224ac29b6f8696980702",
+      "branch": "codex/edge-readiness-c-20261015-v1",
+      "title": "docs: EDGE-VALIDATION-1 readiness Track C Quant register",
+      "inspection": "metadata and selected relevant committed source/documentation (see B/E), not full PR review"
+    },
+    {
+      "pr": 83,
+      "head": "62a8c8628651250ad79e8b9c35bf3b4651029725",
+      "branch": "codex/edge-readiness-b-20261015-v1",
+      "title": "docs: EDGE-VALIDATION-1 readiness Track B data plan",
+      "inspection": "metadata and selected relevant committed source/documentation (see B/E), not full PR review"
+    },
+    {
+      "pr": 82,
+      "head": "1948a63ec1d60f685ff338ae7bc98d19911ec493",
+      "branch": "codex/edge-readiness-a-20261015-v1",
+      "title": "docs: EDGE-VALIDATION-1 readiness Track A baseline audit",
+      "inspection": "metadata only; branch/path filename inventory"
+    },
+    {
+      "pr": 81,
+      "head": "49bd2d6c9d8cf11c0e78a1e209ccc0cbb5eb4282",
+      "branch": "claude/edge-validation-protocol-v1",
+      "title": "docs: EDGE-VP-1 independent validation protocol for P&F Baseline V1 (DRAFT)",
+      "inspection": "metadata and selected relevant committed source/documentation (see B/E), not full PR review"
+    },
+    {
+      "pr": 80,
+      "head": "618ce87fe4b7add2a35a62607c58a76851dc0236",
+      "branch": "claude/audit-data-quality-v1",
+      "title": "feat: Decision Audit Trail V1 + Data Quality Guard V1 (Issue #78) [DRAFT]",
+      "inspection": "metadata only; branch/path filename inventory"
+    },
+    {
+      "pr": 79,
+      "head": "196a962fd6fe2be41e0acfd70f6f7ec3b7a240db",
+      "branch": "claude/edge-validation-v1",
+      "title": "EDGE-VALIDATION-1: engineering components (dataset manifest, splits, costs, SL/TP exit mode) \u2014 DRAFT",
+      "inspection": "metadata and selected relevant committed source/documentation (see B/E), not full PR review"
+    },
+    {
+      "pr": 73,
+      "head": "f0b5eac78395cfe6fa956257823598306221b161",
+      "branch": "claude/open21-tracking-v1",
+      "title": "docs: OPEN-21 execution market policy tracking item",
+      "inspection": "metadata only; branch/path filename inventory"
+    },
+    {
+      "pr": 51,
+      "head": "29b5b46c6b3470f032ad9281f6ab41717c98896f",
+      "branch": "claude/risk-manual-open-design-v1",
+      "title": "Design proposal: Manual OPEN Risk provenance (RISK-MANUAL-OPEN-1)",
+      "inspection": "metadata only; branch/path filename inventory"
+    }
+  ],
+  "query_date_bangkok": "2026-10-30",
+  "recheck": {
+    "pr104_head": "1d6b47ea213b5e681647b60d9e78fa5fdf45fa99",
+    "pr103_api_head": "e60dbd53b8c4d7d214727f46947ded1be1604bf8",
+    "pr103_body_claim": "70c1b49d5206f83954b6762f5ca76559cad9e41e",
+    "status": "both open draft unmerged; body/API mismatch retained explicitly"
+  }
+}
