@@ -42,11 +42,13 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import ntpath
 import os
+import re
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 from tests.windows_integration_readiness import custody_gate as cg
@@ -177,15 +179,120 @@ def _parse_complete(argv: Sequence[str]) -> dict[str, str]:
             raise ContractError(f"missing_argument:{flag}")
     if sum(f in args for f in EXTRACT_ONE_OF) != 1:
         raise ContractError("protected_range_decision_required")
+    _check_numeric_arguments(args)
     return args
+
+
+# RB2-1: the extractor's integer arguments (`type=int` in its argparse) and the range rules its
+# library applies before the terminal is touched (`ExtractionRequest`, `QualityConfig`,
+# `validate_margin`). Lexically stricter than `int()`: plain ASCII decimal only, so `1e3`, `+5`,
+# `1_000`, ` 5` and non-ASCII digits are refused here even where `int()` would take them.
+_INT_TOKEN = re.compile(r"-?[0-9]+")
+_MARGIN_BOUND = 2**62
+EXTRACT_INT_FLAGS = (
+    "--from-raw-msc",
+    "--to-raw-msc",
+    "--chunk-ms",
+    "--max-gap-ms",
+    "--max-chunk-ticks",
+    "--protected-margin-ms",
+)
+
+
+def _check_numeric_arguments(args: Mapping[str, str]) -> None:
+    ints: dict[str, int] = {}
+    for flag in EXTRACT_INT_FLAGS:
+        if flag in args:
+            if not _INT_TOKEN.fullmatch(args[flag]):
+                raise ContractError("non_integer_argument")
+            ints[flag] = int(args[flag])
+    lo, hi, chunk = ints["--from-raw-msc"], ints["--to-raw-msc"], ints["--chunk-ms"]
+    if lo < 0 or hi <= lo or chunk <= 0:
+        raise ContractError("invalid_window_or_chunk")
+    if ints["--max-gap-ms"] <= 0:
+        raise ContractError("invalid_max_gap_ms")
+    if ints.get("--max-chunk-ticks", 1) < 1:
+        raise ContractError("invalid_max_chunk_ticks")
+    if not 0 <= ints.get("--protected-margin-ms", 0) <= _MARGIN_BOUND:
+        raise ContractError("invalid_protected_margin_ms")
+
+
+# input and custody files the extractor reads or writes: none of them may sit in the dataset folder
+RECORDED_OUTSIDE_DATASET = (
+    "--time-conversion",
+    "--clock-attestation",
+    "--protected-utc-ranges",
+    "--operator-key",
+    "--candidate-out",
+    "--anchor-out",
+)
+
+
+# RB3-1: Win32 path spellings a lexical compare must not take at face value. `\\?\`, `\\.\` and
+# `\??\` prefixes skip normalization and hide the drive, and a `:` after the drive names an
+# alternate data stream: such a recorded path is refused (fail-closed), not interpreted.
+_DEVICE_PREFIXES = ("\\\\?\\", "\\\\.\\", "\\??\\")
+
+
+def _windows_parts(path: str) -> tuple[str, ...] | None:
+    """Lexical, case-insensitive parts of a recorded Windows path, folded the way Win32 folds
+    them (`/` or `\\`, trailing dots and spaces of a component, `..`), or None when the spelling
+    cannot be compared offline (device or extended-length prefix, stream, all-dot component).
+    8.3 short names (`NEXORA~1`) cannot be resolved offline at all (EVIDENCE-TEMPLATE)."""
+    p = path.replace("/", "\\")
+    if p.startswith(_DEVICE_PREFIXES):
+        return None
+    drive, rest = ntpath.splitdrive(p)
+    if ":" in rest:
+        return None
+    parts = []
+    for c in rest.split("\\"):
+        if c not in ("", ".", ".."):
+            c = c.rstrip(". ")
+            if not c:
+                return None
+        parts.append(c)
+    folded = ntpath.normpath(drive + "\\".join(parts))
+    # casefold is broader than the NTFS upcase table except for dotless i (U+0131), which upper-
+    # cases to `I`: map it too, so the only divergence left over-refuses (RB4 I-b)
+    return tuple(c.casefold().replace("\u0131", "i") for c in PureWindowsPath(folded).parts)
+
+
+def _windows_absolute(path: str) -> bool:
+    """Fully qualified as Win32 reads it: `D:\\...` or a `\\\\server\\share` UNC path. Root-relative
+    (`\\runs\\...`), drive-relative (`D:runs`) and plain relative paths depend on the node's current
+    directory, so they cannot be compared offline (RB4-1; `plan_invocation` refuses them too)."""
+    return _WINDOWS_ABSOLUTE.match(path.replace("/", "\\")) is not None
+
+
+# a drive letter and root, or a UNC server and share that are both non-empty
+_WINDOWS_ABSOLUTE = re.compile(r"[A-Za-z]:\\|\\\\[^\\]+\\[^\\]+")
 
 
 def recorded_extract_args(argv: Sequence[str]) -> dict[str, str]:
     """The arguments of a RECORDED real extractor run (argv after the script name), checked
-    against the same contract as `plan_invocation` minus the filesystem checks (an evidence record
-    is validated offline, away from the Windows node). Raises ContractError(code)."""
+    against the same contract as `plan_invocation` (flags, integer values and ranges, custody
+    arguments) minus the filesystem checks: an evidence record is validated offline, away from the
+    Windows node, so the paths are compared lexically as Windows paths instead (RB2-1: no input or
+    custody file inside `--out`; RB3-1: Win32 spellings folded or refused; RB4-1: every one of
+    these paths fully qualified, with the plan's codes). Raises ContractError(code)."""
     args = _parse_complete(argv)
     _check_custody_arguments(args, "mt5")
+    out = _windows_parts(args["--out"])
+    if out is None:
+        raise ContractError("--out_path_not_plain")
+    if not _windows_absolute(args["--out"]):
+        raise ContractError("output_dir_must_be_absolute")
+    for flag in RECORDED_OUTSIDE_DATASET:
+        if flag not in args:
+            continue
+        parts = _windows_parts(args[flag])
+        if parts is None:
+            raise ContractError(f"{flag}_path_not_plain")
+        if not _windows_absolute(args[flag]):
+            raise ContractError(f"{flag}_must_be_absolute")
+        if parts[: len(out)] == out:
+            raise ContractError(f"{flag}_inside_dataset")
     return args
 
 
@@ -221,16 +328,11 @@ def plan_invocation(
     missing = sorted(required_capabilities - offered)
     if missing:
         raise ContractError(f"capability_unsupported:{','.join(missing)}")  # C2
-    args = _parse_complete(argv)  # C1
+    args = _parse_complete(argv)  # C1, integer arguments and ranges included (RB2-1)
     if args["--symbol"] != preregistered_symbol:
         raise ContractError("symbol_differs_from_preregistration")  # C9: verbatim, no mapping
-    try:
-        lo, hi = int(args["--from-raw-msc"]), int(args["--to-raw-msc"])
-        chunk = int(args["--chunk-ms"])
-    except ValueError:
-        raise ContractError("non_integer_argument") from None
-    if hi <= lo or chunk <= 0:
-        raise ContractError("invalid_window_or_chunk")
+    lo, hi = int(args["--from-raw-msc"]), int(args["--to-raw-msc"])
+    chunk = int(args["--chunk-ms"])
     _check_custody_arguments(args, provider)
     root, root_id = _canonical_root(repo_root)
     raw_out = Path(args["--out"])

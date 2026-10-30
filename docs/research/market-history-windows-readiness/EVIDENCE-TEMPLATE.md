@@ -36,10 +36,13 @@ claim to be, or anything about Windows or MT5. The validator's report always say
   `"NOT VERIFIED"` marks an unfilled field. Free text that merely contains such a word is accepted.
   The schema expresses the ASCII part of this rule; NFKC variants are caught by the validator only.
 - **Positive formats (V10, RB-4).** Some fields accept only one shape, so a placeholder spelling the
-  deny-list misses (`0`, `same as above`, `later`) is still refused: `node.python_version`
-  `3.<minor>.<patch>`; `node.uv_version`, `node.numpy_version`, `node.metatrader5_version` and case 1
-  `numpy_version` `<major>.<minor>.<patch>` digits only; `node.os_build` the Windows
-  `platform.version()` value `10.0.<5-digit build>[.<revision>]`; `terminal.build` and case 1
+  deny-list misses (`0`, `same as above`, `later`) is still refused. V11 (RB2-2) binds the pinned
+  ones to the lock, so a well-shaped placeholder (`0.0.0`, `3.99.999`) is refused too:
+  `node.python_version` is `3.13.<patch>` (`requires-python`); `node.metatrader5_version` is exactly
+  `5.0.6180` and `node.numpy_version` and case 1 `numpy_version` exactly `2.5.3` (`uv.lock`; a test
+  re-reads both files); `node.uv_version` is `<major>.<minor>.<patch>` digits only and not all
+  zeros; `node.os_build` the Windows `platform.version()` value `10.0.<5-digit build, no leading
+  zero>[.<revision>]`; `terminal.build` and case 1
   `terminal_build` the terminal build number (4-5 digits). Case 1 `numpy_version` and
   `terminal_build` must equal `node.numpy_version` and `terminal.build`. People
   (`operator`, `second_person_verifier`, `custodian`, `reviewer`), `custody.candidate_creator`,
@@ -124,13 +127,31 @@ contain `synthetic`, `mock`, `fixture`, `test-only`, `dummy` or `fake` as a word
 string of `execution_contract`. `record_id` additionally refuses rehearsal words (`simulated`, `sample`,
 `test`, `emulated`, `demo`, `stub`, `rehearsal`, `dry-run`, `example`, `trial`, `practice`,
 `sandbox`, `syn`); a terminal or server name may legitimately say `Demo`, so they are not refused
-there. These are still deny-lists; the positive checks above do the real work.
+there. These are still deny-lists; the positive checks do the real work. For `record_id` that
+positive check is one grammar (V11, RB2-2): `RUN-<YYYYMMDD>-<0001..9999>`, ASCII digits, a real
+calendar date that equals the UTC date of `timestamps.started_at_utc`
+(`real_record_id_malformed`, `real_record_id_date_differs_from_started_at_utc`). A label the
+deny-list does not know (`smoke-`, `pilot-`, `qa-`, `copy-of-run-0001`) is therefore malformed.
 
 **REAL commands are the reviewed commands (V10, RB-3).** `execution.commands_run` is a list of argv
 lists, never shell strings. In a `REAL_WINDOWS_RUN` every entry must be one of: the extractor
 (`scripts/extract_market_history.py`, optionally after `python` or `uv run [--no-sync] python`)
 with arguments that satisfy `execution_contract` (required flags, one protected-range decision,
-`--operator`/`--operator-key`/`--candidate-out`) and whose `--symbol`, `--from-raw-msc`,
+`--operator`/`--operator-key`/`--candidate-out`; V11, RB2-1: the integer arguments are plain ASCII
+decimals within the extractor's own ranges, `--from-raw-msc` >= 0, `--to-raw-msc` above it,
+`--chunk-ms` and `--max-gap-ms` > 0, `--max-chunk-ticks` >= 1, `--protected-margin-ms` 0..2^62;
+and no input or custody file, `--time-conversion`, `--clock-attestation`, `--protected-utc-ranges`,
+`--operator-key`, `--candidate-out` or `--anchor-out`, lies inside `--out`, compared lexically as
+a Windows path; V12, RB3-1: case, `/` and `\`, `..` and trailing dots or spaces of a component
+are folded as Win32 folds them, and a path with a `\\?\`, `\\.\` or `\??\` prefix, an
+alternate data stream (`:` after the drive) or an all-dot component is refused as
+`<flag>_path_not_plain`; V13, RB4-1: `--out` and each of these paths must be fully qualified,
+`D:\...` or `\\server\share\...`, as `plan` requires, so a root-relative (`\runs\...`),
+drive-relative (`D:dataset`) or plain relative path is `output_dir_must_be_absolute` or
+`<flag>_must_be_absolute`; leading dots and spaces of a component are kept, as Win32 keeps them;
+8.3 short names such as `NEXORA~1`, junctions and symlinks cannot be resolved offline and are a
+documented limit, as is whether a UNC server or share segment is trimmed; `plan` checks the real
+paths on the node) and whose `--symbol`, `--from-raw-msc`,
 `--to-raw-msc`, `--out` and `--operator` equal `window.symbol`, `window.window_raw_msc`,
 `custody.dataset_ref` and `people.operator`; the verifier, equal to `custody.verifier_argv`;
 `python -m tests.windows_integration_readiness.filesystem_probes <dir>`; or
@@ -144,7 +165,8 @@ and none of them may equal `reviewer`. All four are principal ids (raw grammar a
 disguised spelling (hidden characters, homoglyphs, case, spaces) is refused as an invalid value
 instead of passing as a different person; they are also compared after NFKC normalization and case
 folding. `custody.approver_identities` must be exactly `[custodian]`: the #99 registry has one id
-per principal and no aliases. This cannot detect two different names used by one person.
+per principal and no aliases. `custody.candidate_creator` must be `people.operator` (V11, RB2-3):
+the candidate is the operator's own signed attestation of the extractor run. This cannot detect two different names used by one person.
 
 ## Sections
 

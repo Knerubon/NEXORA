@@ -69,7 +69,7 @@ def real_shaped_pass(overall: str = "PASS") -> Rec:
     attacked. Provenance fields carry no synthetic markers."""
     r = synthetic()
     r["evidence_class"] = "REAL_WINDOWS_RUN"
-    r["identity"]["record_id"] = "REAL-SHAPE-0001"
+    r["identity"]["record_id"] = "RUN-20260101-0001"  # RB2-2 grammar, the start date
     r["node"]["hostname_class"] = "node-class-a"
     r["terminal"].update(company="Broker Co", name="Terminal", server_name="Server-1")
     r["source_provenance"]["source_descriptor"] = "terminal copy_ticks_range"

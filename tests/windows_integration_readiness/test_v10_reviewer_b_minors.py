@@ -306,8 +306,8 @@ NOT_A_VERSION += ["later", "5.0", "v5.0.45", "5.0.45 ", "5.0.45\n", "\uff15.0.45
 @pytest.mark.parametrize(
     ("section", "field", "kind"),
     [
-        ("node", "metatrader5_version", "release"),
-        ("node", "numpy_version", "release"),
+        ("node", "metatrader5_version", "mt5_locked"),  # V11 (RB2-2): bound to uv.lock
+        ("node", "numpy_version", "numpy_locked"),
         ("node", "uv_version", "release"),
         ("node", "python_version", "python_version"),
         ("node", "os_build", "windows_build"),
@@ -346,20 +346,20 @@ def test_rb4_real_formats_are_accepted(section: str, field: str, value: str) -> 
     assert report.ok, report.errors
 
 
-@pytest.mark.parametrize(
-    ("key", "section", "name"),
-    [
-        ("numpy_version", "node", "numpy_version"),
-        ("terminal_build", "terminal", "build"),
-    ],
-)
-def test_rb4_case1_versions_must_equal_the_node_and_terminal(
-    key: str, section: str, name: str
-) -> None:
+def test_rb4_case1_terminal_build_must_equal_the_terminal() -> None:
     def mutate(r: Rec) -> None:
-        r["cases"]["1"]["evidence"][key] = "9999" if key == "terminal_build" else "9.9.9"
+        r["cases"]["1"]["evidence"]["terminal_build"] = "9999"
 
-    _refused(mutate, f"case1_{key}_differs_from_{section}.{name}")
+    _refused(mutate, "case1_terminal_build_differs_from_terminal.build")
+
+
+def test_rb4_case1_numpy_version_is_the_locked_one() -> None:
+    # V11 (RB2-2): node.numpy_version and case 1 are both bound to the uv.lock version, so a
+    # different case 1 value is refused by its kind before the cross-check can see it
+    def mutate(r: Rec) -> None:
+        r["cases"]["1"]["evidence"]["numpy_version"] = "9.9.9"
+
+    _refused(mutate, "invalid_value:cases.1.evidence.numpy_version:numpy_locked")
 
 
 REHEARSAL_IDS = [
@@ -384,7 +384,8 @@ def test_rb4_record_id_rehearsal_markers_are_refused(record_id: str) -> None:
     )
 
 
-@pytest.mark.parametrize("record_id", ["RUN-20260115-0001", "node-a.2026-01-15.0001"])
+# V11 (RB2-2): the one REAL record id grammar, dated with the run's start (2026-01-01 here)
+@pytest.mark.parametrize("record_id", ["RUN-20260101-0001", "RUN-20260101-9999"])
 def test_rb4_plain_record_ids_are_accepted(record_id: str) -> None:
     report = _report(lambda r: r["identity"].update(record_id=record_id))
     assert report.ok, report.errors
