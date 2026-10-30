@@ -170,6 +170,25 @@ def _parse(argv: Sequence[str]) -> dict[str, str]:
     return out
 
 
+def _parse_complete(argv: Sequence[str]) -> dict[str, str]:
+    args = _parse(argv)
+    for flag in EXTRACT_REQUIRED:
+        if flag not in args:
+            raise ContractError(f"missing_argument:{flag}")
+    if sum(f in args for f in EXTRACT_ONE_OF) != 1:
+        raise ContractError("protected_range_decision_required")
+    return args
+
+
+def recorded_extract_args(argv: Sequence[str]) -> dict[str, str]:
+    """The arguments of a RECORDED real extractor run (argv after the script name), checked
+    against the same contract as `plan_invocation` minus the filesystem checks (an evidence record
+    is validated offline, away from the Windows node). Raises ContractError(code)."""
+    args = _parse_complete(argv)
+    _check_custody_arguments(args, "mt5")
+    return args
+
+
 def plan_invocation(
     argv: Sequence[str],
     *,
@@ -202,12 +221,7 @@ def plan_invocation(
     missing = sorted(required_capabilities - offered)
     if missing:
         raise ContractError(f"capability_unsupported:{','.join(missing)}")  # C2
-    args = _parse(argv)  # C1
-    for flag in EXTRACT_REQUIRED:
-        if flag not in args:
-            raise ContractError(f"missing_argument:{flag}")
-    if sum(f in args for f in EXTRACT_ONE_OF) != 1:
-        raise ContractError("protected_range_decision_required")
+    args = _parse_complete(argv)  # C1
     if args["--symbol"] != preregistered_symbol:
         raise ContractError("symbol_differs_from_preregistration")  # C9: verbatim, no mapping
     try:

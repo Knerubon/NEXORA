@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "nexora.windows-readiness-evidence/4",
+  "$id": "nexora.windows-readiness-evidence/5",
   "title": "Market-history Windows readiness evidence record",
   "description": "GENERATED from tests/windows_integration_readiness/evidence_validator.py (build_schema). Structural gate only: evidence_validator.validate_record is authoritative and adds identity, checkout and overall-result derivation rules. Passing either proves nothing about Windows or MT5.",
   "type": "object",
@@ -89,7 +89,7 @@
   },
   "properties": {
     "schema_version": {
-      "const": "nexora.windows-readiness-evidence/4"
+      "const": "nexora.windows-readiness-evidence/5"
     },
     "evidence_class": {
       "enum": [
@@ -261,7 +261,8 @@
               "const": "NOT VERIFIED"
             },
             {
-              "$ref": "#/$defs/kind_text"
+              "type": "string",
+              "pattern": "^10\\.0\\.[0-9]{5}(\\.[0-9]{1,6})?$"
             }
           ]
         },
@@ -301,7 +302,8 @@
               "const": "NOT VERIFIED"
             },
             {
-              "$ref": "#/$defs/kind_text"
+              "type": "string",
+              "pattern": "^3\\.[0-9]{1,2}\\.[0-9]{1,3}$"
             }
           ]
         },
@@ -311,7 +313,8 @@
               "const": "NOT VERIFIED"
             },
             {
-              "$ref": "#/$defs/kind_text"
+              "type": "string",
+              "pattern": "^[0-9]{1,4}\\.[0-9]{1,4}\\.[0-9]{1,6}$"
             }
           ]
         },
@@ -321,7 +324,8 @@
               "const": "NOT VERIFIED"
             },
             {
-              "$ref": "#/$defs/kind_text"
+              "type": "string",
+              "pattern": "^[0-9]{1,4}\\.[0-9]{1,4}\\.[0-9]{1,6}$"
             }
           ]
         },
@@ -331,7 +335,8 @@
               "const": "NOT VERIFIED"
             },
             {
-              "$ref": "#/$defs/kind_text"
+              "type": "string",
+              "pattern": "^[0-9]{1,4}\\.[0-9]{1,4}\\.[0-9]{1,6}$"
             }
           ]
         }
@@ -374,7 +379,8 @@
               "const": "NOT VERIFIED"
             },
             {
-              "$ref": "#/$defs/kind_text"
+              "type": "string",
+              "pattern": "^[1-9][0-9]{3,4}$"
             }
           ]
         },
@@ -421,7 +427,8 @@
               "const": "NOT VERIFIED"
             },
             {
-              "$ref": "#/$defs/kind_text"
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9._@-]{0,127}$"
             }
           ]
         },
@@ -431,7 +438,8 @@
               "const": "NOT VERIFIED"
             },
             {
-              "$ref": "#/$defs/kind_text"
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9._@-]{0,127}$"
             }
           ]
         },
@@ -441,7 +449,8 @@
               "const": "NOT VERIFIED"
             },
             {
-              "$ref": "#/$defs/kind_text"
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9._@-]{0,127}$"
             }
           ]
         },
@@ -451,7 +460,8 @@
               "const": "NOT VERIFIED"
             },
             {
-              "$ref": "#/$defs/kind_text"
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9._@-]{0,127}$"
             }
           ]
         },
@@ -724,6 +734,7 @@
       "additionalProperties": false,
       "required": [
         "store_ref",
+        "dataset_ref",
         "registry_ref",
         "registry_identities",
         "approver_identities",
@@ -778,6 +789,16 @@
             }
           ]
         },
+        "dataset_ref": {
+          "anyOf": [
+            {
+              "const": "NOT VERIFIED"
+            },
+            {
+              "$ref": "#/$defs/kind_text"
+            }
+          ]
+        },
         "registry_ref": {
           "anyOf": [
             {
@@ -796,8 +817,10 @@
             {
               "type": "array",
               "minItems": 1,
+              "uniqueItems": true,
               "items": {
-                "$ref": "#/$defs/kind_text"
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9._@-]{0,127}$"
               }
             }
           ]
@@ -810,8 +833,10 @@
             {
               "type": "array",
               "minItems": 1,
+              "uniqueItems": true,
               "items": {
-                "$ref": "#/$defs/kind_text"
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9._@-]{0,127}$"
               }
             }
           ]
@@ -822,7 +847,8 @@
               "const": "NOT VERIFIED"
             },
             {
-              "$ref": "#/$defs/kind_text"
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9._@-]{0,127}$"
             }
           ]
         },
@@ -1289,7 +1315,18 @@
               "type": "array",
               "minItems": 1,
               "items": {
-                "$ref": "#/$defs/kind_text"
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "anyOf": [
+                    {
+                      "const": "--"
+                    },
+                    {
+                      "$ref": "#/$defs/kind_text"
+                    }
+                  ]
+                }
               }
             }
           ]
@@ -1486,7 +1523,8 @@
                       "const": "NOT VERIFIED"
                     },
                     {
-                      "$ref": "#/$defs/kind_text"
+                      "type": "string",
+                      "pattern": "^[0-9]{1,4}\\.[0-9]{1,4}\\.[0-9]{1,6}$"
                     }
                   ]
                 },
@@ -1496,7 +1534,8 @@
                       "const": "NOT VERIFIED"
                     },
                     {
-                      "$ref": "#/$defs/kind_text"
+                      "type": "string",
+                      "pattern": "^[1-9][0-9]{3,4}$"
                     }
                   ]
                 },
@@ -2646,7 +2685,8 @@
                     }
                   },
                   {
-                    "$ref": "#/$defs/kind_text"
+                    "type": "string",
+                    "pattern": "^10\\.0\\.[0-9]{5}(\\.[0-9]{1,6})?$"
                   }
                 ]
               },
@@ -2694,7 +2734,8 @@
                     }
                   },
                   {
-                    "$ref": "#/$defs/kind_text"
+                    "type": "string",
+                    "pattern": "^3\\.[0-9]{1,2}\\.[0-9]{1,3}$"
                   }
                 ]
               },
@@ -2706,7 +2747,8 @@
                     }
                   },
                   {
-                    "$ref": "#/$defs/kind_text"
+                    "type": "string",
+                    "pattern": "^[0-9]{1,4}\\.[0-9]{1,4}\\.[0-9]{1,6}$"
                   }
                 ]
               },
@@ -2718,7 +2760,8 @@
                     }
                   },
                   {
-                    "$ref": "#/$defs/kind_text"
+                    "type": "string",
+                    "pattern": "^[0-9]{1,4}\\.[0-9]{1,4}\\.[0-9]{1,6}$"
                   }
                 ]
               },
@@ -2730,7 +2773,8 @@
                     }
                   },
                   {
-                    "$ref": "#/$defs/kind_text"
+                    "type": "string",
+                    "pattern": "^[0-9]{1,4}\\.[0-9]{1,4}\\.[0-9]{1,6}$"
                   }
                 ]
               }
@@ -2779,7 +2823,8 @@
                     }
                   },
                   {
-                    "$ref": "#/$defs/kind_text"
+                    "type": "string",
+                    "pattern": "^[1-9][0-9]{3,4}$"
                   }
                 ]
               },
@@ -2832,7 +2877,8 @@
                     }
                   },
                   {
-                    "$ref": "#/$defs/kind_text"
+                    "type": "string",
+                    "pattern": "^[a-z0-9][a-z0-9._@-]{0,127}$"
                   }
                 ]
               },
@@ -2844,7 +2890,8 @@
                     }
                   },
                   {
-                    "$ref": "#/$defs/kind_text"
+                    "type": "string",
+                    "pattern": "^[a-z0-9][a-z0-9._@-]{0,127}$"
                   }
                 ]
               },
@@ -2856,7 +2903,8 @@
                     }
                   },
                   {
-                    "$ref": "#/$defs/kind_text"
+                    "type": "string",
+                    "pattern": "^[a-z0-9][a-z0-9._@-]{0,127}$"
                   }
                 ]
               },
@@ -2868,7 +2916,8 @@
                     }
                   },
                   {
-                    "$ref": "#/$defs/kind_text"
+                    "type": "string",
+                    "pattern": "^[a-z0-9][a-z0-9._@-]{0,127}$"
                   }
                 ]
               },
@@ -3169,6 +3218,7 @@
             "additionalProperties": false,
             "required": [
               "store_ref",
+              "dataset_ref",
               "registry_ref",
               "registry_identities",
               "approver_identities",
@@ -3225,6 +3275,18 @@
                   }
                 ]
               },
+              "dataset_ref": {
+                "allOf": [
+                  {
+                    "not": {
+                      "const": "NOT VERIFIED"
+                    }
+                  },
+                  {
+                    "$ref": "#/$defs/kind_text"
+                  }
+                ]
+              },
               "registry_ref": {
                 "allOf": [
                   {
@@ -3247,8 +3309,10 @@
                   {
                     "type": "array",
                     "minItems": 1,
+                    "uniqueItems": true,
                     "items": {
-                      "$ref": "#/$defs/kind_text"
+                      "type": "string",
+                      "pattern": "^[a-z0-9][a-z0-9._@-]{0,127}$"
                     }
                   }
                 ]
@@ -3263,8 +3327,10 @@
                   {
                     "type": "array",
                     "minItems": 1,
+                    "uniqueItems": true,
                     "items": {
-                      "$ref": "#/$defs/kind_text"
+                      "type": "string",
+                      "pattern": "^[a-z0-9][a-z0-9._@-]{0,127}$"
                     }
                   }
                 ]
@@ -3277,7 +3343,8 @@
                     }
                   },
                   {
-                    "$ref": "#/$defs/kind_text"
+                    "type": "string",
+                    "pattern": "^[a-z0-9][a-z0-9._@-]{0,127}$"
                   }
                 ]
               },
@@ -3748,7 +3815,18 @@
                     "type": "array",
                     "minItems": 1,
                     "items": {
-                      "$ref": "#/$defs/kind_text"
+                      "type": "array",
+                      "minItems": 1,
+                      "items": {
+                        "anyOf": [
+                          {
+                            "const": "--"
+                          },
+                          {
+                            "$ref": "#/$defs/kind_text"
+                          }
+                        ]
+                      }
                     }
                   }
                 ]
@@ -3955,7 +4033,8 @@
                             }
                           },
                           {
-                            "$ref": "#/$defs/kind_text"
+                            "type": "string",
+                            "pattern": "^[0-9]{1,4}\\.[0-9]{1,4}\\.[0-9]{1,6}$"
                           }
                         ]
                       },
@@ -3967,7 +4046,8 @@
                             }
                           },
                           {
-                            "$ref": "#/$defs/kind_text"
+                            "type": "string",
+                            "pattern": "^[1-9][0-9]{3,4}$"
                           }
                         ]
                       },

@@ -262,7 +262,7 @@ def _present(value: object, pattern: re.Pattern[str], name: str, blocked: list[s
     if value is None:
         blocked.append(f"{name}_not_recorded")
         return False
-    if type(value) is not str or not pattern.match(value):
+    if type(value) is not str or not pattern.fullmatch(value):  # I-1: no trailing newline
         blocked.append(f"{name}_malformed")
         return False
     return True
@@ -277,11 +277,13 @@ def _lineage(b: CustodyBundle, blocked: list[str]) -> None:
         blocked.append("revocation_ids_not_recorded")
     elif len(ids) != len(b.revocation_seqs):
         blocked.append("revocation_ids_do_not_match_revocation_seqs")
-    elif not all(type(i) is str and _HEX32.match(i) for i in ids) or len(set(ids)) != len(ids):
+    elif not all(type(i) is str and _HEX32.fullmatch(i) for i in ids) or len(set(ids)) != len(ids):
         blocked.append("revocation_ids_malformed")
     if ack is None:
         blocked.append("acknowledged_revocations_not_recorded")
-    elif not all(type(i) is str and _HEX32.match(i) for i in ack) or list(ack) != sorted(set(ack)):
+    elif not all(type(i) is str and _HEX32.fullmatch(i) for i in ack) or list(ack) != sorted(
+        set(ack)
+    ):
         blocked.append("acknowledged_revocations_malformed")
     if ids is None or ack is None or len(ids) != len(b.revocation_seqs):
         return
@@ -462,6 +464,9 @@ def trust_gate(b: CustodyBundle) -> GateDecision:
         # candidate also wins, so re-appending a revoked approval cannot restore it.
         if any(seq > b.approval_seq for seq in b.revocation_seqs):
             blocked.append("approval_revoked")
+        if b.approval_seq in b.revocation_seqs:
+            # I-2: one chain entry cannot be both; refused here, not only by the validator
+            blocked.append("revocation_recorded_at_approval_seq")
         seqs = b.candidate_approval_seqs
         if not seqs:
             # V9: omission must fail closed (it used to default to "no replay to look for")
@@ -500,7 +505,7 @@ def trust_gate(b: CustodyBundle) -> GateDecision:
         if b.approval_seq is not None:
             if b.approval_seq > seq:
                 blocked.append("approval_outside_pinned_chain")
-            if b.approval_entry_sha256 is None or not _SHA256.match(b.approval_entry_sha256):
+            if b.approval_entry_sha256 is None or not _SHA256.fullmatch(b.approval_entry_sha256):
                 blocked.append("approval_entry_sha256_not_recorded")
             elif b.approval_seq == seq and b.approval_entry_sha256 != digest:
                 blocked.append("approval_entry_differs_from_pinned_head")
