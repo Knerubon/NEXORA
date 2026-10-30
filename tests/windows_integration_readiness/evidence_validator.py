@@ -85,9 +85,18 @@ _PRINCIPAL = "^" + str(dp.CONTRACT["principal_id_grammar"]) + "$"
 # never be complete). Versions are what the tool itself prints (`python -V`, `uv --version`,
 # `numpy.__version__`, `MetaTrader5.__version__`); `os_build` is `platform.version()` on Windows
 # 10/11/Server (major.minor.build[.revision]); the terminal build is `terminal_info().build`.
-_PYTHON_VERSION = r"^3\.[0-9]{1,2}\.[0-9]{1,3}$"
-_RELEASE = r"^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,6}$"
-_WINDOWS_BUILD = r"^10\.0\.[0-9]{5}(\.[0-9]{1,6})?$"
+# RB2-2: a shape alone let `0.0.0`, `3.99.999` and `10.0.00000` pass, so the fields the repository
+# pins are bound to the pin: Python to `requires-python` (3.13.x), MetaTrader5 and numpy to the
+# exact `uv.lock` versions (identical at this package and at the pinned extractor candidate; a test
+# re-reads both files). A version no lock fixes (uv) must not be all zeros, and a Windows build
+# number has five digits without a leading zero (Windows 10/11/Server builds are 10240 and up).
+LOCKED_PYTHON_SERIES = "3.13"
+LOCKED_VERSIONS = {"metatrader5": "5.0.6180", "numpy": "2.5.3"}
+_PYTHON_VERSION = "^" + re.escape(LOCKED_PYTHON_SERIES) + r"\.[0-9]{1,3}$"
+_MT5_LOCKED = "^" + re.escape(LOCKED_VERSIONS["metatrader5"]) + "$"
+_NUMPY_LOCKED = "^" + re.escape(LOCKED_VERSIONS["numpy"]) + "$"
+_RELEASE = r"^(?![0.]+$)[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,6}$"
+_WINDOWS_BUILD = r"^10\.0\.[1-9][0-9]{4}(\.[0-9]{1,6})?$"
 _TERMINAL_BUILD = r"^[1-9][0-9]{3,4}$"
 _NONBLANK = r"\S"
 
@@ -217,6 +226,8 @@ KINDS: dict[str, dict[str, Any]] = {
     },
     "python_version": {"type": "string", "pattern": _PYTHON_VERSION},
     "release": {"type": "string", "pattern": _RELEASE},
+    "mt5_locked": {"type": "string", "pattern": _MT5_LOCKED},
+    "numpy_locked": {"type": "string", "pattern": _NUMPY_LOCKED},
     "windows_build": {"type": "string", "pattern": _WINDOWS_BUILD},
     "terminal_build": {"type": "string", "pattern": _TERMINAL_BUILD},
     "pos_int": {"type": "integer", "minimum": 1},
@@ -306,8 +317,8 @@ SECTIONS: dict[str, dict[str, str]] = {
         "antivirus_indexer_state": "text",
         "python_version": "python_version",
         "uv_version": "release",
-        "metatrader5_version": "release",
-        "numpy_version": "release",
+        "metatrader5_version": "mt5_locked",
+        "numpy_version": "numpy_locked",
     },
     "terminal": {
         "company": "text",
@@ -420,7 +431,7 @@ CASE_FIELDS: dict[str, dict[str, str]] = {
         "len": "int",
         "empty_behaviour": "text",
         "last_error": "text",
-        "numpy_version": "release",
+        "numpy_version": "numpy_locked",
         "terminal_build": "terminal_build",
         "first_last_time_msc_in_window": "bool",
     },
@@ -807,6 +818,8 @@ def _kind_ok(kind: str, v: Any) -> bool:
         ),
         "python_version": lambda x: _re(_PYTHON_VERSION, x),
         "release": lambda x: _re(_RELEASE, x),
+        "mt5_locked": lambda x: _re(_MT5_LOCKED, x),
+        "numpy_locked": lambda x: _re(_NUMPY_LOCKED, x),
         "windows_build": lambda x: _re(_WINDOWS_BUILD, x),
         "terminal_build": lambda x: _re(_TERMINAL_BUILD, x),
         "pos_int": lambda x: _is_int(x) and x >= 1,
@@ -1309,6 +1322,11 @@ def _check_custody(
     if "approver_identities" in cu and "custodian" in v["people"]:
         if cu["approver_identities"] != [v["people"]["custodian"]]:
             r.errors.append("approver_identities_must_be_exactly_the_custodian")
+    # RB2-3: the candidate is the operator's signed attestation of their own extraction, so its
+    # creator is the operator (the extractor's `--operator` is bound to people.operator as well)
+    if "candidate_creator" in cu and "operator" in v["people"]:
+        if cu["candidate_creator"] != v["people"]["operator"]:
+            r.errors.append("candidate_creator_must_be_the_operator")
     if {"approval_seq", "candidate_approval_seqs"} <= set(cu):
         if cu["approval_seq"] not in cu["candidate_approval_seqs"]:
             r.errors.append("approval_seq_not_among_candidate_approval_seqs")
@@ -1401,13 +1419,32 @@ def _check_real_markers(v: Mapping[str, dict[str, Any]], r: Report) -> None:
     rid = v["identity"].get("record_id")
     if has_record_id_marker(rid) and not has_mock_marker(rid):
         r.errors.append("real_record_carries_mock_marker:identity.record_id")
-    if rid is not None and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{7,127}", str(rid)):
-        r.errors.append("real_record_id_malformed")  # positive check: ASCII id, >= 8 characters
+    if rid is not None:
+        _check_real_record_id(str(rid), v["timestamps"].get("started_at_utc"), r)
     sha = v["identity"].get("extractor_sha")
     if sha is not None and not dp.head_matches_candidate(sha):
         r.errors.append(
             f"real_record_extractor_sha_not_pinned_pr96_candidate:{dp.classify_head(sha)}"
         )
+
+
+# RB2-2: a REAL record id has ONE positive grammar, `RUN-<UTC start date YYYYMMDD>-<0001..9999>`,
+# so a rehearsal label the deny-list above does not know (`smoke-`, `pilot-`, `qa-`,
+# `copy-of-run-0001`) is refused as malformed. The date must be the run's own start date.
+REAL_RECORD_ID = re.compile(r"RUN-([0-9]{8})-(?!0000)([0-9]{4})")
+
+
+def _check_real_record_id(rid: str, started_at: Any, r: Report) -> None:
+    m = REAL_RECORD_ID.fullmatch(rid)
+    try:
+        day = None if m is None else datetime.strptime(m.group(1), "%Y%m%d").date()
+    except ValueError:
+        day = None
+    if day is None:
+        r.errors.append("real_record_id_malformed")
+    elif isinstance(started_at, str) and _re(_UTC, started_at) and _parses(started_at):
+        if _when(started_at).date() != day:  # _UTC only admits Z or +00:00
+            r.errors.append("real_record_id_date_differs_from_started_at_utc")
 
 
 def validate_record(

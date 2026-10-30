@@ -42,11 +42,13 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import ntpath
 import os
+import re
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 from tests.windows_integration_readiness import custody_gate as cg
@@ -177,15 +179,72 @@ def _parse_complete(argv: Sequence[str]) -> dict[str, str]:
             raise ContractError(f"missing_argument:{flag}")
     if sum(f in args for f in EXTRACT_ONE_OF) != 1:
         raise ContractError("protected_range_decision_required")
+    _check_numeric_arguments(args)
     return args
+
+
+# RB2-1: the extractor's integer arguments (`type=int` in its argparse) and the range rules its
+# library applies before the terminal is touched (`ExtractionRequest`, `QualityConfig`,
+# `validate_margin`). Lexically stricter than `int()`: plain ASCII decimal only, so `1e3`, `+5`,
+# `1_000`, ` 5` and non-ASCII digits are refused here even where `int()` would take them.
+_INT_TOKEN = re.compile(r"-?[0-9]+")
+_MARGIN_BOUND = 2**62
+EXTRACT_INT_FLAGS = (
+    "--from-raw-msc",
+    "--to-raw-msc",
+    "--chunk-ms",
+    "--max-gap-ms",
+    "--max-chunk-ticks",
+    "--protected-margin-ms",
+)
+
+
+def _check_numeric_arguments(args: Mapping[str, str]) -> None:
+    ints: dict[str, int] = {}
+    for flag in EXTRACT_INT_FLAGS:
+        if flag in args:
+            if not _INT_TOKEN.fullmatch(args[flag]):
+                raise ContractError("non_integer_argument")
+            ints[flag] = int(args[flag])
+    lo, hi, chunk = ints["--from-raw-msc"], ints["--to-raw-msc"], ints["--chunk-ms"]
+    if lo < 0 or hi <= lo or chunk <= 0:
+        raise ContractError("invalid_window_or_chunk")
+    if ints["--max-gap-ms"] <= 0:
+        raise ContractError("invalid_max_gap_ms")
+    if ints.get("--max-chunk-ticks", 1) < 1:
+        raise ContractError("invalid_max_chunk_ticks")
+    if not 0 <= ints.get("--protected-margin-ms", 0) <= _MARGIN_BOUND:
+        raise ContractError("invalid_protected_margin_ms")
+
+
+# input and custody files the extractor reads or writes: none of them may sit in the dataset folder
+RECORDED_OUTSIDE_DATASET = (
+    "--time-conversion",
+    "--clock-attestation",
+    "--protected-utc-ranges",
+    "--operator-key",
+    "--candidate-out",
+    "--anchor-out",
+)
+
+
+def _windows_parts(path: str) -> tuple[str, ...]:
+    """Lexical, case-insensitive parts of a recorded Windows path (`/` or `\\`, `..` folded)."""
+    return tuple(p.casefold() for p in PureWindowsPath(ntpath.normpath(path)).parts)
 
 
 def recorded_extract_args(argv: Sequence[str]) -> dict[str, str]:
     """The arguments of a RECORDED real extractor run (argv after the script name), checked
-    against the same contract as `plan_invocation` minus the filesystem checks (an evidence record
-    is validated offline, away from the Windows node). Raises ContractError(code)."""
+    against the same contract as `plan_invocation` (flags, integer values and ranges, custody
+    arguments) minus the filesystem checks: an evidence record is validated offline, away from the
+    Windows node, so the paths are compared lexically as Windows paths instead (RB2-1: no input or
+    custody file inside `--out`). Raises ContractError(code)."""
     args = _parse_complete(argv)
     _check_custody_arguments(args, "mt5")
+    out = _windows_parts(args["--out"])
+    for flag in RECORDED_OUTSIDE_DATASET:
+        if flag in args and _windows_parts(args[flag])[: len(out)] == out:
+            raise ContractError(f"{flag}_inside_dataset")
     return args
 
 
@@ -221,16 +280,11 @@ def plan_invocation(
     missing = sorted(required_capabilities - offered)
     if missing:
         raise ContractError(f"capability_unsupported:{','.join(missing)}")  # C2
-    args = _parse_complete(argv)  # C1
+    args = _parse_complete(argv)  # C1, integer arguments and ranges included (RB2-1)
     if args["--symbol"] != preregistered_symbol:
         raise ContractError("symbol_differs_from_preregistration")  # C9: verbatim, no mapping
-    try:
-        lo, hi = int(args["--from-raw-msc"]), int(args["--to-raw-msc"])
-        chunk = int(args["--chunk-ms"])
-    except ValueError:
-        raise ContractError("non_integer_argument") from None
-    if hi <= lo or chunk <= 0:
-        raise ContractError("invalid_window_or_chunk")
+    lo, hi = int(args["--from-raw-msc"]), int(args["--to-raw-msc"])
+    chunk = int(args["--chunk-ms"])
     _check_custody_arguments(args, provider)
     root, root_id = _canonical_root(repo_root)
     raw_out = Path(args["--out"])
