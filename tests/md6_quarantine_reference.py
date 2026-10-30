@@ -1010,7 +1010,10 @@ def check_reentry(
             # N5: this exact subset of the quarantined content was itself requalified.
             requalified.append(e.entry_hash)
             continue
-        names = {q.dataset_id, *q.previous_aliases}
+        # R3-m4: a WINDOW entry's dataset_id label may name the containing dataset, which its
+        # siblings honestly declare as parent. For WINDOW entries only content (the window's ordered
+        # hash) keys a declared-lineage hit; record overlap is checked below either way (QI-R1/R2).
+        names: set[str] = set() if q.scope == "WINDOW" else {q.dataset_id, *q.previous_aliases}
         # A declared parent that is itself a requalified identity is not a quarantined parent.
         lineage_hit = any(
             p.ordered_content_hash not in requal

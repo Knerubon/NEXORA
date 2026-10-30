@@ -89,7 +89,11 @@ not match the anchor.
   quarantines MUST be registered with `scope = WINDOW` and a `window_id`, and their content is the window's records.
   The re-entry check is applied to each evaluation window as its own candidate (A-24). A WINDOW entry therefore
   blocks any candidate that contains its records (for example the whole containing dataset, as SUPERSET) but not a
-  sibling window checked on its own (round-2 N4; D09 option b).
+  sibling window checked on its own (round-2 N4; D09 option b). A WINDOW entry's `dataset_id` and aliases
+  are labels and MAY name the containing dataset, so for a WINDOW entry a candidate's declared parent is a
+  lineage hit only when the parent's `ordered_content_hash` equals the window's; a sibling that declares the
+  containing dataset as parent is decided by its records like a sibling that declares nothing (R3-m4).
+  DATASET entries keep the label and alias match.
 - **QI-R3.** Every entry MUST carry all of: content identity (all five fields), `record_hashes`,
   `shadow_record_hashes`, `dataset_id`, `previous_aliases` (may be empty), `lineage_parents` (may be empty),
   `window_id` (null for DATASET), `instrument_id`, rejection reason (`defect_class` and preregistered

@@ -494,6 +494,28 @@ def _exposing(record: Record) -> tuple[Target, ...] | None:
     return None
 
 
+def exposure_record_problems(record: Evaluation | ProtectedStatisticsView) -> tuple[str, ...]:
+    """Missing identity fields of an exposure entry (R3-m2).
+
+    An exposure entry is a logged look. If its id or footprint is missing or malformed, what it
+    observed is unknown, so it must fail closed (spec section 6) instead of exposing nothing.
+    """
+    problems: list[str] = []
+    record_id = record.evaluation_id if isinstance(record, Evaluation) else record.view_id
+    if not record_id:
+        problems.append("id")
+    if not record.targets:
+        problems.append("targets")
+    for t in record.targets:
+        if not (t.instrument_id and t.dataset_id):
+            problems.append("target instrument_id/dataset_id")
+        if not (t.content_identity.content_hash and t.content_identity.canonicalization_version):
+            problems.append("target content_identity")
+        if t.start_ms >= t.end_ms:
+            problems.append("target window [from, to)")
+    return tuple(problems)
+
+
 def exposed_parts(
     ledger: Ledger,
     before_position: int,
@@ -505,6 +527,9 @@ def exposed_parts(
 
     ``ignore_preregistrations`` skips evaluations run under those registrations; it is used only
     for the members of one Quant-declared multiplicity set (never for views or unregistered runs).
+
+    Raises LineageUnresolvable for an exposure entry with missing identity fields (R3-m2): its
+    footprint is unknown, so exposure cannot be decided. This is checked before any skip.
     """
     found: list[Piece] = []
     for entry in ledger[:before_position]:
@@ -512,6 +537,12 @@ def exposed_parts(
         if targets is None:
             continue
         record = entry.record
+        assert isinstance(record, Evaluation | ProtectedStatisticsView)
+        problems = exposure_record_problems(record)
+        if problems:
+            raise LineageUnresolvable(
+                f"exposure entry at position {entry.position} is missing {', '.join(problems)}"
+            )
         if (
             isinstance(record, Evaluation)
             and record.preregistration_id is not None
@@ -863,11 +894,18 @@ def classify_multiplicity_set(
     verified = False
     if authority_verifier is not None:
         try:
-            verified = bool(
-                authority_verifier(declaration.quant_authority_ref, declaration.correction_ref)
+            answer: object = authority_verifier(
+                declaration.quant_authority_ref, declaration.correction_ref
             )
         except Exception as exc:  # a verifier that cannot decide fails closed
             return _unverified(f"authority verifier failed: {type(exc).__name__}")
+        # Only the exact bool True approves; no truthiness coercion (a status string, a record or
+        # 1 is not an approval). A non-bool answer is a verifier contract violation.
+        if not isinstance(answer, bool):
+            return _unverified(
+                f"authority verifier returned {type(answer).__name__}, not bool: not an approval"
+            )
+        verified = answer is True
     if not verified:
         return Assessment(
             Outcome.PENDING_QUANT_AUTHORITY,

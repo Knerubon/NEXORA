@@ -239,7 +239,9 @@ ledger:
   correction.
 - M7. Authority is never inferred from free text. A declaration with well-formed references yields
   PENDING_QUANT_AUTHORITY unless a verifier supplied from outside approves the pair; a verifier that
-  fails or raises makes the set UNVERIFIED. What a verifier checks (a registry, a signed record, a
+  fails or raises makes the set UNVERIFIED. Only the exact bool `True` is an approval: `False` leaves the
+  set PENDING_QUANT_AUTHORITY, and any non-bool answer (a status string, a record, `1`, `None`) is a
+  verifier contract violation and makes the set UNVERIFIED (PR #97 review m-1). What a verifier checks (a registry, a signed record, a
   commit) is OPEN (QE-7). The reference model injects a callable and ships none; its tests use a
   SYNTHETIC test double that is not an authority registry. Until a verified authority exists no declared
   set is INDEPENDENT, which is the structural default consistent with "no default allows several
@@ -331,6 +333,7 @@ the shared units releases the contention (C9).
 | Lineage missing, `UNKNOWN`, cyclic, or a derived window part without a recorded parent | UNVERIFIED |
 | Target instrument or window conflicts with the lineage record of its `content_identity` | UNVERIFIED |
 | Missing required identity field | UNVERIFIED |
+| Any exposure entry (evaluation or protected view) before the evaluation with empty `targets`, a blank id, or a target with a blank instrument / dataset id, blank content identity or inverted window (R3-m2) | UNVERIFIED |
 | Cited preregistration not in ledger, or timestamp conflict | UNVERIFIED |
 | Registration after the evaluation it covers | REJECTED_RETROSPECTIVE |
 | Footprint of a possibly contending registration does not resolve | UNVERIFIED |
@@ -426,6 +429,8 @@ Quant decision are in `tests/test_md6_v9_policy_dependent.py` (marked with the Q
 | F-1 | Valid non-declaration appends, seeded random ledgers | earlier outcomes identical; no append ever grants eligibility | `test_append_order_*` (seeds 11, 2026, 94096) |
 | F-2 | Blank, whitespace, padded, non-ASCII, `NONE`/`TBD` references, with and without an approve-everything verifier | UNVERIFIED | `test_f2_malformed_authority_or_correction_reference_is_unverified` |
 | F-2 | Well-formed free text (`x`, `QA-SYN`), default | PENDING_QUANT_AUTHORITY, never INDEPENDENT; verifier approval needed; failing verifier UNVERIFIED | `test_f2_*` |
+| m-1 | Verifier answers `"False"`, `"denied"`, `{"approved": False}`, `1`, `"True"`, `[True]`, `None`, `0.0` | UNVERIFIED; exact `True` INDEPENDENT, `False` PENDING (controls) | `test_m1_*` in `tests/test_md6_v10_reviewer_minors.py` |
+| R3-m2 | Protected view or unregistered run with `targets=()`, blank id or blank target ids, before the evaluation | UNVERIFIED; a well-formed disjoint view and a corrupt entry after the evaluation leave it INDEPENDENT (controls) | `test_m2_*` |
 | F-3 | Three declared members on disjoint windows, 6 evaluation orders x declaration before / between / after | members never INDEPENDENT alone; set outcome identical across orders; undeclared and non-member runs stay INDEPENDENT | `test_f3_*` |
 | F-4 | E0 on dataset D (instrument A); copy of D with flags dropped, flags rewritten, trailing zeros padded or stripped, reordered, subset, half-drifted, all at once, relabelled B; both registry orders; both run orders | UNVERIFIED for both runs; controls (disjoint content, same time grid with other prices) INDEPENDENT | `test_f4_*` |
 | F-4 | Time-shifted or price-scaled relabelled copy | NOT detected (`xfail(strict=True)`, QE-10) | `test_qe10_*` |
