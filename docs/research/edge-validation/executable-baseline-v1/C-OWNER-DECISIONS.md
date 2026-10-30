@@ -1,8 +1,21 @@
 # Owner Decision Sheet
 
-DRAFT / every recommendation **PROPOSED pending Owner approval**. Choices are about faithful specification, not improving results. No decision is selected by writing this sheet. Resolve existing accepted contracts first (B); source facts are in A. Existing Q-* / OPEN-VP IDs remain authoritative; D1–D6 group dependent questions without renumbering those records.
+DRAFT / recommendations remain **PROPOSED pending Owner approval**, except the explicit Owner decision recorded below. Choices are about faithful specification, not improving results. No decision is selected by writing this sheet. Resolve existing accepted contracts first (B); source facts are in A. Existing Q-* / OPEN-VP IDs remain authoritative; D1–D6 group dependent questions without renumbering those records.
 
 Minimum response is six grouped records, each with an attached explicit configuration/policy where required. A group label alone does not approve missing numbers. Record choice, exact values/units, rationale independent of results, viewed-data dates/information cutoff, Quant/Architect acceptance and deterministic examples. Existing authorization to inspect/specify and use development data is already granted; no repeat permission requested.
+
+## Recorded Owner decision — TP1 full exit
+
+Decision ID: D3-TP1-OWNER-20261030; maps to Q-T01 and target-allocation portion of Q-T02.
+
+- Authority: Owner's direct chat reply, “ออกที่ tp1”, in response to the explicit choice between full TP1, full TP2 or two-stage exits.
+- Date: 2026-10-30 (Asia/Bangkok); exact reply time not recorded.
+- Status: **OWNER DECIDED — target selection only; implementation pending.**
+- Rule: close 100% of the remaining position at the signal's named TP1; no TP1/TP2 split or TP2 residual. Retain the existing TP1 geometry formula; this decision selects the target, not a new RR parameter.
+- Rationale/provenance: Owner selected TP1 from the presented alternatives; no backtest or profitability result was used in this task.
+- Scope limitation: does not approve the stop source/movement, entry policy, time/opposite exit, gap/target fill assumptions, concurrency, capital, costs, actual config or data windows. In particular, the combined D3 option A's stop clause is NOT selected by a TP1-only reply.
+- Baseline remains DRAFT / NOT FROZEN. Historical exposure/information-cutoff declarations and required contract/review gates remain outstanding. No source strategy or harness code changed.
+- Until implementation and accepted executable fill policy exist, target touch is not an executed fill or profitability evidence.
 
 ## D1 — Recover the existing baseline (Q-B01, Q-B02 / earlier master Q-B01, Q-D01/02)
 
@@ -35,7 +48,7 @@ Why: targets are geometry; different allocations, stop activations and boundary 
 
 | Missing choice | Options | Recommendation / tradeoff |
 |---|---|---|
-| Stop / target plan | A: freeze signal invalidation and TP1, full exit; B: freeze invalidation and TP2, full exit; C: TP1 partial then TP2 with explicit proportions/rounding/residual rules | A smallest single-target implementation; no assertion it is the actual historical choice. B equally small, longer exposure. C adds staged state/costs; provide actual intended rule |
+| Stop / target plan (TP1 full exit OWNER DECIDED above; stop still open) | A: freeze signal invalidation and TP1, full exit; B: freeze invalidation and TP2, full exit; C: TP1 partial then TP2 with explicit proportions/rounding/residual rules | A smallest single-target implementation; no assertion it is the actual historical choice. B equally small, longer exposure. C adds staged state/costs; provide actual intended rule |
 | Dynamic stop | A: no movement; B: explicit break-even/trailing formula and priority | A smallest; B needs separate Quant formulas (not supplied by supervisor mechanics) |
 | Opposite signal / time stop | A: ignore opposite signals, fixed finite maximum hold; B: close at next executable quote on opposite qualifying signal, plus finite cap; C: no time stop, hold until SL/TP | A isolates static plan and bounds purge; specify exact duration and clock. B requires definition of qualifying opposite signal/Readiness/Risk and same-event priority. C leaves finite purge unresolved |
 | Stop gap / target gap | A: stop-market uses first available exit-side quote with adverse slippage; target limit no better than target, explicit quote-touch fill assumption; B: use actual provider fill evidence if available | A reproducible conservative simulation, no guaranteed stop price. B more realistic but historical fills usually unavailable; target liquidity/touch assumption must stay labelled |
