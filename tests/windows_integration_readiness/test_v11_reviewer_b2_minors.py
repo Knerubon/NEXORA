@@ -139,9 +139,18 @@ def test_rb2_1_plan_invocation_is_lexically_strict(tmp_path: Path, value: str) -
 
 
 DATASET = "D:/nexora-runs/run-0001/dataset"
+# spelled out, not read from ec.RECORDED_OUTSIDE_DATASET, so dropping a flag there is caught
+OUTSIDE_DATASET = (
+    "--time-conversion",
+    "--clock-attestation",
+    "--protected-utc-ranges",
+    "--operator-key",
+    "--candidate-out",
+    "--anchor-out",
+)
 
 
-@pytest.mark.parametrize("flag", ec.RECORDED_OUTSIDE_DATASET)
+@pytest.mark.parametrize("flag", OUTSIDE_DATASET)
 @pytest.mark.parametrize(
     "path",
     [
