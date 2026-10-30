@@ -142,7 +142,11 @@ decimals within the extractor's own ranges, `--from-raw-msc` >= 0, `--to-raw-msc
 `--chunk-ms` and `--max-gap-ms` > 0, `--max-chunk-ticks` >= 1, `--protected-margin-ms` 0..2^62;
 and no input or custody file, `--time-conversion`, `--clock-attestation`, `--protected-utc-ranges`,
 `--operator-key`, `--candidate-out` or `--anchor-out`, lies inside `--out`, compared lexically as
-a Windows path) and whose `--symbol`, `--from-raw-msc`,
+a Windows path; V12, RB3-1: case, `/` and `\`, `..` and trailing dots or spaces of a component
+are folded as Win32 folds them, and a path with a `\\?\`, `\\.\` or `\??\` prefix, an
+alternate data stream (`:` after the drive) or an all-dot component is refused as
+`<flag>_path_not_plain`; 8.3 short names such as `NEXORA~1` cannot be resolved offline and are a
+documented limit, `plan` checks the real paths on the node) and whose `--symbol`, `--from-raw-msc`,
 `--to-raw-msc`, `--out` and `--operator` equal `window.symbol`, `window.window_raw_msc`,
 `custody.dataset_ref` and `people.operator`; the verifier, equal to `custody.verifier_argv`;
 `python -m tests.windows_integration_readiness.filesystem_probes <dir>`; or

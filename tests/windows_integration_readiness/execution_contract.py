@@ -228,9 +228,32 @@ RECORDED_OUTSIDE_DATASET = (
 )
 
 
-def _windows_parts(path: str) -> tuple[str, ...]:
-    """Lexical, case-insensitive parts of a recorded Windows path (`/` or `\\`, `..` folded)."""
-    return tuple(p.casefold() for p in PureWindowsPath(ntpath.normpath(path)).parts)
+# RB3-1: Win32 path spellings a lexical compare must not take at face value. `\\?\`, `\\.\` and
+# `\??\` prefixes skip normalization and hide the drive, and a `:` after the drive names an
+# alternate data stream: such a recorded path is refused (fail-closed), not interpreted.
+_DEVICE_PREFIXES = ("\\\\?\\", "\\\\.\\", "\\??\\")
+
+
+def _windows_parts(path: str) -> tuple[str, ...] | None:
+    """Lexical, case-insensitive parts of a recorded Windows path, folded the way Win32 folds
+    them (`/` or `\\`, trailing dots and spaces of a component, `..`), or None when the spelling
+    cannot be compared offline (device or extended-length prefix, stream, all-dot component).
+    8.3 short names (`NEXORA~1`) cannot be resolved offline at all (EVIDENCE-TEMPLATE)."""
+    p = path.replace("/", "\\")
+    if p.startswith(_DEVICE_PREFIXES):
+        return None
+    drive, rest = ntpath.splitdrive(p)
+    if ":" in rest:
+        return None
+    parts = []
+    for c in rest.split("\\"):
+        if c not in ("", ".", ".."):
+            c = c.rstrip(". ")
+            if not c:
+                return None
+        parts.append(c)
+    folded = ntpath.normpath(drive + "\\".join(parts))
+    return tuple(c.casefold() for c in PureWindowsPath(folded).parts)
 
 
 def recorded_extract_args(argv: Sequence[str]) -> dict[str, str]:
@@ -238,12 +261,20 @@ def recorded_extract_args(argv: Sequence[str]) -> dict[str, str]:
     against the same contract as `plan_invocation` (flags, integer values and ranges, custody
     arguments) minus the filesystem checks: an evidence record is validated offline, away from the
     Windows node, so the paths are compared lexically as Windows paths instead (RB2-1: no input or
-    custody file inside `--out`). Raises ContractError(code)."""
+    custody file inside `--out`; RB3-1: Win32 spellings folded or refused). Raises
+    ContractError(code)."""
     args = _parse_complete(argv)
     _check_custody_arguments(args, "mt5")
     out = _windows_parts(args["--out"])
+    if out is None:
+        raise ContractError("--out_path_not_plain")
     for flag in RECORDED_OUTSIDE_DATASET:
-        if flag in args and _windows_parts(args[flag])[: len(out)] == out:
+        if flag not in args:
+            continue
+        parts = _windows_parts(args[flag])
+        if parts is None:
+            raise ContractError(f"{flag}_path_not_plain")
+        if parts[: len(out)] == out:
             raise ContractError(f"{flag}_inside_dataset")
     return args
 
