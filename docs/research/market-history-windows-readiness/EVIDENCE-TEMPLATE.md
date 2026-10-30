@@ -145,8 +145,13 @@ and no input or custody file, `--time-conversion`, `--clock-attestation`, `--pro
 a Windows path; V12, RB3-1: case, `/` and `\`, `..` and trailing dots or spaces of a component
 are folded as Win32 folds them, and a path with a `\\?\`, `\\.\` or `\??\` prefix, an
 alternate data stream (`:` after the drive) or an all-dot component is refused as
-`<flag>_path_not_plain`; 8.3 short names such as `NEXORA~1` cannot be resolved offline and are a
-documented limit, `plan` checks the real paths on the node) and whose `--symbol`, `--from-raw-msc`,
+`<flag>_path_not_plain`; V13, RB4-1: `--out` and each of these paths must be fully qualified,
+`D:\...` or `\\server\share\...`, as `plan` requires, so a root-relative (`\runs\...`),
+drive-relative (`D:dataset`) or plain relative path is `output_dir_must_be_absolute` or
+`<flag>_must_be_absolute`; leading dots and spaces of a component are kept, as Win32 keeps them;
+8.3 short names such as `NEXORA~1`, junctions and symlinks cannot be resolved offline and are a
+documented limit, as is whether a UNC server or share segment is trimmed; `plan` checks the real
+paths on the node) and whose `--symbol`, `--from-raw-msc`,
 `--to-raw-msc`, `--out` and `--operator` equal `window.symbol`, `window.window_raw_msc`,
 `custody.dataset_ref` and `people.operator`; the verifier, equal to `custody.verifier_argv`;
 `python -m tests.windows_integration_readiness.filesystem_probes <dir>`; or

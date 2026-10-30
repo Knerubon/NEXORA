@@ -253,7 +253,20 @@ def _windows_parts(path: str) -> tuple[str, ...] | None:
                 return None
         parts.append(c)
     folded = ntpath.normpath(drive + "\\".join(parts))
-    return tuple(c.casefold() for c in PureWindowsPath(folded).parts)
+    # casefold is broader than the NTFS upcase table except for dotless i (U+0131), which upper-
+    # cases to `I`: map it too, so the only divergence left over-refuses (RB4 I-b)
+    return tuple(c.casefold().replace("\u0131", "i") for c in PureWindowsPath(folded).parts)
+
+
+def _windows_absolute(path: str) -> bool:
+    """Fully qualified as Win32 reads it: `D:\\...` or a `\\\\server\\share` UNC path. Root-relative
+    (`\\runs\\...`), drive-relative (`D:runs`) and plain relative paths depend on the node's current
+    directory, so they cannot be compared offline (RB4-1; `plan_invocation` refuses them too)."""
+    return _WINDOWS_ABSOLUTE.match(path.replace("/", "\\")) is not None
+
+
+# a drive letter and root, or a UNC server and share that are both non-empty
+_WINDOWS_ABSOLUTE = re.compile(r"[A-Za-z]:\\|\\\\[^\\]+\\[^\\]+")
 
 
 def recorded_extract_args(argv: Sequence[str]) -> dict[str, str]:
@@ -261,19 +274,23 @@ def recorded_extract_args(argv: Sequence[str]) -> dict[str, str]:
     against the same contract as `plan_invocation` (flags, integer values and ranges, custody
     arguments) minus the filesystem checks: an evidence record is validated offline, away from the
     Windows node, so the paths are compared lexically as Windows paths instead (RB2-1: no input or
-    custody file inside `--out`; RB3-1: Win32 spellings folded or refused). Raises
-    ContractError(code)."""
+    custody file inside `--out`; RB3-1: Win32 spellings folded or refused; RB4-1: every one of
+    these paths fully qualified, with the plan's codes). Raises ContractError(code)."""
     args = _parse_complete(argv)
     _check_custody_arguments(args, "mt5")
     out = _windows_parts(args["--out"])
     if out is None:
         raise ContractError("--out_path_not_plain")
+    if not _windows_absolute(args["--out"]):
+        raise ContractError("output_dir_must_be_absolute")
     for flag in RECORDED_OUTSIDE_DATASET:
         if flag not in args:
             continue
         parts = _windows_parts(args[flag])
         if parts is None:
             raise ContractError(f"{flag}_path_not_plain")
+        if not _windows_absolute(args[flag]):
+            raise ContractError(f"{flag}_must_be_absolute")
         if parts[: len(out)] == out:
             raise ContractError(f"{flag}_inside_dataset")
     return args
