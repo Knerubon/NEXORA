@@ -85,7 +85,7 @@ def test_a3_nonzero_exit_code_with_overall_pass() -> None:
             "derived_flag_contradicts_evidence:cases.4.evidence.ranges_equal",
         ),
         (
-            lambda r: r["execution"].update(exit_codes=[0, 0]),
+            lambda r: r["execution"].update(exit_codes=[0]),
             "execution_record_incomplete:commands_run_vs_exit_codes",
         ),
         (
@@ -249,7 +249,7 @@ def test_a9_real_record_with_mock_source_descriptor(value: str) -> None:
 
 
 def test_a9_real_record_with_synthetic_commands() -> None:
-    errors = _errors(lambda r: r["execution"].update(commands_run=["SYNTHETIC: no command"]))
+    errors = _errors(lambda r: r["execution"].update(commands_run=[["SYNTHETIC: no command"]]))
     assert "real_record_carries_mock_marker:execution.commands_run" in errors
 
 
@@ -331,8 +331,8 @@ PLACEHOLDERS = [
 
 @pytest.mark.parametrize("value", PLACEHOLDERS)
 def test_a11_placeholder_text_values_are_rejected(value: str) -> None:
-    errors = _errors(lambda r: r["node"].update(os_build=value))
-    assert "placeholder_value:node.os_build" in errors
+    errors = _errors(lambda r: r["node"].update(antivirus_indexer_state=value))
+    assert "placeholder_value:node.antivirus_indexer_state" in errors
 
 
 @pytest.mark.parametrize("value", ["not verified", "NOT VERIFIED "])
@@ -354,13 +354,13 @@ def test_a11_placeholders_in_lists_reasons_and_refs(value: str) -> None:
 )
 def test_a11_valid_free_text_is_not_mistaken_for_a_placeholder(value: str) -> None:
     r = real_shaped_pass()
-    r["node"]["os_build"] = value
+    r["node"]["antivirus_indexer_state"] = value
     assert check(r).ok, check(r).errors
 
 
 def test_a11_the_exact_sentinel_still_marks_an_unfilled_field() -> None:
     r = synthetic()
-    r["node"]["os_build"] = ev.NOT_VERIFIED
+    r["node"]["antivirus_indexer_state"] = ev.NOT_VERIFIED
     assert ev.validate_record(r).ok
     assert not ev.is_placeholder(ev.NOT_VERIFIED)
 
@@ -379,6 +379,7 @@ def test_a12_valid_offline_synthetic_record() -> None:
 def test_a13_valid_structured_verifier_command(launcher: tuple[str, ...]) -> None:
     r = real_shaped_pass()
     r["custody"]["verifier_argv"] = [*launcher, *r["custody"]["verifier_argv"]]
+    r["execution"]["commands_run"][1] = list(r["custody"]["verifier_argv"])
     with_gate(r)
     report = check(r)
     assert report.ok, report.errors
@@ -388,7 +389,7 @@ def test_a13_valid_structured_verifier_command(launcher: tuple[str, ...]) -> Non
 def test_a14_schema_has_no_drift() -> None:
     committed = json.loads((DOCS / "evidence-record.schema.json").read_text(encoding="utf-8"))
     assert committed == ev.build_schema()
-    assert committed["$id"] == ev.SCHEMA_VERSION == "nexora.windows-readiness-evidence/4"
+    assert committed["$id"] == ev.SCHEMA_VERSION == "nexora.windows-readiness-evidence/5"
     assert committed["properties"]["overall_result"]["enum"] == list(ev.OVERALL_RESULTS)
     assert template()["schema_version"] == ev.SCHEMA_VERSION
 
@@ -404,7 +405,7 @@ def _schema() -> Any:
 @pytest.mark.parametrize("value", [p for p in PLACEHOLDERS if p.isascii()])
 def test_a14_schema_rejects_ascii_placeholders_too(value: str) -> None:
     r = real_shaped_pass("BLOCKED")
-    r["node"]["os_build"] = value
+    r["node"]["antivirus_indexer_state"] = value
     assert list(_schema().iter_errors(r))
 
 

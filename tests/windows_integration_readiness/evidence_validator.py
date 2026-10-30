@@ -38,6 +38,9 @@ package's custody gate and execution-contract register (for dependency status).
 
 from __future__ import annotations
 
+import argparse
+import contextlib
+import io
 import json
 import re
 import sys
@@ -62,7 +65,7 @@ from tests.windows_integration_readiness.text_hygiene import (
     within_one_edit,
 )
 
-SCHEMA_VERSION = "nexora.windows-readiness-evidence/4"
+SCHEMA_VERSION = "nexora.windows-readiness-evidence/5"
 NOT_VERIFIED = "NOT VERIFIED"
 RESULTS = ("PASS", "FAIL", "NOT_RUN")
 # overall only: a REAL record whose evidence is consistent but whose dependencies are BLOCKED
@@ -78,6 +81,14 @@ _HEX32 = r"^[0-9a-f]{32}$"
 _HEX64 = r"^[0-9a-f]{64}$"
 _SIG = r"^[0-9a-f]{128}$"
 _PRINCIPAL = "^" + str(dp.CONTRACT["principal_id_grammar"]) + "$"
+# RB-4: positive formats for the version/build fields (a deny-list of placeholder spellings can
+# never be complete). Versions are what the tool itself prints (`python -V`, `uv --version`,
+# `numpy.__version__`, `MetaTrader5.__version__`); `os_build` is `platform.version()` on Windows
+# 10/11/Server (major.minor.build[.revision]); the terminal build is `terminal_info().build`.
+_PYTHON_VERSION = r"^3\.[0-9]{1,2}\.[0-9]{1,3}$"
+_RELEASE = r"^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,6}$"
+_WINDOWS_BUILD = r"^10\.0\.[0-9]{5}(\.[0-9]{1,6})?$"
+_TERMINAL_BUILD = r"^[1-9][0-9]{3,4}$"
 _NONBLANK = r"\S"
 
 # R3-4: spellings that mean "not verified" (compared after NFKC, case-fold, look-alike letter
@@ -172,6 +183,7 @@ _PLACEHOLDER_SCHEMA = (
     "[\\(\\[\\{][^\\)\\]\\}]*[\\)\\]\\}][\\W_]*)$"
 )
 _TEXT: dict[str, Any] = {"$ref": "#/$defs/kind_text"}
+ARGV_SEPARATOR = "--"
 _TEXT_DEF = {"type": "string", "pattern": _NONBLANK, "not": {"pattern": _PLACEHOLDER_SCHEMA}}
 # a JSON evidence value: no string leaf may be a placeholder or the sentinel (any depth)
 _JSON_VALUE_DEF: dict[str, Any] = {
@@ -197,6 +209,16 @@ KINDS: dict[str, dict[str, Any]] = {
     "hex64": {"type": "string", "pattern": _HEX64},
     "sig_hex": {"type": "string", "pattern": _SIG},
     "principal_id": {"type": "string", "pattern": _PRINCIPAL},
+    "principal_list": {
+        "type": "array",
+        "minItems": 1,
+        "uniqueItems": True,
+        "items": {"type": "string", "pattern": _PRINCIPAL},
+    },
+    "python_version": {"type": "string", "pattern": _PYTHON_VERSION},
+    "release": {"type": "string", "pattern": _RELEASE},
+    "windows_build": {"type": "string", "pattern": _WINDOWS_BUILD},
+    "terminal_build": {"type": "string", "pattern": _TERMINAL_BUILD},
     "pos_int": {"type": "integer", "minimum": 1},
     "max_pin_age": {
         "type": "integer",
@@ -210,6 +232,17 @@ KINDS: dict[str, dict[str, Any]] = {
         "items": {"type": "string", "pattern": _HEX32},
     },
     "text_list": {"type": "array", "minItems": 1, "items": _TEXT},
+    # RB-3: one structured argv per command run (never a shell string); `--` is the one token
+    # that is not text (the `execution_contract plan ... -- <extractor argv>` separator)
+    "argv_list": {
+        "type": "array",
+        "minItems": 1,
+        "items": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"anyOf": [{"const": ARGV_SEPARATOR}, _TEXT]},
+        },
+    },
     "int_list": {"type": "array", "minItems": 1, "items": {"type": "integer"}},
     "reason_list": {"type": "array", "items": _TEXT},
     "seq_list": {"type": "array", "uniqueItems": True, "items": {"type": "integer", "minimum": 1}},
@@ -267,27 +300,29 @@ SECTIONS: dict[str, dict[str, str]] = {
     },
     "node": {
         "hostname_class": "text",
-        "os_build": "text",
+        "os_build": "windows_build",
         "filesystem_type": "text",
         "volume_ref": "text",
         "antivirus_indexer_state": "text",
-        "python_version": "text",
-        "uv_version": "text",
-        "metatrader5_version": "text",
-        "numpy_version": "text",
+        "python_version": "python_version",
+        "uv_version": "release",
+        "metatrader5_version": "release",
+        "numpy_version": "release",
     },
     "terminal": {
         "company": "text",
         "name": "text",
-        "build": "text",
+        "build": "terminal_build",
         "server_name": "text",
         "account_kind": "enum:account_kind",
     },
     "people": {
-        "operator": "text",
-        "second_person_verifier": "text",
-        "custodian": "text",
-        "reviewer": "text",
+        # RB-2: every person is a principal id in the #99 grammar (no NFKC, case or hidden
+        # characters), so a disguised duplicate cannot pass as a different person
+        "operator": "principal_id",
+        "second_person_verifier": "principal_id",
+        "custodian": "principal_id",
+        "reviewer": "principal_id",
         "verifier_attestation_ref": "ref",
         "custodian_attestation_ref": "ref",
     },
@@ -321,10 +356,11 @@ SECTIONS: dict[str, dict[str, str]] = {
     # revocation lineage (field names follow the #96 pin / candidate / approval entries).
     "custody": {
         "store_ref": "text",
+        "dataset_ref": "text",  # RB-3: the dataset directory the verifier read (`--dataset`)
         "registry_ref": "ref",
-        "registry_identities": "text_list",
-        "approver_identities": "text_list",
-        "candidate_creator": "text",
+        "registry_identities": "principal_list",
+        "approver_identities": "principal_list",
+        "candidate_creator": "principal_id",
         "approval_seq": "int",
         "approval_entry_sha256": "sha256",
         "candidate_approval_seqs": "seq_list",
@@ -365,7 +401,7 @@ SECTIONS: dict[str, dict[str, str]] = {
         "gate_reasons": "reason_list",
     },
     "execution": {
-        "commands_run": "text_list",
+        "commands_run": "argv_list",
         "raw_output_refs": "ref_list",
         "exit_codes": "int_list",
     },
@@ -384,8 +420,8 @@ CASE_FIELDS: dict[str, dict[str, str]] = {
         "len": "int",
         "empty_behaviour": "text",
         "last_error": "text",
-        "numpy_version": "text",
-        "terminal_build": "text",
+        "numpy_version": "release",
+        "terminal_build": "terminal_build",
         "first_last_time_msc_in_window": "bool",
     },
     "2": {
@@ -508,6 +544,25 @@ RESOLVED = "RESOLVED"
 # `FixtureSource` are caught. Inherently a deny-list: a determined writer can still avoid it, which
 # is why a REAL record must also pass every positive check.
 _MARKER_PREFIXES = ("synthetic", "fixture", "mock", "dummy", "fake")
+# RB-4: `record_id` names the run itself, so it also refuses rehearsal-style words. Not applied to
+# the other provenance fields: a terminal or server name may legitimately say "Demo".
+_RECORD_ID_TOKEN_PREFIXES = (
+    *_MARKER_PREFIXES,
+    "simulat",
+    "sample",
+    "test",
+    "emulat",
+    "demo",
+    "stub",
+    "rehears",
+    "dryrun",
+    "example",
+    "trial",
+    "practice",
+    "sandbox",
+    "syn",
+)
+_RECORD_ID_JOINED = ("simulat", "sample", "emulat", "rehears", "dryrun", "example", "sandbox")
 _MARKER_TOKEN = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+")
 REAL_MARKER_FIELDS = (
     ("identity", "record_id"),
@@ -744,6 +799,16 @@ def _kind_ok(kind: str, v: Any) -> bool:
         "hex64": lambda x: _re(_HEX64, x),
         "sig_hex": lambda x: _re(_SIG, x),
         "principal_id": lambda x: _re(_PRINCIPAL, x),
+        "principal_list": lambda x: (
+            isinstance(x, list)
+            and bool(x)
+            and all(_re(_PRINCIPAL, i) for i in x)
+            and len(set(x)) == len(x)
+        ),
+        "python_version": lambda x: _re(_PYTHON_VERSION, x),
+        "release": lambda x: _re(_RELEASE, x),
+        "windows_build": lambda x: _re(_WINDOWS_BUILD, x),
+        "terminal_build": lambda x: _re(_TERMINAL_BUILD, x),
         "pos_int": lambda x: _is_int(x) and x >= 1,
         "verify_exit_code": lambda x: _is_int(x) and 0 <= x <= 3,
         "max_pin_age": lambda x: _is_int(x) and 1 <= x <= 10 * 366 * 86400,
@@ -751,6 +816,13 @@ def _kind_ok(kind: str, v: Any) -> bool:
             isinstance(x, list) and all(_re(_HEX32, i) for i in x) and len(set(x)) == len(x)
         ),
         "text_list": lambda x: isinstance(x, list) and bool(x) and all(_text_ok(i) for i in x),
+        "argv_list": lambda x: (
+            isinstance(x, list)
+            and bool(x)
+            and all(
+                isinstance(a, list) and bool(a) and all(_argv_token_ok(i) for i in a) for a in x
+            )
+        ),
         "int_list": lambda x: isinstance(x, list) and bool(x) and all(_is_int(i) for i in x),
         "reason_list": lambda x: isinstance(x, list) and all(_text_ok(i) for i in x),
         "seq_list": lambda x: (
@@ -772,6 +844,10 @@ def _text_ok(v: Any) -> bool:
     return _re(_NONBLANK, v) and not is_missing_marker(v)
 
 
+def _argv_token_ok(v: Any) -> bool:
+    return v == ARGV_SEPARATOR or _text_ok(v)
+
+
 def _ref_ok(v: Any) -> bool:
     return (
         isinstance(v, dict)
@@ -791,6 +867,13 @@ def _has_placeholder(v: Any) -> bool:
     if isinstance(v, dict):
         return any(_has_placeholder(i) for i in v.values())
     return False
+
+
+def _without_separators(kind: str, v: Any) -> Any:
+    """An argv's `--` separator is not a placeholder spelling (its key is empty)."""
+    if kind != "argv_list" or not isinstance(v, list):
+        return v
+    return [[t for t in a if t != ARGV_SEPARATOR] if isinstance(a, list) else a for a in v]
 
 
 def _json_has_marker(v: Any) -> bool:
@@ -831,7 +914,7 @@ def _check_fields(
         v = obj[k]
         if v == NOT_VERIFIED:
             unresolved.append(f"{path}.{k}")
-        elif kind != "git_status" and _has_placeholder(v):
+        elif kind != "git_status" and _has_placeholder(_without_separators(kind, v)):
             r.errors.append(f"placeholder_value:{path}.{k}")
             unresolved.append(f"{path}.{k}")
         elif not _kind_ok(kind, v):
@@ -870,16 +953,37 @@ def _outcomes(v: Any) -> list[Any]:
     return []
 
 
+CASE6_RESULT_FIELDS = ("reparse_results", "crash_results", "lock_results")
+
+
+def _probe_node_ok(node: Any) -> bool:
+    """One `filesystem_probes` result: exactly {"outcome": <PROBE_OUTCOMES>, "detail": str}."""
+    return (
+        isinstance(node, dict)
+        and set(node) == {"outcome", "detail"}
+        and node["outcome"] in PROBE_OUTCOMES
+        and isinstance(node["detail"], str)
+    )
+
+
 def _check_case6(ev: Mapping[str, Any], res: str, cls: Any, n: str, r: Report) -> None:
-    """N1 residual: the two probe counters are derived from the probe outcomes in the record."""
-    nodes = [
-        o
-        for key in ("reparse_results", "crash_results", "lock_results")
-        for o in _outcomes(ev.get(key))
-    ]
-    bad = [o for o in nodes if o not in PROBE_OUTCOMES]
-    if bad:
-        r.errors.append(f"invalid_value:cases.{n}.evidence:probe_outcome_unknown")
+    """N1 residual: the two probe counters are derived from the probe outcomes in the record.
+
+    RB-1: each result map is validated POSITIVELY: a non-empty map of probe name -> probe node
+    (the `filesystem_probes` shape). Any other node (`{"status": "error"}`, a bare `"error"` leaf,
+    `{"result": "manual_required"}`, extra keys) is refused, so it cannot hide beside one
+    `outcome: observed` node and leave the counters at 0."""
+    nodes: list[Any] = []
+    for key in CASE6_RESULT_FIELDS:
+        value = ev.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, dict) or not all(_probe_node_ok(x) for x in value.values()):
+            r.errors.append(f"invalid_value:cases.{n}.evidence.{key}:probe_results")
+        if any(o not in PROBE_OUTCOMES for o in _outcomes(value)):
+            r.errors.append(f"invalid_value:cases.{n}.evidence:probe_outcome_unknown")
+        if isinstance(value, dict):
+            nodes += [x["outcome"] for x in value.values() if _probe_node_ok(x)]
     flags = ("probe_error_count", "probe_manual_unresolved_count")
     if not nodes:
         r.self_declared_flags += [f"cases.{n}.evidence.{f}" for f in flags if f in ev]
@@ -1020,6 +1124,7 @@ def _check_verifier_argv(v: Mapping[str, dict[str, Any]], r: Report) -> cg.Verif
     for problem in (*inv.problems, *(f"unknown_flag:{u}" for u in inv.unknown)):
         r.errors.append(f"verifier_argv_invalid:{problem}")
     bindings = (
+        ("--dataset", cu.get("dataset_ref")),  # RB-3
         ("--store", cu.get("store_ref")),
         ("--registry", (cu.get("registry_ref") or {}).get("path")),
         ("--store-head", cu.get("store_head")),
@@ -1031,6 +1136,96 @@ def _check_verifier_argv(v: Mapping[str, dict[str, Any]], r: Report) -> cg.Verif
     if cu.get("verifier_status") == "TRUSTED" and (inv.problems or inv.unknown):
         r.errors.append("verifier_trusted_without_reviewed_v4_invocation")
     return inv
+
+
+# reviewed entry points a REAL record's `commands_run` may contain (RB-3); anything else is refused
+PROBES_MODULE = "tests.windows_integration_readiness.filesystem_probes"
+PLAN_MODULE = "tests.windows_integration_readiness.execution_contract"
+_LAUNCHERS = tuple(sorted(cg.V4_VERIFY_LAUNCHERS, key=len, reverse=True))
+
+
+def _after(argv: list[str], entry: list[str]) -> list[str] | None:
+    """argv after `<launcher> <entry...>`, or None when argv is not that command."""
+    for launcher in _LAUNCHERS:
+        n = len(launcher)
+        if tuple(argv[:n]) == launcher and argv[n : n + len(entry)] == entry:
+            if entry[0] == "-m" and not launcher:
+                continue  # `-m` needs an interpreter in front of it
+            return argv[n + len(entry) :]
+    return None
+
+
+def _plan_args(rest: list[str]) -> argparse.Namespace | None:
+    try:
+        with contextlib.redirect_stderr(io.StringIO()):
+            return ec._cli_parser().parse_args(rest)
+    except SystemExit:
+        return None
+
+
+def _check_real_commands(v: Mapping[str, dict[str, Any]], r: Report) -> None:
+    """RB-3: `commands_run` is bound to the reviewed commands, not free text. A REAL record must
+    show the extractor run (checked against the execution contract and bound to the preregistered
+    symbol and window, the recorded dataset directory and the operator) and the exact verifier
+    argv; it may also show the case 6 probes and `execution_contract plan` for that same run."""
+    ex, cu, win, ppl, ident = (
+        v["execution"],
+        v["custody"],
+        v["window"],
+        v["people"],
+        v["identity"],
+    )
+    if "commands_run" not in ex:
+        return
+    extract_runs: list[list[str]] = []
+    plans: list[list[str]] = []
+    verifier_runs = 0
+    for i, argv in enumerate(ex["commands_run"]):
+        if (rest := _after(argv, [ec.EXTRACT_SCRIPT])) is not None:
+            extract_runs.append(rest)
+            try:
+                args = ec.recorded_extract_args(rest)
+            except ec.ContractError as exc:
+                r.errors.append(f"commands_run_extractor_invalid:{i}:{exc.code}")
+                continue
+            window = win.get("window_raw_msc")
+            bindings = (
+                ("--symbol", win.get("symbol")),
+                ("--from-raw-msc", None if window is None else str(window[0])),
+                ("--to-raw-msc", None if window is None else str(window[1])),
+                ("--out", cu.get("dataset_ref")),
+                ("--operator", ppl.get("operator")),
+            )
+            for flag, recorded in bindings:
+                if recorded is not None and args.get(flag) != recorded:
+                    r.errors.append(f"commands_run_extractor_differs_from_record:{i}:{flag}")
+        elif _after(argv, [cg.V4_VERIFY_SCRIPT]) is not None:
+            verifier_runs += 1
+            if "verifier_argv" in cu and argv != cu["verifier_argv"]:
+                r.errors.append(f"commands_run_verifier_differs_from_verifier_argv:{i}")
+        elif (rest := _after(argv, ["-m", PROBES_MODULE])) is not None:
+            if len(rest) != 1:
+                r.errors.append(f"commands_run_probes_invalid:{i}")
+        elif (rest := _after(argv, ["-m", PLAN_MODULE])) is not None:
+            ns = _plan_args(rest)
+            if ns is None or ns.command != "plan" or ns.provider != "mt5" or ns.offline:
+                r.errors.append(f"commands_run_plan_invalid:{i}")
+                continue
+            if ns.preregistered_symbol != win.get("symbol", ns.preregistered_symbol):
+                r.errors.append(f"commands_run_plan_differs_from_record:{i}:symbol")
+            if ns.extractor_sha != ident.get("extractor_sha", ns.extractor_sha):
+                r.errors.append(f"commands_run_plan_differs_from_record:{i}:extractor_sha")
+            planned = list(ns.extractor_argv)
+            plans.append(planned[1:] if planned[:1] == ["--"] else planned)
+        else:
+            r.errors.append(f"commands_run_not_a_reviewed_command:{i}")
+    if not extract_runs:
+        r.errors.append("commands_run_missing_extractor_invocation")
+    if not verifier_runs:
+        r.errors.append("commands_run_missing_verifier_invocation")
+    for planned in plans:
+        if planned not in extract_runs:
+            r.errors.append("commands_run_plan_not_the_recorded_extractor_run")
 
 
 def _custody_bundle(
@@ -1109,6 +1304,11 @@ def _check_custody(
         later = sum(1 for s in cu["revocation_seqs"] if s > cu["approval_seq"])
         if later != cu["revocations_after_approval"]:
             r.errors.append("revocations_after_approval_contradicts_revocation_seqs")
+    # RB-2: the #99 registry has one id per principal and no aliases, so the approver's declared
+    # identity set is exactly the custodian (the registry itself is bound by `registry_ref` hash)
+    if "approver_identities" in cu and "custodian" in v["people"]:
+        if cu["approver_identities"] != [v["people"]["custodian"]]:
+            r.errors.append("approver_identities_must_be_exactly_the_custodian")
     if {"approval_seq", "candidate_approval_seqs"} <= set(cu):
         if cu["approval_seq"] not in cu["candidate_approval_seqs"]:
             r.errors.append("approval_seq_not_among_candidate_approval_seqs")
@@ -1158,12 +1358,29 @@ def _check_claims(record: Mapping[str, Any], deps: Mapping[str, str], r: Report)
     return frozenset(c for c in ce if CLAIM_OWNER.get(c) == "DEP-02")
 
 
+def _marker_tokens(text: str) -> list[str]:
+    visible = ascii_lookalikes(strip_hidden(unicodedata.normalize("NFKC", text)))
+    return [t.casefold() for t in _MARKER_TOKEN.findall(visible)]
+
+
+def has_record_id_marker(text: object) -> bool:
+    """True when a REAL record id names a rehearsal (`simulated-run-0001`, `SYN-0001-REHEARSAL`)."""
+    if not isinstance(text, str):
+        return False
+    tokens = _marker_tokens(text)
+    joined = "".join(tokens)
+    return (
+        has_mock_marker(text)
+        or any(t.startswith(_RECORD_ID_TOKEN_PREFIXES) for t in tokens)
+        or any(m in joined for m in _RECORD_ID_JOINED)
+    )
+
+
 def has_mock_marker(text: object) -> bool:
     """True when `text` carries a mock/synthetic/fixture marker (see _MARKER_PREFIXES)."""
     if not isinstance(text, str):
         return False
-    visible = ascii_lookalikes(strip_hidden(unicodedata.normalize("NFKC", text)))
-    tokens = [t.casefold() for t in _MARKER_TOKEN.findall(visible)]
+    tokens = _marker_tokens(text)
     if any(t.startswith(_MARKER_PREFIXES) for t in tokens):
         return True
     if any(a == "test" and b == "only" for a, b in zip(tokens, tokens[1:], strict=False)):
@@ -1177,12 +1394,13 @@ def _check_real_markers(v: Mapping[str, dict[str, Any]], r: Report) -> None:
         value = v[section].get(key)
         if value is None:
             continue
-        texts = value if isinstance(value, list) else [value]
-        for text in texts:
+        for text in _strings(value):
             if has_mock_marker(text) or str(text) == ec.MOCK_SOURCE:
                 r.errors.append(f"real_record_carries_mock_marker:{section}.{key}")
                 break
     rid = v["identity"].get("record_id")
+    if has_record_id_marker(rid) and not has_mock_marker(rid):
+        r.errors.append("real_record_carries_mock_marker:identity.record_id")
     if rid is not None and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{7,127}", str(rid)):
         r.errors.append("real_record_id_malformed")  # positive check: ASCII id, >= 8 characters
     sha = v["identity"].get("extractor_sha")
@@ -1234,13 +1452,26 @@ def validate_record(
         if co["head_equals_sha"] != (co["head"] == ident["extractor_sha"]):
             r.errors.append("head_equals_sha_contradicts_recorded_head")
 
-    # people: declared identities must be pairwise distinct where independence is required
+    # people: declared identities must be pairwise distinct where independence is required.
+    # RB-2: all four are principal ids (raw #99 grammar), compared raw AND normalized.
     ppl = v["people"]
     independent = ("operator", "second_person_verifier", "custodian")
     for i, a in enumerate(independent):
         for b in (*independent[i + 1 :], "reviewer"):
-            if a in ppl and b in ppl and normalize_identity(ppl[a]) == normalize_identity(ppl[b]):
+            if (
+                a in ppl
+                and b in ppl
+                and (ppl[a] == ppl[b] or normalize_identity(ppl[a]) == normalize_identity(ppl[b]))
+            ):
                 r.errors.append(f"same_identity:{a}={b}")
+    # case 1 records the numpy version and terminal build again; they must be the node's
+    c1 = case_ev.get("1", {})
+    for key, (section, name) in {
+        "numpy_version": ("node", "numpy_version"),
+        "terminal_build": ("terminal", "build"),
+    }.items():
+        if key in c1 and name in v[section] and c1[key] != v[section][name]:
+            r.errors.append(f"case1_{key}_differs_from_{section}.{name}")
 
     # dataset status may never claim more than the independent verifier observed
     ds, cu = v["dataset"], v["custody"]
@@ -1270,6 +1501,7 @@ def validate_record(
             r.errors.append("synthetic_fixture_cannot_claim_trusted")
     if cls == "REAL_WINDOWS_RUN":
         _check_real_markers(v, r)
+        _check_real_commands(v, r)
 
     # derive overall; never trust the input value
     if any(res == "FAIL" for res in results.values()):
@@ -1284,10 +1516,6 @@ def validate_record(
     else:
         derived = "NOT_RUN"
     r.derived_overall = derived
-    if cls == "REAL_WINDOWS_RUN":
-        r.real_readiness = derived if derived in ("PASS", "BLOCKED") else "FAIL"
-        if derived == "NOT_RUN":
-            r.real_readiness = "NOT_CLAIMED"
     claimed_overall = record.get("overall_result")
     if claimed_overall not in OVERALL_RESULTS:
         r.errors.append("unknown_overall_result")
@@ -1297,6 +1525,12 @@ def validate_record(
             for dep in REAL_READINESS_REQUIRES:
                 if deps.get(dep) != RESOLVED:
                     r.errors.append(f"real_readiness_pass_while_dependency_blocked:{dep}")
+    if cls == "REAL_WINDOWS_RUN":
+        r.real_readiness = derived if derived in ("PASS", "BLOCKED") else "FAIL"
+        if derived == "NOT_RUN":
+            r.real_readiness = "NOT_CLAIMED"
+        if r.errors:
+            r.real_readiness = "FAIL"  # RB-5: never PASS (or BLOCKED) beside an invalid record
     return r
 
 
@@ -1317,8 +1551,12 @@ def _derive_real(
         pre.append("pass_requires_head_equals_sha")
     if cu.get("verifier_status") != "TRUSTED" or cu.get("verifier_exit_code") != 0:
         pre.append("pass_requires_trusted_independent_verification")
-    if cu.get("revocations_after_approval") != 0 or cu.get("revocation_seqs"):
+    if cu.get("revocations_after_approval") != 0:
         pre.append("pass_requires_no_revocation_after_approval")
+    elif cu.get("revocation_seqs"):
+        # an earlier, acknowledged revocation (TRUSTED at #99) still blocks here: over-blocking,
+        # but reported as what it is (I-R4-5)
+        pre.append("pass_requires_no_revocation_in_lineage")
     if ds.get("development_status") != "TRUSTED":
         pre.append("pass_requires_dataset_trusted")
     if any(code != 0 for code in ex.get("exit_codes", ())):

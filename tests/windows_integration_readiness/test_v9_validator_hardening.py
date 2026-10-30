@@ -259,11 +259,14 @@ def test_v8b1_sentinel_as_a_claim_evidence_reference_path_is_refused() -> None:
 
 def test_v8b1_the_sentinel_still_marks_a_whole_unfilled_field_and_blocks_pass() -> None:
     r = real_shaped_pass()
-    r["node"]["os_build"] = SENTINEL
+    r["node"]["antivirus_indexer_state"] = SENTINEL
     report = check(r)
-    assert any(e.startswith("pass_with_unverified_field:node.os_build") for e in report.errors)
+    assert any(
+        e.startswith("pass_with_unverified_field:node.antivirus_indexer_state")
+        for e in report.errors
+    )
     r = synthetic()
-    r["node"]["os_build"] = SENTINEL
+    r["node"]["antivirus_indexer_state"] = SENTINEL
     assert ev.validate_record(r).ok  # unfilled is fine outside a PASS
     assert ev.is_missing_marker(SENTINEL) and not ev.is_placeholder(SENTINEL)
 
@@ -304,7 +307,9 @@ PLACEHOLDER_VARIANTS = [
 
 @pytest.mark.parametrize("value", PLACEHOLDER_VARIANTS)
 def test_v8b1_placeholder_variants_are_refused_in_text_lists_and_paths(value: str) -> None:
-    assert "placeholder_value:node.os_build" in _errors(_set(["node", "os_build"], value))
+    assert "placeholder_value:node.antivirus_indexer_state" in _errors(
+        _set(["node", "antivirus_indexer_state"], value)
+    )
     assert "placeholder_value:cases.1.evidence.names" in _errors(
         _set(["cases", "1", "evidence", "names"], ["ok-name", value])
     )
@@ -328,7 +333,7 @@ def test_v8b1_placeholder_variants_are_refused_in_text_lists_and_paths(value: st
 )
 def test_v8b1_legitimate_text_is_not_mistaken_for_a_placeholder(value: str) -> None:
     r = real_shaped_pass()
-    r["node"]["os_build"] = value
+    r["node"]["antivirus_indexer_state"] = value
     r["cases"]["1"]["evidence"]["last_error"] = value
     assert check(r).ok, check(r).errors
 
@@ -360,7 +365,7 @@ def test_v8b1_mock_markers_are_refused_in_real_records(value: str) -> None:
         _set(["source_provenance", "source_descriptor"], value)
     )
     assert "real_record_carries_mock_marker:execution.commands_run" in _errors(
-        _set(["execution", "commands_run"], [f"run {value}"])
+        _set(["execution", "commands_run"], [["run", value]])
     )
 
 
@@ -416,7 +421,7 @@ def _ascii_corpus() -> list[tuple[str, Callable[[Rec], None]]]:
         out.append((f"sentinel:{name}", _set(path, copy.deepcopy(value))))
     for v in PLACEHOLDER_VARIANTS:
         if v.isascii() and v not in VALIDATOR_ONLY:
-            out.append((f"placeholder:{v!r}", _set(["node", "os_build"], v)))
+            out.append((f"placeholder:{v!r}", _set(["node", "antivirus_indexer_state"], v)))
             out.append((f"placeholder-list:{v!r}", _set(["cases", "1", "evidence", "names"], [v])))
             out.append((f"placeholder-path:{v!r}", _set(["checkout", "status_ref", "path"], v)))
     return out
@@ -452,7 +457,7 @@ def test_agreement_no_ascii_text_the_validator_accepts_is_rejected_by_the_schema
         "empty window: zero rows",
     ):
         r = real_shaped_pass("BLOCKED")
-        r["node"]["os_build"] = value
+        r["node"]["antivirus_indexer_state"] = value
         assert ev.validate_record(r).ok
         assert not list(v.iter_errors(r)), value
 
@@ -462,7 +467,7 @@ def test_agreement_the_schema_is_a_documented_subset_for_non_ascii_variants() ->
     v = _schema_validator()
     for value in ("ТBD", "unkown", "unkоnwn"):
         r = real_shaped_pass("BLOCKED")
-        r["node"]["os_build"] = value
+        r["node"]["antivirus_indexer_state"] = value
         assert not ev.validate_record(r).ok
         assert not list(v.iter_errors(r)), value  # the schema cannot express the fold/one edit
 
@@ -529,7 +534,7 @@ def test_n1_flags_without_underlying_evidence_are_reported_as_self_declared() ->
     } <= declared
     assert "cases.6.evidence.probe_error_count" not in declared  # derived, not declared
     syn = ev.validate_record(synthetic()).as_json()["self_declared_flags"]
-    assert "cases.6.evidence.probe_error_count" in syn  # fixture results carry no outcomes
+    assert "cases.6.evidence.probe_error_count" not in syn  # V10: fixture carries probe nodes
 
 
 def test_n1_the_filesystem_probe_output_shape_is_what_the_derivation_reads(

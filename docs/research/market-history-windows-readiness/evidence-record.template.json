@@ -1,5 +1,5 @@
 {
-  "schema_version": "nexora.windows-readiness-evidence/4",
+  "schema_version": "nexora.windows-readiness-evidence/5",
   "evidence_class": "TEMPLATE",
   "identity_basis": "declared_not_authenticated",
   "identity": {
@@ -68,6 +68,7 @@
   },
   "custody": {
     "store_ref": "NOT VERIFIED",
+    "dataset_ref": "NOT VERIFIED",
     "registry_ref": "NOT VERIFIED",
     "registry_identities": "NOT VERIFIED",
     "approver_identities": "NOT VERIFIED",

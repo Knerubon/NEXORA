@@ -1,11 +1,13 @@
 """Specification-based duplicate and ordering oracle (finding B-M4).
 
 Written from ORACLE-SPEC.md, not from the extractor. It deliberately uses a different method from
-the extractor's `quality_report` (as read at the pinned PR #96 candidate, unchanged across the
-stack): the extractor compares each tick with the previous one only; this oracle canonicalizes every
-observation and counts over the WHOLE sequence by sorting and grouping, so repeats are found
-wherever they occur. Golden vectors in `test_duplicate_oracle.py` are derived by hand from the
-specification, not by running this code.
+the extractor's `QualityAccumulator` (`tick-quality/2` at the pinned candidate), which counts every
+repeat within a segment as it streams and relies on chunks partitioning raw time for repeats across
+chunks; this oracle canonicalizes every observation and counts over the WHOLE sequence by sorting
+and grouping, so repeats are found wherever they occur. (The phase 1 wording "compares each tick
+with the previous one only" described an earlier extractor and is withdrawn: at the candidate the
+two give identical duplicate counts, see DEP-04.) Golden vectors in `test_duplicate_oracle.py` are
+derived by hand from the specification, not by running this code.
 
 Canonical tick identity (ORACLE-SPEC.md section 2):
     (time_msc, canonical(bid), canonical(ask), flags-or-ABSENT)

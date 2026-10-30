@@ -2,8 +2,10 @@
 
 One record per real-half execution. Machine-readable form:
 [evidence-record.template.json](evidence-record.template.json) (schema version
-`nexora.windows-readiness-evidence/3`; round 4 added the custody fields the gate needs, a
-structured verifier argv, the recorded gate decision and the overall value `BLOCKED`).
+`nexora.windows-readiness-evidence/5`; round 4 added the custody fields the gate needs, a
+structured verifier argv, the recorded gate decision and the overall value `BLOCKED`; V9 the signed
+pin and lineage fields (`/4`); V10 `custody.dataset_ref`, structured `execution.commands_run`,
+principal-id people and positive version/build formats (`/5`)).
 
 ## Which artifact decides
 
@@ -33,6 +35,16 @@ claim to be, or anything about Windows or MT5. The validator's report always say
   `n/a`, `-`, fullwidth or zero-width variants are all refused; only the exact literal
   `"NOT VERIFIED"` marks an unfilled field. Free text that merely contains such a word is accepted.
   The schema expresses the ASCII part of this rule; NFKC variants are caught by the validator only.
+- **Positive formats (V10, RB-4).** Some fields accept only one shape, so a placeholder spelling the
+  deny-list misses (`0`, `same as above`, `later`) is still refused: `node.python_version`
+  `3.<minor>.<patch>`; `node.uv_version`, `node.numpy_version`, `node.metatrader5_version` and case 1
+  `numpy_version` `<major>.<minor>.<patch>` digits only; `node.os_build` the Windows
+  `platform.version()` value `10.0.<5-digit build>[.<revision>]`; `terminal.build` and case 1
+  `terminal_build` the terminal build number (4-5 digits). Case 1 `numpy_version` and
+  `terminal_build` must equal `node.numpy_version` and `terminal.build`. People
+  (`operator`, `second_person_verifier`, `custodian`, `reviewer`), `custody.candidate_creator`,
+  `registry_identities` and `approver_identities` are principal ids in the PR #96/#99 grammar
+  `[a-z0-9][a-z0-9._@-]{0,127}` on the raw string.
 - Do not embed raw ticks, account numbers, balances, passwords or tokens. Raw outputs are
   referenced by path + SHA-256 only.
 - The `evidence_class` field is `TEMPLATE` (everything unfilled), `SYNTHETIC_FIXTURE` (record id starts with
@@ -50,7 +62,9 @@ when the claimed value differs.
   - `checkout.status_short` is empty **and** `checkout.checkout_clean` is `true`;
     `checkout.head` equals `identity.extractor_sha` **and** `checkout.head_equals_sha` is `true`;
   - `custody.verifier_status` is `TRUSTED` with `verifier_exit_code` 0 and no status reasons,
-    no revocation is recorded, and `dataset.development_status` is `TRUSTED`;
+    no revocation is recorded (a later one is `pass_requires_no_revocation_after_approval`; an
+    earlier, acknowledged one, which #99 accepts, is still refused here as
+    `pass_requires_no_revocation_in_lineage`), and `dataset.development_status` is `TRUSTED`;
   - every `execution.exit_codes` entry is 0, and case 5 `run_a_content_sha256` equals
     `dataset.content_sha256`;
   - the custody gate, re-run by the validator over the `custody` section, reports no reason other
@@ -67,7 +81,9 @@ when the claimed value differs.
 
 The report separates the two questions: `offline_harness_consistent` (the record is complete and
 consistent) and `real_readiness` (`NOT_CLAIMED`, `BLOCKED`, `FAIL` or `PASS`), plus the dependency
-status it used and `dependency_source` (`derived`; only a test can make it `test_override`).
+status it used and `dependency_source` (`derived`; only a test can make it `test_override`). A
+`REAL_WINDOWS_RUN` with any error reports `real_readiness: FAIL`, whatever was derived (V10, RB-5),
+so `real_readiness` never says `PASS` next to `structurally_valid: false`.
 
 A case `PASS` needs every evidence field of that case verified, a non-empty `evidence_refs` list,
 and the case-specific values in the case table below. Contradictions are rejected whatever the
@@ -84,11 +100,18 @@ SHA-256 values only. `commands_run` and `exit_codes` must have the same length,
 the run started. Under case `PASS` additionally: case 5 run A equals run B and every variant hash,
 and case 7 observed no forbidden name.
 
+**Case 6 results are validated positively (V10, RB-1).** `reparse_results`, `crash_results` and
+`lock_results` are each a non-empty map of probe name to a `filesystem_probes` node, exactly
+`{"outcome": observed|unsupported|manual_required|error, "detail": text}`. Any other node
+(`{"status": "error"}`, a bare `"error"`, `{"result": "manual_required"}`, an extra key) is
+`invalid_value:cases.6.evidence.<field>:probe_results`. `probe_error_count` and
+`probe_manual_unresolved_count` must equal the number of `error` and `manual_required` nodes.
+
 **Custody is cross-checked (R3-1).** `custody.verifier_argv` is an argv list checked by
 `custody_gate.parse_verify_argv` against the reviewed V4 CLI: `scripts/verify_market_history.py`
 (optionally after `python` or `uv run [--no-sync] python`) with `--dataset`, `--store`,
-`--registry`, `--store-head` and `--require-trusted`; `--store`, `--registry` and `--store-head`
-must equal `store_ref`, `registry_ref.path` and `store_head`. Anchor-only or arbitrary commands
+`--registry`, `--store-head` and `--require-trusted`; `--dataset`, `--store`, `--registry` and
+`--store-head` must equal `dataset_ref`, `store_ref`, `registry_ref.path` and `store_head`. Anchor-only or arbitrary commands
 (`echo TRUSTED`) are rejected, and a `TRUSTED` status with such a command is a contradiction.
 `revocations_after_approval` must match `revocation_seqs`, and `approval_seq` must be one of
 `candidate_approval_seqs`. The validator re-runs `custody_gate.trust_gate` over the section and
@@ -98,12 +121,30 @@ rejects the record if `gate_outcome`/`gate_reasons` differ from that decision.
 `hostname_class`, `terminal.company/name/server_name`, `source_descriptor`,
 `broker_clock_evidence_kind`, `store_ref`, `verifier_argv`, `commands_run` and `clock_source` may not
 contain `synthetic`, `mock`, `fixture`, `test-only`, `dummy` or `fake` as a word, nor the mock source
-string of `execution_contract`.
+string of `execution_contract`. `record_id` additionally refuses rehearsal words (`simulated`, `sample`,
+`test`, `emulated`, `demo`, `stub`, `rehearsal`, `dry-run`, `example`, `trial`, `practice`,
+`sandbox`, `syn`); a terminal or server name may legitimately say `Demo`, so they are not refused
+there. These are still deny-lists; the positive checks above do the real work.
+
+**REAL commands are the reviewed commands (V10, RB-3).** `execution.commands_run` is a list of argv
+lists, never shell strings. In a `REAL_WINDOWS_RUN` every entry must be one of: the extractor
+(`scripts/extract_market_history.py`, optionally after `python` or `uv run [--no-sync] python`)
+with arguments that satisfy `execution_contract` (required flags, one protected-range decision,
+`--operator`/`--operator-key`/`--candidate-out`) and whose `--symbol`, `--from-raw-msc`,
+`--to-raw-msc`, `--out` and `--operator` equal `window.symbol`, `window.window_raw_msc`,
+`custody.dataset_ref` and `people.operator`; the verifier, equal to `custody.verifier_argv`;
+`python -m tests.windows_integration_readiness.filesystem_probes <dir>`; or
+`python -m tests.windows_integration_readiness.execution_contract plan --provider mt5 ...` for the
+same symbol, extractor SHA and extractor arguments. Anything else (`echo ok`) is
+`commands_run_not_a_reviewed_command`, and the extractor and verifier runs are both required. The
+filesystem paths are not re-checked offline; `plan` checks them on the node.
 
 **Independence.** `operator`, `second_person_verifier` and `custodian` must be pairwise distinct,
-and none of them may equal `reviewer`, compared after NFKC normalization, trimming, case folding and
-whitespace collapsing. This catches the same declared name in disguise; it cannot detect two
-different names used by one person.
+and none of them may equal `reviewer`. All four are principal ids (raw grammar above), so a
+disguised spelling (hidden characters, homoglyphs, case, spaces) is refused as an invalid value
+instead of passing as a different person; they are also compared after NFKC normalization and case
+folding. `custody.approver_identities` must be exactly `[custodian]`: the #99 registry has one id
+per principal and no aliases. This cannot detect two different names used by one person.
 
 ## Sections
 
@@ -117,7 +158,7 @@ different names used by one person.
 | `window` | `symbol`, `window_raw_msc`, `window_utc_msc`, `preregistration_ref`, `preregistered_at_utc`, `protected_ranges_ref`, `protected_margin_ms` |
 | `source_provenance` | `source_descriptor`, `broker_clock_evidence_ref`, `broker_clock_evidence_kind`, `time_conversion_sha256`, `clock_attestation_sha256`, `dst_rule_evidence_ref` |
 | `dataset` | `dataset_id`, `content_sha256`, `manifest_sha256`, `candidate_sha256`, `development_status` |
-| `custody` | `store_ref`, `registry_ref`, `registry_identities`, `approver_identities`, `candidate_creator`, `approval_seq`, `approval_entry_sha256`, `candidate_approval_seqs`, `store_head`, `store_head_channel_ref`, `store_head_channel_kind`, `store_head_at_verification`, `store_chain`, `revocation_seqs`, `revocations_after_approval`, `extraction_platform`, `writer_lock`, `verifier_argv`, `verifier_exit_code`, `verifier_status`, `verifier_status_reasons`, `pin_ref`, `pin_id`, `pin_pinned_by`, `pin_key_id`, `pin_signature`, `pin_seq`, `pin_entry_sha256`, `pin_store_genesis_sha256`, `pin_captured_at_utc`, `max_pin_age_seconds`, `verified_at_utc`, `approved_at_utc`, `operator_key_id`, `operator_signature`, `approver_key_id`, `approval_signature`, `approval_id`, `candidate_sha256`, `revocation_ids`, `acknowledged_revocations`, `gate_outcome`, `gate_reasons` |
+| `custody` | `store_ref`, `dataset_ref`, `registry_ref`, `registry_identities`, `approver_identities`, `candidate_creator`, `approval_seq`, `approval_entry_sha256`, `candidate_approval_seqs`, `store_head`, `store_head_channel_ref`, `store_head_channel_kind`, `store_head_at_verification`, `store_chain`, `revocation_seqs`, `revocations_after_approval`, `extraction_platform`, `writer_lock`, `verifier_argv`, `verifier_exit_code`, `verifier_status`, `verifier_status_reasons`, `pin_ref`, `pin_id`, `pin_pinned_by`, `pin_key_id`, `pin_signature`, `pin_seq`, `pin_entry_sha256`, `pin_store_genesis_sha256`, `pin_captured_at_utc`, `max_pin_age_seconds`, `verified_at_utc`, `approved_at_utc`, `operator_key_id`, `operator_signature`, `approver_key_id`, `approval_signature`, `approval_id`, `candidate_sha256`, `revocation_ids`, `acknowledged_revocations`, `gate_outcome`, `gate_reasons` |
 | `execution` | `commands_run`, `raw_output_refs`, `exit_codes` |
 | `timestamps` | `started_at_utc`, `finished_at_utc`, `clock_source` |
 

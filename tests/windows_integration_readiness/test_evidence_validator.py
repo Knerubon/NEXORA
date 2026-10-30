@@ -28,6 +28,7 @@ from tests.windows_integration_readiness.evidence_validator import (
     Report,
     validate_record,
 )
+from tests.windows_integration_readiness.execution_contract import EXTRACT_SCRIPT
 
 HERE = Path(__file__).resolve().parent
 DOCS = HERE.parents[1] / "docs" / "research" / "market-history-windows-readiness"
@@ -73,9 +74,21 @@ def real_shaped_pass(overall: str = "PASS") -> Rec:
     r["terminal"].update(company="Broker Co", name="Terminal", server_name="Server-1")
     r["source_provenance"]["source_descriptor"] = "terminal copy_ticks_range"
     r["source_provenance"]["broker_clock_evidence_kind"] = "broker_statement"
-    r["execution"]["commands_run"] = ["scripts/extract_market_history.py --symbol SYN"]
     r["timestamps"]["clock_source"] = "ntp"
     r["dataset"]["development_status"] = "TRUSTED"
+    # people and custody principals carry no synthetic marker either: the operator id appears in
+    # the recorded extractor command, which a real record marker-checks
+    r["people"].update(
+        operator="op-alice", second_person_verifier="ver-bob", custodian="cust-carol"
+    )
+    r["people"]["reviewer"] = "rev-dan"
+    r["custody"].update(
+        candidate_creator="op-alice",
+        registry_identities=["cust-carol"],
+        approver_identities=["cust-carol"],
+        pin_pinned_by="pin-erin",
+        dataset_ref="D:/nexora-runs/run-0001/dataset",
+    )
     head = r["custody"]["store_head"]
     r["custody"]["registry_ref"]["path"] = "registry.json"
     r["custody"]["pin_ref"]["path"] = "pin.json"
@@ -89,7 +102,7 @@ def real_shaped_pass(overall: str = "PASS") -> Rec:
         verifier_argv=[
             cg.V4_VERIFY_SCRIPT,
             "--dataset",
-            "dataset-dir",
+            r["custody"]["dataset_ref"],
             "--store",
             "store-dir",
             "--registry",
@@ -107,8 +120,43 @@ def real_shaped_pass(overall: str = "PASS") -> Rec:
         verifier_exit_code=0,
         verifier_status_reasons=[],
     )
+    r["execution"]["commands_run"] = [
+        ["python", EXTRACT_SCRIPT, *real_extract_args(r)],
+        list(r["custody"]["verifier_argv"]),
+    ]
+    r["execution"]["exit_codes"] = [0, 0]
     r["overall_result"] = overall
     return with_gate(r)
+
+
+def real_extract_args(r: Rec) -> list[str]:
+    """The extractor arguments a real run records, bound to the record's window and dataset."""
+    window = r["window"]["window_raw_msc"]
+    return [
+        "--symbol",
+        r["window"]["symbol"],
+        "--from-raw-msc",
+        str(window[0]),
+        "--to-raw-msc",
+        str(window[1]),
+        "--chunk-ms",
+        "3600000",
+        "--max-gap-ms",
+        "60000",
+        "--time-conversion",
+        "D:/nexora-runs/run-0001/time-conversion.json",
+        "--clock-attestation",
+        "D:/nexora-runs/run-0001/clock-attestation.json",
+        "--no-protected-ranges",
+        "--out",
+        r["custody"]["dataset_ref"],
+        "--operator",
+        r["people"]["operator"],
+        "--operator-key",
+        "E:/keys/op-alice.key",
+        "--candidate-out",
+        "D:/nexora-runs/run-0001/candidate.json",
+    ]
 
 
 def check(r: Rec) -> Report:
@@ -158,7 +206,7 @@ def _a4(r: Rec) -> None:  # A4: operator signs as the second-person verifier
 
 
 def _a4_disguised(r: Rec) -> None:
-    r["people"]["second_person_verifier"] = "  SYNTHETIC-Operator "
+    r["people"]["second_person_verifier"] = r["people"]["operator"].upper()
 
 
 def _a4_custodian(r: Rec) -> None:
@@ -371,7 +419,10 @@ def test_a3_contradiction_rejected_even_when_not_claiming_pass() -> None:
 
 
 def test_a4_reports_which_identities_collide() -> None:
-    assert "same_identity:operator=second_person_verifier" in check(_mutated(_a4_disguised)).errors
+    assert "same_identity:operator=second_person_verifier" in check(_mutated(_a4)).errors
+    # RB-2: a disguised spelling is no longer a "different" name: it is not a principal id at all
+    errors = check(_mutated(_a4_disguised)).errors
+    assert "invalid_value:people.second_person_verifier:principal_id" in errors
 
 
 def test_a10_synthetic_fixture_passes_structural_checks_without_claiming_windows() -> None:
@@ -405,7 +456,7 @@ def test_a10_synthetic_fixture_cannot_claim_pass_trust_or_a_real_identity(
 def test_template_is_valid_and_unfilled() -> None:
     r = template()
     assert validate_record(r).ok
-    r["node"]["os_build"] = "Windows 11"
+    r["node"]["antivirus_indexer_state"] = "Windows Defender on"
     assert "template_must_be_unfilled" in validate_record(r).errors
 
 
