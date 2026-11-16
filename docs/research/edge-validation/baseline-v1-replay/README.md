@@ -45,7 +45,7 @@ uv run --no-sync python scripts/baseline_v1_replay.py --synthetic --out /tmp/bas
 ```
 
 PowerShell (Windows node): `uv run --no-sync python scripts/baseline_v1_replay.py --synthetic --out "$env:TEMP\baseline_v1_synthetic.json"`.
-The script creates the output folder and always writes LF line endings.
+The script creates the output folder, always writes LF line endings, and refuses an `--out` path inside the checkout (it would make the next run `code_dirty`).
 
 The script prints `verdict`, `verdict_reasons` and `result_hash`; two runs at the same commit give
 byte-identical JSON. `result_hash` also binds the manifest, which includes the code SHA, the

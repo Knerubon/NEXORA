@@ -26,7 +26,7 @@ from nexora.backtest.baseline_v1 import (
     UtcRange,
 )
 from nexora.backtest.baseline_v1.models import ReplayMetrics
-from nexora.backtest.baseline_v1.replay import _verdict
+from nexora.backtest.baseline_v1.replay import _bootstrap_mean_ci, _metrics, _verdict
 from nexora.backtest.datasets import manifest_for
 from nexora.entry_readiness import EntryReadinessSnapshot
 from nexora.entry_readiness.models import EntryReadinessState
@@ -846,6 +846,7 @@ def test_contract_multiplier_scales_risk_and_pnl() -> None:
     (trade,) = run(h, events).trades
     # stop distance money/unit = (100.2-95)*100 = 520 -> size min(2, 1040/520=2) = 2
     assert trade.quantity == D("2")
+    assert trade.reserved_risk == D("1040")  # money, not price units (5.2 * 2)
     assert trade.gross_pnl == (D("105") - D("101.2")) * 2 * 100
 
 
@@ -872,3 +873,71 @@ def test_rollover_counting_is_timezone_independent() -> None:
         harness({0: Script("long", "95", "105")}, cost=cost), shifted, authorization=auth(events)
     ).trades[0]
     assert utc.costs.swap == local.costs.swap == D("3") * utc.quantity
+
+
+# --------------------------------------------- quant review round 2 (quant-r2)
+def test_accrued_swap_counts_in_drawdown() -> None:
+    day = 24 * 3600
+    events = (
+        q(0, "100", "100.2", seconds=0),
+        q(1, "101", "101.2", seconds=10),
+        q(2, "101.3", "101.5", seconds=2 * day),  # bid back at entry fill; two rollovers
+        q(3, "106", "106.2", seconds=2 * day + 10),
+    )
+    cost = costs(commission_per_unit_per_side=D("0"), swap_long_per_unit_per_rollover=D("1"))
+    result = run(harness({0: Script("long", "95", "105")}, cost=cost), events)
+    qty = result.trades[0].quantity
+    # at index 2 floating PnL is 0, so the only loss below the peak is 2 rollovers of swap
+    assert result.metrics.max_drawdown == D("2") * qty
+
+
+def test_risk_sees_current_equity_after_a_loss() -> None:
+    events = path(
+        ("100", "100.2"), ("101", "101.2"), ("90", "90.2"), ("100", "100.2"), ("101", "101.2")
+    )
+    script = {0: Script("long", "95", "105"), 3: Script("long", "95", "105")}
+    result = run(harness(script, risk=risk_policy(max_drawdown=D("5"))), events)
+    # the first trade loses > 5; with current equity the second proposal breaches max_drawdown
+    assert result.trades[0].net_pnl < D("-5")
+    assert result.opportunities[1].outcome == "risk_rejected"
+    assert result.opportunities[1].risk_reason == "drawdown_limit"
+
+
+def test_bootstrap_ci_uses_exact_percentile_positions() -> None:
+    import random
+
+    values = [D(v) for v in ("-3", "1", "4", "-2", "7", "0", "5", "-1")]
+    c = criteria(confidence_level=D("0.9"), bootstrap_resamples=100, bootstrap_seed=11)
+    rng = random.Random(11)
+    means = sorted(sum((values[rng.randrange(8)] for _ in range(8)), D(0)) / 8 for _ in range(100))
+    assert _bootstrap_mean_ci(values, c) == (means[5], means[94])
+
+
+def test_zero_pnl_trade_is_neither_win_nor_loss() -> None:
+    events = path(("100", "100.2"), ("101", "101.2"), ("106", "106.2"))
+    trade = run(harness({0: Script("long", "95", "105")}), events).trades[0]
+    flat = replace(trade, gross_pnl=D("0"), net_pnl=D("0"))
+    m = _metrics((trade, flat), (), (), D("0"), D("0"), D("1000"), None)
+    assert (m.wins, m.losses, m.win_rate) == (1, 0, D("0.5"))
+
+
+# ------------------------------------------ security review round 2 (sec-r2)
+def test_mid_price_source_must_equal_exact_mid() -> None:
+    from nexora.backtest.baseline_v1.replay import _quote_price
+
+    assert _quote_price("mid", D("100"), D("100.4")) == D("100.2")
+    assert _quote_price("bid", D("100"), D("100.4")) == D("100")
+    assert _quote_price("ask", D("100"), D("100.4")) == D("100.4")
+    assert _quote_price("last", D("100"), D("100.4")) is None
+
+
+def test_partial_day_rollover_counted_in_utc_for_offset_timestamps() -> None:
+    from datetime import timezone
+
+    from nexora.backtest.baseline_v1.replay import _rollovers_between
+
+    bkk = timezone(timedelta(hours=7))
+    start = datetime(2026, 3, 2, 20, tzinfo=UTC).astimezone(bkk)  # 03:00 +07 next day
+    end = datetime(2026, 3, 2, 22, tzinfo=UTC).astimezone(bkk)  # 05:00 +07
+    assert _rollovers_between(start, end, 21) == 1
+    assert _rollovers_between(start, start + timedelta(minutes=30), 21) == 0

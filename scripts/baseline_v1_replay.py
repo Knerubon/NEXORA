@@ -42,6 +42,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--events", type=int, default=400)
     parser.add_argument("--out", type=Path)
     args = parser.parse_args(argv)
+    if args.out is not None and args.out.resolve().is_relative_to(REPO_ROOT):
+        # an output file inside the checkout would make the next run's code_dirty True
+        parser.error("--out must be outside the repository checkout")
     events = synthetic_events(args.events)
     dataset = manifest_for(events, quality="complete")
     policy, costs, account = synthetic_setup()
