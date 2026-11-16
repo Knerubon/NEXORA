@@ -44,8 +44,14 @@ uv run --no-sync pytest -q tests/test_baseline_v1_replay.py
 uv run --no-sync python scripts/baseline_v1_replay.py --synthetic --out /tmp/baseline_v1_synthetic.json
 ```
 
+PowerShell (Windows node): `uv run --no-sync python scripts/baseline_v1_replay.py --synthetic --out "$env:TEMP\baseline_v1_synthetic.json"`.
+The script creates the output folder and always writes LF line endings.
+
 The script prints `verdict`, `verdict_reasons` and `result_hash`; two runs at the same commit give
-byte-identical JSON. `result_hash` binds the code SHA, so it changes with every commit.
+byte-identical JSON. `result_hash` also binds the manifest, which includes the code SHA, the
+`code_dirty` flag and the full CPython version (e.g. `3.13.18`). To compare runs across machines
+or Python patch versions, compare `equity_curve_hash`, `metrics`, `trades` and `opportunities`
+(and `events_hash`/`config_hash` in the manifest) rather than `result_hash`.
 
 ## Synthetic run (mechanics only, not market evidence)
 
@@ -61,7 +67,10 @@ show that the chain runs; they say nothing about edge.
 - Bootstrap CI assumes independent trades (no block bootstrap yet); regime breakdown uses the
   regime label at decision time.
 - Real-data loader is not written: format/source depend on D6.
-- Rollover schedule is a single daily hour; triple-swap days and holidays are OPEN.
+- Rollover schedule is a single daily UTC hour counted every calendar day; weekends, triple-swap days and holidays are OPEN.
+- Verdict uses closed trades only; open-at-end positions appear in equity/drawdown but not in expectancy.
+- RiskEngine sees account equity only when a signal is evaluated; its daily-loss day boundary is a known ADR-015 limitation (see DECISIONS.md).
+- Risk is evaluated at decision time, which deviates from the #105 recommendation (see DECISIONS.md D2).
 - Each event is processed through the full pipeline; long tick histories may be slow (not benchmarked).
 - `ResearchPipeline` gained two read-only accessors (`latest_entry_readiness`, `latest_regime`); no
   behaviour change.

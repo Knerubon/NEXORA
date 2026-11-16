@@ -112,6 +112,7 @@ def synthetic_setup() -> tuple[ReplayPolicy, CostModel, AccountConfig]:
         slippage_price_units_per_market_fill=D("0.05"),
         swap_long_per_unit_per_rollover=D("0"),
         swap_short_per_unit_per_rollover=D("0"),
+        rollover_hour_utc=21,  # synthetic test vector
     )
     account = AccountConfig(
         account_id="synthetic-account",

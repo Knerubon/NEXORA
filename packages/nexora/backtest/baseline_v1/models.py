@@ -88,10 +88,12 @@ class CostModel:
     slippage_price_units_per_market_fill: Decimal
     swap_long_per_unit_per_rollover: Decimal | None
     swap_short_per_unit_per_rollover: Decimal | None
-    rollover_hour_utc: int = 21
+    rollover_hour_utc: int  # required: broker/provider schedule, no default (AGENTS §9)
 
     def __post_init__(self) -> None:
         if not self.version or not self.currency or not 0 <= self.rollover_hour_utc <= 23:
+            raise ReplayInputError("invalid_cost_model")
+        if not isinstance(self.slippage_price_units_per_market_fill, Decimal):
             raise ReplayInputError("invalid_cost_model")
         for value in (
             self.commission_per_unit_per_side,
@@ -207,7 +209,7 @@ class EvidenceCriteria:
             raise ReplayInputError("timezone_required")
         if (
             not self.version
-            or self.min_closed_trades < 1
+            or self.min_closed_trades < 2  # a confidence interval needs >= 2 trades
             or not Decimal("0") < self.confidence_level < Decimal("1")
             or self.min_profit_factor <= 0
             or self.bootstrap_resamples < 100

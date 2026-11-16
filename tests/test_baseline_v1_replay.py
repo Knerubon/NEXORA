@@ -106,6 +106,7 @@ def costs(**changes: object) -> CostModel:
         slippage_price_units_per_market_fill=D("0.1"),
         swap_long_per_unit_per_rollover=D("0"),
         swap_short_per_unit_per_rollover=D("0"),
+        rollover_hour_utc=21,
     )
     return replace(base, **changes)  # type: ignore[arg-type]
 
@@ -662,3 +663,212 @@ def test_verdict_rules_are_preregistered_and_ordered() -> None:
     assert _verdict(metrics(), dev, None)[0] == "BLOCKED"
     assert _verdict(metrics(), auth(events), c)[0] == "BLOCKED"
     assert _verdict(metrics(net_complete=False), dev, c)[0] == "BLOCKED"
+
+
+# ------------------------------------------------- security review round 1 (sec-r1)
+def test_price_must_match_quote_for_price_source() -> None:
+    events = path(("100", "100.2"), ("101", "101.2"), ("106", "106.2"))
+    h = harness({0: Script("long", "95", "105")})
+    lying = (events[0], replace(events[1], price=D("150")), events[2])
+    with pytest.raises(ReplayInputError, match="price_quote_mismatch"):
+        run(h, lying, authorization=auth(events))
+    other_source = tuple(replace(e, price_source="ask", price=e.ask) for e in events)  # type: ignore[arg-type]
+    with pytest.raises(ReplayInputError, match="price_source_mismatch"):
+        run(h, other_source, authorization=auth(events))
+
+
+def test_development_run_requires_nonempty_attested_registry() -> None:
+    events = path(("100", "100.2"), ("101", "101.2"))
+    h = harness({})
+    with pytest.raises(ReplayInputError, match="protected_registry_empty"):
+        run(h, events, authorization=auth(events, data_use="development"))
+    with pytest.raises(ReplayInputError, match="protected_registry_incomplete"):
+        run(h, events, authorization=auth(events, registry_version=""))
+    with pytest.raises(ReplayInputError, match="invalid_data_use"):
+        run(h, events, authorization=auth(events, data_use="holdout"))
+
+
+def test_decision_time_checked_against_protected_and_scope() -> None:
+    events = path(("100", "100.2"), ("101", "101.2"))
+    late = (events[0], replace(events[1], received_at=events[1].event_time + timedelta(hours=1)))
+    with pytest.raises(ReplayInputError, match="event_outside_authorized_scope"):
+        run(harness({}), late, authorization=auth(events))
+    hold = UtcRange(
+        events[1].event_time + timedelta(seconds=30), events[1].event_time + timedelta(hours=2), "h"
+    )
+    dev = UtcRange(events[0].event_time, events[1].event_time + timedelta(seconds=30), "d")
+    with pytest.raises(ReplayInputError, match="protected_range_event"):
+        run(
+            harness({}),
+            late,
+            authorization=auth(events, development=dev, protected=(hold,)),
+        )
+
+
+def test_code_identity_is_validated_and_dirty_code_blocks_evidence() -> None:
+    events = path(("100", "100.2"), ("101", "101.2"))
+    dataset = manifest_for(events, quality="complete")
+    with pytest.raises(ReplayInputError, match="invalid_code_sha"):
+        harness({}).run(
+            events=events,
+            dataset=dataset,
+            expected_dataset_hash=canonical_hash(dataset),
+            authorization=auth(events),
+            criteria=None,
+            code_sha="",
+            code_dirty=False,
+        )
+    dev = auth(events, data_use="development")
+    verdict, reasons = _verdict(metrics(), dev, criteria(), code_dirty=True)
+    assert verdict == "BLOCKED" and "code_not_clean_commit" in reasons
+
+
+def test_criteria_require_two_trades_and_cost_model_rejects_missing_slippage() -> None:
+    with pytest.raises(ReplayInputError, match="invalid_evidence_criteria"):
+        criteria(min_closed_trades=1)
+    with pytest.raises(ReplayInputError, match="invalid_cost_model"):
+        costs(slippage_price_units_per_market_fill=None)
+
+
+def test_remaining_preflight_checks_fail_closed() -> None:
+    events = path(("100", "100.2"), ("101", "101.2"), ("102", "102.2"))
+    h = harness({})
+    bad_warmup = auth(
+        events,
+        warmup=UtcRange(events[0].event_time, events[2].event_time, "w"),
+        development=UtcRange(events[1].event_time, events[2].event_time + timedelta(1), "d"),
+    )
+    with pytest.raises(ReplayInputError, match="warmup_must_precede_development"):
+        run(h, events, authorization=bad_warmup)
+    with pytest.raises(ReplayInputError, match="empty_events"):
+        h.run(
+            events=(),
+            dataset=manifest_for(events, quality="complete"),
+            expected_dataset_hash=canonical_hash(manifest_for(events, quality="complete")),
+            authorization=auth(events),
+            criteria=None,
+            code_sha="0" * 40,
+            code_dirty=False,
+        )
+    partial = manifest_for(events, quality="partial")
+    with pytest.raises(ReplayInputError, match="dataset_quality_not_complete"):
+        h.run(
+            events=events,
+            dataset=partial,
+            expected_dataset_hash=canonical_hash(partial),
+            authorization=auth(events),
+            criteria=None,
+            code_sha="0" * 40,
+            code_dirty=False,
+        )
+    flagged = (events[0], replace(events[1], is_gap=False, is_out_of_order=True), events[2])
+    with pytest.raises(ReplayInputError, match="noncanonical_event"):
+        run(h, flagged, authorization=auth(events))
+    # events that differ from the manifest they claim to be
+    dataset = manifest_for(events, quality="complete")
+    changed = replace(events[1], price=D("101.2"), bid=D("101.2"), ask=D("101.4"))
+    swapped = (events[0], changed, events[2])
+    with pytest.raises(ReplayInputError):
+        h.run(
+            events=swapped,
+            dataset=dataset,
+            expected_dataset_hash=canonical_hash(dataset),
+            authorization=auth(events),
+            criteria=None,
+            code_sha="0" * 40,
+            code_dirty=False,
+        )
+
+
+def test_manifest_hashes_bind_costs_and_authorization() -> None:
+    events = path(("100", "100.2"), ("101", "101.2"), ("102", "102.2"))
+    base = run(harness({}), events).manifest
+    cost_changed = run(
+        harness({}, cost=costs(slippage_price_units_per_market_fill=D("0.2"))), events
+    )
+    assert cost_changed.manifest.config_hash != base.config_hash
+    other_source = run(
+        harness({}),
+        events,
+        authorization=auth(events, registry_authority="another-custodian"),
+    )
+    assert other_source.manifest.protected_registry_hash != base.protected_registry_hash
+
+
+# --------------------------------------------- quant review round 1 (quant-r1)
+def test_risk_approval_expiry_and_stale_entry_quote_cancel_entry() -> None:
+    # decision @0s; next quote @100s. TTL 60 -> approval expired before the quote.
+    events = (q(0, "100", "100.2", seconds=0), q(1, "101", "101.2", seconds=100))
+    expired = run(harness({0: Script("long", "95", "105")}), events)
+    assert expired.opportunities[0].outcome == "risk_approval_expired"
+    assert expired.trades == ()
+    # TTL long enough, but quote age limit 30 s after eligibility -> stale
+    stale = run(
+        harness(
+            {0: Script("long", "95", "105")},
+            risk=risk_policy(approval_ttl_seconds=600),
+            pol=policy(max_entry_quote_age_seconds=D("30")),
+        ),
+        events,
+    )
+    assert stale.opportunities[0].outcome == "stale_entry_quote"
+
+
+class MismatchSource(ScriptedSource):
+    def replay(self, event: NormalizedPriceEvent) -> None:
+        super().replay(event)
+        if self.readiness is not None and self.readiness.signal_action == "BUY":
+            self.readiness = replace(self.readiness, signal_action="SELL")
+
+
+def test_readiness_action_mismatch_blocks_entry() -> None:
+    events = path(("100", "100.2"), ("101", "101.2"), ("106", "106.2"))
+    h = BaselineV1Replay(
+        pipeline_config=pipeline_config(),
+        policy=policy(),
+        costs=costs(),
+        account=AccountConfig("acct-synthetic", "USD", D("1000"), risk_policy()),
+        capabilities=caps(),
+        decision_source_factory=lambda _c: MismatchSource({0: Script("long", "95", "105")}),
+    )
+    assert run(h, events).opportunities[0].outcome == "readiness_mismatch"
+
+
+def test_contract_multiplier_scales_risk_and_pnl() -> None:
+    events = path(("100", "100.2"), ("101", "101.2"), ("106", "106.2"))
+    h = harness(
+        {0: Script("long", "95", "105")},
+        risk=risk_policy(
+            max_risk_per_trade=D("1040"), max_total_exposure=D("5000"), max_daily_loss=D("5000")
+        ),
+    )
+    h.capabilities = replace(caps(), contract_multiplier=D("100"))
+    (trade,) = run(h, events).trades
+    # stop distance money/unit = (100.2-95)*100 = 520 -> size min(2, 1040/520=2) = 2
+    assert trade.quantity == D("2")
+    assert trade.gross_pnl == (D("105") - D("101.2")) * 2 * 100
+
+
+def test_rollover_counting_is_timezone_independent() -> None:
+    from datetime import timezone
+
+    bkk = timezone(timedelta(hours=7))
+    day = 24 * 3600
+    events = (
+        q(0, "100", "100.2", seconds=0),
+        q(1, "101", "101.2", seconds=10),
+        q(2, "102", "102.2", seconds=3 * day),
+        q(3, "106", "106.2", seconds=3 * day + 10),
+    )
+    shifted = tuple(
+        replace(
+            e, event_time=e.event_time.astimezone(bkk), received_at=e.received_at.astimezone(bkk)
+        )
+        for e in events
+    )
+    cost = costs(swap_long_per_unit_per_rollover=D("1"))
+    utc = run(harness({0: Script("long", "95", "105")}, cost=cost), events).trades[0]
+    local = run(
+        harness({0: Script("long", "95", "105")}, cost=cost), shifted, authorization=auth(events)
+    ).trades[0]
+    assert utc.costs.swap == local.costs.swap == D("3") * utc.quantity

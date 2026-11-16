@@ -27,9 +27,13 @@ from nexora.backtest.baseline_v1.synthetic import (
 )
 from nexora.backtest.datasets import manifest_for
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
 
 def _git(*args: str) -> str:
-    return subprocess.run(["git", *args], check=True, capture_output=True, text=True).stdout.strip()
+    return subprocess.run(
+        ["git", *args], cwd=REPO_ROOT, check=True, capture_output=True, text=True
+    ).stdout.strip()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -54,7 +58,7 @@ def main(argv: list[str] | None = None) -> int:
         authorization=synthetic_authorization(events),
         criteria=None,
         code_sha=_git("rev-parse", "HEAD"),
-        code_dirty=bool(_git("status", "--porcelain", "--untracked-files=no")),
+        code_dirty=bool(_git("status", "--porcelain")),
     )
     bundle = {
         "manifest": canonical_serialize(result.manifest),
@@ -68,7 +72,8 @@ def main(argv: list[str] | None = None) -> int:
     }
     text = json.dumps(bundle, indent=2, sort_keys=True)
     if args.out:
-        args.out.write_text(text + "\n", encoding="utf-8")
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(text + "\n", encoding="utf-8", newline="\n")
     summary = {k: bundle[k] for k in ("verdict", "verdict_reasons", "result_hash")}
     print(json.dumps(summary, sort_keys=True))
     return 0

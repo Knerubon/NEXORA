@@ -23,7 +23,7 @@ import random
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import ROUND_DOWN, Decimal, localcontext
 from typing import Protocol
 
@@ -167,6 +167,8 @@ class BaselineV1Replay:
         code_sha: str,
         code_dirty: bool,
     ) -> ReplayResult:
+        if len(code_sha) != 40 or any(c not in "0123456789abcdef" for c in code_sha):
+            raise ReplayInputError("invalid_code_sha")
         with localcontext() as ctx:
             ctx.prec = DECIMAL_PRECISION
             return self._run(
@@ -188,8 +190,17 @@ class BaselineV1Replay:
         auth: DataAuthorization,
     ) -> None:
         # Data-scope checks come first, before any price is interpreted.
-        if not auth.protected_registry_complete or not auth.registry_authority:
+        if auth.data_use not in ("development", "synthetic"):
+            raise ReplayInputError("invalid_data_use")
+        if (
+            not auth.protected_registry_complete
+            or not auth.registry_authority
+            or not auth.registry_version
+        ):
             raise ReplayInputError("protected_registry_incomplete")
+        if auth.data_use == "development" and not auth.protected:
+            # An empty protected list is a guess, not a holdout registry (E-DEVELOPMENT-DATA).
+            raise ReplayInputError("protected_registry_empty")
         if auth.instrument_id != self.capabilities.instrument_id:
             raise ReplayInputError("instrument_not_authorized")
         scopes = (auth.development,) + ((auth.warmup,) if auth.warmup else ())
@@ -204,12 +215,17 @@ class BaselineV1Replay:
             raise ReplayInputError("dataset_hash_mismatch")
         if dataset.quality_status != "complete":
             raise ReplayInputError("dataset_quality_not_complete")
+        price_source = self.pipeline_config.resolutions[0].pnf.price_source
         seen: set[str] = set()
         for event in events:
-            if any(p.contains(event.event_time) for p in auth.protected):
-                raise ReplayInputError("protected_range_event")
-            if not any(scope.contains(event.event_time) for scope in scopes):
-                raise ReplayInputError("event_outside_authorized_scope")
+            for moment in (event.event_time, event.received_at):
+                if moment.tzinfo is None or moment.utcoffset() is None:
+                    raise ReplayInputError("timezone_required")
+                if any(p.contains(moment) for p in auth.protected):
+                    raise ReplayInputError("protected_range_event")
+                # received_at is the decision time and must stay inside the authorised scope
+                if not any(scope.contains(moment) for scope in scopes):
+                    raise ReplayInputError("event_outside_authorized_scope")
             if event.identity_key in seen:
                 raise ReplayInputError("duplicate_event_identity")
             seen.add(event.identity_key)
@@ -223,6 +239,10 @@ class BaselineV1Replay:
                 raise ReplayInputError("invalid_quote")
             if event.is_duplicate or event.is_out_of_order:
                 raise ReplayInputError("noncanonical_event")
+            if event.price_source != price_source:
+                raise ReplayInputError("price_source_mismatch")
+            if event.price != _quote_price(event.price_source, event.bid, event.ask):
+                raise ReplayInputError("price_quote_mismatch")
         try:
             verify_events(dataset, events)
         except ValueError as exc:
@@ -332,7 +352,7 @@ class BaselineV1Replay:
             final_equity,
             criteria,
         )
-        verdict, reasons = _verdict(metrics, authorization, criteria)
+        verdict, reasons = _verdict(metrics, authorization, criteria, code_dirty=code_dirty)
         body = (manifest, frozen_opps, all_trades, equity_digest.hexdigest(), metrics, verdict)
         return ReplayResult(
             manifest=manifest,
@@ -657,9 +677,7 @@ class BaselineV1Replay:
             first_event_time=events[0].event_time,
             last_event_time=events[-1].event_time,
             development_range=auth.development,
-            protected_registry_hash=canonical_hash(
-                (auth.protected, auth.registry_authority, auth.registry_version)
-            ),
+            protected_registry_hash=canonical_hash(auth),
             config_hash=canonical_hash(
                 (
                     self.pipeline_config,
@@ -680,12 +698,23 @@ class BaselineV1Replay:
 
 
 # ---------------------------------------------------------------------- helpers
+def _quote_price(source: str, bid: Decimal, ask: Decimal) -> Decimal | None:
+    if source == "bid":
+        return bid
+    if source == "ask":
+        return ask
+    if source == "mid":
+        return (bid + ask) / 2
+    return None  # other sources cannot be reconciled with a bid/ask tick
+
+
 def _floor_step(value: Decimal, step: Decimal) -> Decimal:
     return (value / step).quantize(Decimal(1), rounding=ROUND_DOWN) * step
 
 
 def _rollovers_between(start: datetime, end: datetime, hour: int) -> int:
-    """Count rollover instants ``r`` with ``start < r <= end``."""
+    """Count UTC rollover instants ``r`` with ``start < r <= end``."""
+    start, end = start.astimezone(UTC), end.astimezone(UTC)
     if end <= start:
         return 0
     first = start.replace(hour=hour, minute=0, second=0, microsecond=0)
@@ -732,7 +761,7 @@ def _metrics(
     )
     ci_low: Decimal | None = None
     ci_high: Decimal | None = None
-    if criteria is not None and count >= 2:
+    if criteria is not None and count >= 2:  # criteria require >= 2 closed trades
         ci_low, ci_high = _bootstrap_mean_ci(nets, criteria)
     net_complete = not any(
         t.costs.commission_unknown or t.costs.swap_unknown_rollovers for t in closed + open_trades
@@ -776,9 +805,15 @@ def _bootstrap_mean_ci(
 
 
 def _verdict(
-    metrics: ReplayMetrics, auth: DataAuthorization, criteria: EvidenceCriteria | None
+    metrics: ReplayMetrics,
+    auth: DataAuthorization,
+    criteria: EvidenceCriteria | None,
+    *,
+    code_dirty: bool = False,
 ) -> tuple[Verdict, tuple[str, ...]]:
     reasons: list[str] = []
+    if code_dirty:
+        reasons.append("code_not_clean_commit")
     if auth.data_use != "development":
         reasons.append("synthetic_data_is_not_market_evidence")
     if criteria is None:
