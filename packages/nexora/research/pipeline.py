@@ -7,10 +7,10 @@ from typing import Any
 
 from nexora.adaptive_box import AdaptiveBoxConfig, AdaptiveBoxSizer, AdaptivePnfRunner
 from nexora.artifacts import canonical_hash, canonical_serialize
-from nexora.entry_readiness import evaluate_entry_readiness
+from nexora.entry_readiness import EntryReadinessSnapshot, evaluate_entry_readiness
 from nexora.features import ResolvedFeatureConfig
 from nexora.market_data.models import NormalizedPriceEvent
-from nexora.market_regime import MarketRegimeEngine, RegimeConfig
+from nexora.market_regime import MarketRegimeEngine, RegimeConfig, RegimeSnapshot
 from nexora.matrix import MatrixEngine, MatrixResolutionConfig
 from nexora.patterns import PatternEngine, PatternStep
 from nexora.pnf import PnfConfig
@@ -148,3 +148,13 @@ class ResearchPipeline:
 
     def research_signals(self) -> tuple[ResearchSignal, ...]:
         return self.signals.snapshot().history
+
+    def latest_entry_readiness(self) -> EntryReadinessSnapshot | None:
+        """Read-only view of the Readiness computed for the last processed event."""
+        value = self._output.get("entry_readiness")
+        return value if isinstance(value, EntryReadinessSnapshot) else None
+
+    def latest_regime(self) -> RegimeSnapshot | None:
+        """Read-only view of the regime classified for the last processed event."""
+        value = self._output.get("regime")
+        return value if isinstance(value, RegimeSnapshot) else None
