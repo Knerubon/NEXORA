@@ -8,7 +8,6 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
-
 from nexora.backtest.baseline_v1.dukascopy_csv import DukascopyCsvError, load_ticks
 
 HEADER = "timestamp,ask,bid,ask_volume,bid_volume\n"
